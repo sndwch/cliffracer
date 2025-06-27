@@ -1,5 +1,5 @@
 """
-Integration tests for NATS services
+Integration tests for Cliffracer services
 """
 
 import asyncio
@@ -7,11 +7,11 @@ import asyncio
 import pytest
 from pydantic import Field
 
-from nats_runner import ServiceRunner
-from nats_service import ServiceConfig
-from nats_service_extended import (
+from cliffracer import (
+    ServiceRunner,
+    ServiceConfig,
     BroadcastMessage,
-    ExtendedService,
+    ValidatedNATSService,
     RPCRequest,
     RPCResponse,
     broadcast,

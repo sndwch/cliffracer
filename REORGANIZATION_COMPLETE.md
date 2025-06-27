@@ -83,8 +83,8 @@ cliffracer/                          # Clean root with just essentials
 
 ### **Before (Messy):**
 ```python
-from nats_service import NATSService
-from nats_service_extended import ValidatedNATSService  
+from cliffracer import NATSService
+from cliffracer import ValidatedNATSService  
 from logging_config import LoggingConfig
 ```
 

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nats_service import BaseNATSService, ServiceConfig, async_rpc, rpc
+from cliffracer import BaseNATSService, ServiceConfig, async_rpc, rpc
 
 
 class TestAsyncRPC:

@@ -1,5 +1,5 @@
 """
-NATS-based microservice framework inspired by Nameko
+Cliffracer NATS-based microservice framework inspired by Nameko
 Combines NATS messaging with auto-restarting runners for resilient services
 """
 

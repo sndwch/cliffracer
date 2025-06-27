@@ -1,4 +1,4 @@
-# Cliffracer NATS Microservices Framework
+# Cliffracer
 
 A comprehensive, production-ready microservices framework built on [NATS](https://nats.io) with integrated monitoring, structured logging, and comprehensive testing.
 
@@ -97,8 +97,8 @@ async def create_user(self, username: str) -> dict:
 ## 🎯 Quick Example
 
 ```python
-from nats_service_extended import HTTPService, ServiceConfig
-from nats_service_extended import validated_rpc, broadcast, listener
+from cliffracer import HTTPService, ServiceConfig
+from cliffracer import validated_rpc, broadcast, listener
 from pydantic import BaseModel
 
 class CreateUserRequest(BaseModel):

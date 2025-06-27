@@ -1,4 +1,4 @@
-# Cliffracer NATS Microservices Framework
+# Cliffracer
 
 A comprehensive, production-ready microservices framework built on [NATS](https://nats.io) with integrated monitoring, structured logging, and comprehensive testing capabilities.
 
@@ -89,8 +89,8 @@ graph TB
 ## Quick Example
 
 ```python
-from nats_service_extended import HTTPService, ServiceConfig
-from nats_service_extended import validated_rpc, broadcast, listener
+from cliffracer import HTTPService, ServiceConfig
+from cliffracer import validated_rpc, broadcast, listener
 from pydantic import BaseModel
 
 # Define message schemas
@@ -135,7 +135,7 @@ class NotificationService(HTTPService):
 
 # Run the services
 if __name__ == "__main__":
-    from nats_runner import MultiServiceRunner
+    from cliffracer import ServiceOrchestrator as MultiServiceRunner
     
     runner = MultiServiceRunner()
     runner.add_service(UserService, ServiceConfig(name="user_service"))

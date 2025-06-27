@@ -1,13 +1,14 @@
 """
-Example demonstrating sync vs async RPC patterns in the NATS framework
+Example demonstrating sync vs async RPC patterns in Cliffracer
 """
 
 import asyncio
 import time
 from datetime import datetime
 
-from nats_runner import ServiceOrchestrator, configure_logging
-from nats_service import NATSService, ServiceConfig, async_rpc, event_handler, rpc
+from cliffracer import ServiceOrchestrator, NATSService, ServiceConfig, async_rpc, rpc
+from cliffracer.core.base_service import event_handler
+from cliffracer.logging import LoggingConfig
 
 
 class OrderNATSService(NATSService):
@@ -343,7 +344,7 @@ async def demonstrate_patterns():
 
 def run_demo():
     """Run the demonstration"""
-    configure_logging()
+    LoggingConfig.configure()
 
     # Create service runners
     runner = ServiceOrchestrator()

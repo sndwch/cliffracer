@@ -1,5 +1,5 @@
-site_name: Cliffracer NATS Microservices Framework
-site_description: A high-performance microservices framework built on NATS with production-ready monitoring and zero-configuration service discovery
+site_name: Cliffracer
+site_description: Cliffracer - A high-performance microservices framework built on NATS with production-ready monitoring and zero-configuration service discovery
 site_author: Cliffracer Team
 site_url: https://cliffracer.dev
 

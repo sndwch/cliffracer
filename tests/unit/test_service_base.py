@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nats_service import BaseNATSService, ServiceConfig, event_handler, rpc
-from nats_service_extended import ValidatedNATSService
+from cliffracer import BaseNATSService, ServiceConfig, rpc, ValidatedNATSService
+from cliffracer.core.base_service import event_handler
 
 
 class TestNatsService:

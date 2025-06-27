@@ -4,7 +4,7 @@ Unit tests for ServiceConfig
 
 import pytest
 
-from nats_service import ServiceConfig
+from cliffracer import ServiceConfig
 
 
 class TestServiceConfig:

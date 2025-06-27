@@ -1,7 +1,7 @@
 # Class Name Refactoring Plan
 
 ## Overview
-This document outlines the systematic refactoring of class names to improve clarity, consistency, and maintainability of the NATS microservices framework.
+This document outlines the systematic refactoring of class names to improve clarity, consistency, and maintainability of Cliffracer.
 
 ## Current Problems
 1. **Confusing inheritance hierarchy**: `Service` → `ExtendedService` doesn't indicate what each adds
@@ -149,7 +149,7 @@ uv run ruff check .
 uv run python example_extended_services.py --help
 
 # Test imports work with new names
-uv run python -c "from nats_service import NATSService, ValidatedNATSService; print('✅ New imports work')"
+uv run python -c "from cliffracer import NATSService, ValidatedNATSService; print('✅ New imports work')"
 ```
 
 ## File Update Priority

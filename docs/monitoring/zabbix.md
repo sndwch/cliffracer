@@ -323,7 +323,7 @@ The framework includes automatic service discovery:
 # monitoring/service_discovery.py
 import json
 import asyncio
-from nats_service import Service, ServiceConfig
+from cliffracer import NATSService as Service, ServiceConfig
 
 class ServiceDiscovery:
     """Discovers running services for Zabbix monitoring"""

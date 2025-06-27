@@ -22,9 +22,11 @@ from enum import Enum
 from typing import Dict, List, Optional
 from uuid import uuid4
 
-from nats_service_extended import ValidatedNATSService, HTTPNATSService, ServiceConfig
-from nats_service_extended import validated_rpc, broadcast, listener
-from nats_runner import ServiceOrchestrator, configure_logging
+from cliffracer import (
+    ValidatedNATSService, HTTPNATSService, ServiceConfig,
+    validated_rpc, broadcast, listener, ServiceOrchestrator
+)
+from cliffracer.logging import LoggingConfig
 from pydantic import BaseModel, Field, EmailStr
 
 
@@ -688,7 +690,7 @@ async def main():
     print("=" * 70)
     
     # Configure structured logging
-    configure_logging(level="INFO")
+    LoggingConfig.configure(level="INFO")
     
     # Create service orchestrator
     orchestrator = ServiceOrchestrator()

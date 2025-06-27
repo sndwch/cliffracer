@@ -5,7 +5,7 @@
 
 set -e
 
-echo "🚀 Cliffracer NATS Microservices Framework - Live Demo Setup"
+echo "🚀 Cliffracer - Live Demo Setup"
 echo "============================================================="
 
 # Colors for output

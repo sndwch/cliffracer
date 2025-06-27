@@ -1,6 +1,6 @@
 # Basic Services Example
 
-This example demonstrates the core features of the NATS microservices framework using a simple e-commerce scenario with order processing, inventory management, and notifications.
+This example demonstrates the core features of Cliffracer using a simple e-commerce scenario with order processing, inventory management, and notifications.
 
 ## Overview
 
@@ -182,7 +182,7 @@ curl http://localhost:8222/varz
 
 ```bash
 # Verify framework is installed
-python -c "from nats_service import Service; print('✅ Framework ready')"
+python -c "from cliffracer import NATSService as Service; print('✅ Framework ready')"
 ```
 
 ### No Event Delivery

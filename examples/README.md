@@ -1,6 +1,6 @@
 # Examples Directory
 
-This directory contains comprehensive examples demonstrating all features of the NATS Microservices Framework. Each example includes complete code, documentation, and usage instructions.
+This directory contains comprehensive examples demonstrating all features of Cliffracer. Each example includes complete code, documentation, and usage instructions.
 
 ## Quick Start Examples
 
@@ -237,7 +237,7 @@ async def http_endpoint(request: RequestModel):
 2. **Import Errors**
    ```bash
    # Verify installation
-   python -c "from nats_service import Service; print('✅ Framework ready')"
+   python -c "from cliffracer import NATSService as Service; print('✅ Framework ready')"
    ```
 
 3. **Port Already in Use**

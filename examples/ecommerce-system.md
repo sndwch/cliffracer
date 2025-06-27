@@ -261,7 +261,7 @@ asyncio.run(websocket_client())
 
 ```python
 # From another service, call UserService
-from nats_service import Service, ServiceConfig
+from cliffracer import NATSService as Service, ServiceConfig
 
 async def call_user_service():
     client = Service(ServiceConfig(name="client"))

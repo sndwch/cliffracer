@@ -1,5 +1,5 @@
 """
-Extended NATS microservice framework with HTTP, WebSocket, and schema validation
+Cliffracer extended service with HTTP, WebSocket, and schema validation
 """
 
 import asyncio

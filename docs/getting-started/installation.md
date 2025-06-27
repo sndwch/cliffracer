@@ -1,6 +1,6 @@
 # Installation
 
-This guide will help you install and set up the NATS Microservices Framework.
+This guide will help you install and set up Cliffracer.
 
 ## Prerequisites
 
@@ -77,7 +77,7 @@ pip install nats-py pydantic fastapi loguru
 ```bash
 # Test basic service
 python -c "
-from nats_service import ServiceConfig
+from cliffracer import ServiceConfig
 config = ServiceConfig(name='test')
 print('✅ Installation successful!')
 "
@@ -207,7 +207,7 @@ source ~/.zshrc
 ```python
 # test_installation.py
 import asyncio
-from nats_service import ServiceConfig, NatsService
+from cliffracer import ServiceConfig, NATSService
 
 async def test_service():
     config = ServiceConfig(name="test_service")
@@ -232,8 +232,8 @@ python test_installation.py
 
 ```python
 # test_extended.py
-from nats_service_extended import ExtendedService, ServiceConfig
-from nats_service_extended import validated_rpc, RPCRequest, RPCResponse
+from cliffracer import ValidatedNATSService as ExtendedService, ServiceConfig
+from cliffracer import validated_rpc, RPCRequest, RPCResponse
 from pydantic import BaseModel
 
 class TestRequest(RPCRequest):

@@ -1,5 +1,5 @@
 """
-Pytest configuration and fixtures for NATS microservices testing
+Pytest configuration and fixtures for Cliffracer testing
 """
 
 import asyncio
@@ -11,9 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from nats_service import ServiceConfig
-from nats_service_extended import ValidatedNATSService
-from nats_service_logged import LoggedExtendedService
+from cliffracer import ServiceConfig, ValidatedNATSService, LoggedExtendedService
 
 
 # Configure asyncio for pytest

@@ -1,6 +1,6 @@
 # Quick Start
 
-Get up and running with the NATS Microservices Framework in under 10 minutes.
+Get up and running with Cliffracer in under 10 minutes.
 
 ## Prerequisites
 
@@ -23,9 +23,9 @@ import asyncio
 from datetime import datetime
 from typing import List
 
-from nats_service_extended import HTTPService, ServiceConfig
-from nats_service_extended import validated_rpc, broadcast, listener
-from nats_service_extended import RPCRequest, RPCResponse, BroadcastMessage
+from cliffracer import HTTPService, ServiceConfig
+from cliffracer import validated_rpc, broadcast, listener
+from cliffracer import RPCRequest, RPCResponse, BroadcastMessage
 from pydantic import BaseModel, Field
 
 # Define message schemas
@@ -112,10 +112,11 @@ class UserService(HTTPService):
         )
 
 if __name__ == "__main__":
-    from nats_runner import ServiceRunner, configure_logging
+    from cliffracer import ServiceRunner
+    from cliffracer.logging import LoggingConfig
     
     # Configure logging
-    configure_logging()
+    LoggingConfig.configure()
     
     # Create and run service
     config = ServiceConfig(name="user_service", auto_restart=True)
@@ -182,7 +183,7 @@ Create `test_client.py`:
 
 ```python
 import asyncio
-from nats_service import Service, ServiceConfig
+from cliffracer import NATSService as Service, ServiceConfig
 
 async def test_rpc():
     # Create client service
@@ -232,7 +233,7 @@ Let's create a notification service that listens for user creation events.
 Create `notification_service.py`:
 
 ```python
-from nats_service_extended import ExtendedService, ServiceConfig, listener
+from cliffracer import ValidatedNATSService as ExtendedService, ServiceConfig, listener
 from my_first_service import UserCreatedEvent
 
 class NotificationService(ExtendedService):
@@ -265,9 +266,10 @@ class NotificationService(ExtendedService):
         # await self.email_service.send_welcome_email(event.email, event.username)
 
 if __name__ == "__main__":
-    from nats_runner import ServiceRunner, configure_logging
+    from cliffracer import ServiceRunner
+    from cliffracer.logging import LoggingConfig
     
-    configure_logging()
+    LoggingConfig.configure()
     
     config = ServiceConfig(name="notification_service", auto_restart=True)
     runner = ServiceRunner(NotificationService, config)

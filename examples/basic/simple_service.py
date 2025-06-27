@@ -1,13 +1,14 @@
 """
-Example services demonstrating the NATS microservice framework
+Example services demonstrating Cliffracer
 """
 
 import asyncio
 import random
 from datetime import datetime
 
-from nats_runner import ServiceOrchestrator, ServiceRunner, configure_logging
-from nats_service import NATSService, ServiceConfig, event_handler, rpc
+from cliffracer import ServiceOrchestrator, ServiceRunner, NATSService, ServiceConfig, rpc
+from cliffracer.core.base_service import event_handler
+from cliffracer.logging import LoggingConfig
 
 
 class OrderNATSService(NATSService):
@@ -207,7 +208,7 @@ async def test_services():
 
 def run_single_service():
     """Example of running a single service"""
-    configure_logging()
+    LoggingConfig.configure()
 
     config = ServiceConfig(
         name="order_service", nats_url="nats://localhost:4222", auto_restart=True
@@ -219,7 +220,7 @@ def run_single_service():
 
 def run_all_services():
     """Example of running multiple services together"""
-    configure_logging()
+    LoggingConfig.configure()
 
     runner = ServiceOrchestrator()
 

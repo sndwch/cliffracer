@@ -10,9 +10,9 @@
     <templates>
         <template>
             <uuid>a571c0d144b241fbab6c9fcbf19426b7</uuid>
-            <template>NATS Microservices</template>
-            <name>NATS Microservices Template</name>
-            <description>Template for monitoring NATS-based microservices</description>
+            <template>Cliffracer Services</template>
+            <name>Cliffracer Services Template</name>
+            <description>Template for monitoring Cliffracer microservices</description>
             <groups>
                 <group>
                     <name>Templates/Applications</name>

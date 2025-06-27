@@ -6,13 +6,15 @@ Unit tests for service decorators
 import pytest
 from pydantic import Field
 
-from nats_service import event_handler, rpc
-from nats_service_extended import (
+from cliffracer import (
+    rpc,
     BroadcastMessage,
     RPCRequest,
     RPCResponse,
     broadcast,
     listener,
+)
+from cliffracer.core.base_service import event_handler
     validated_rpc,
 )
 

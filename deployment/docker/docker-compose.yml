@@ -160,7 +160,7 @@ services:
     command: python monitoring/metrics_service.py
 
   # ================================
-  # NATS Microservices Framework
+  # Cliffracer Framework
   # ================================
   
   # User Service (HTTP + NATS)
