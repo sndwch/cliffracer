@@ -478,4 +478,33 @@ async def process_request(self, request: ProcessRequestRequest) -> ProcessReques
         )
 ```
 
-You're now ready to build production-ready microservices with the NATS framework!
+## 🔧 Debugging Your Services
+
+Cliffracer includes a powerful **backdoor debugging** feature for live service inspection:
+
+```bash
+# Start your service - watch for backdoor port
+python my_first_service.py
+# Output: "🔧 Backdoor server available on localhost:12345"
+
+# Connect in another terminal
+nc localhost 12345
+
+# Debug your live service
+>>> inspect_service()     # See service details
+>>> service.users         # Access service variables  
+>>> await service.create_user(test_request)  # Test methods live
+```
+
+**🔐 Security**: Backdoor is disabled in production environments by default.
+
+**📖 Learn More**: [Complete Backdoor Debugging Guide](../debugging/backdoor.md)
+
+## 🚀 Next Steps
+
+You're now ready to build production-ready microservices with Cliffracer! 
+
+**Continue Learning**:
+- [Production Deployment](deployment.md) - Deploy with monitoring
+- [Backdoor Debugging](../debugging/backdoor.md) - Advanced debugging techniques
+- [Monitoring Setup](../monitoring/zabbix.md) - Set up comprehensive monitoring

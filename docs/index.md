@@ -38,6 +38,12 @@ This framework combines the elegance of [Nameko](https://nameko.readthedocs.io/)
 - Automatic log rotation and compression
 - Integration with monitoring systems
 
+### 🔧 **Live Debugging**
+- Interactive backdoor for live service debugging
+- Real-time service inspection and troubleshooting
+- NATS connection monitoring and analysis
+- Production-safe debugging with security controls
+
 ### 🧪 **Comprehensive Testing**
 - Unit tests with pytest and async support
 - Integration tests for service interactions
@@ -162,6 +168,15 @@ This framework provides:
 3. **[Quick Start](getting-started/quickstart.md)**: Build your first service in minutes
 4. **[Configuration](getting-started/configuration.md)**: Customize the framework for your needs
 5. **[Deployment](getting-started/deployment.md)**: Deploy to production with monitoring
+
+## Developer Guides
+
+### Debugging & Development
+- **[Backdoor Debugging](debugging/backdoor.md)**: Interactive live service debugging
+- **[Monitoring Setup](monitoring/zabbix.md)**: Production monitoring with Zabbix
+
+### Advanced Topics
+- **[LocalStack Integration](localstack-integration.md)**: AWS service emulation for development
 
 [Get Started →](getting-started/installation.md){ .md-button .md-button--primary }
 [Why Choose Cliffracer? →](why-cliffracer.md){ .md-button }
