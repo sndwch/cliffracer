@@ -1,11 +1,11 @@
-site_name: NATS Microservices Framework
-site_description: A comprehensive microservices framework built on NATS with monitoring, logging, and testing
-site_author: Your Name
-site_url: https://your-domain.com
+site_name: Cliffracer NATS Microservices Framework
+site_description: A high-performance microservices framework built on NATS with production-ready monitoring and zero-configuration service discovery
+site_author: Cliffracer Team
+site_url: https://cliffracer.dev
 
 # Repository
-repo_name: cultku/nats-microservices
-repo_url: https://github.com/your-username/cultku
+repo_name: sndwch/cliffracer
+repo_url: https://github.com/sndwch/cliffracer
 
 # Configuration
 theme:
@@ -53,6 +53,7 @@ plugins:
 # Navigation
 nav:
   - Home: index.md
+  - Why Cliffracer?: why-cliffracer.md
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md

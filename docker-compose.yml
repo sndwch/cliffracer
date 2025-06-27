@@ -8,23 +8,23 @@ services:
   # PostgreSQL for application data and Zabbix
   postgres:
     image: postgres:15
-    container_name: cultku_postgres
+    container_name: cliffracer_postgres
     environment:
-      POSTGRES_DB: cultku
-      POSTGRES_USER: cultku_user
-      POSTGRES_PASSWORD: cultku_password
+      POSTGRES_DB: cliffracer
+      POSTGRES_USER: cliffracer_user
+      POSTGRES_PASSWORD: cliffracer_password
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cultku_user -d cultku"]
+      test: ["CMD-SHELL", "pg_isready -U cliffracer_user -d cliffracer"]
       interval: 5s
       timeout: 5s
       retries: 5
     networks:
-      - cultku-network
+      - cliffracer-network
 
   # NATS messaging server
   nats:
@@ -42,7 +42,7 @@ services:
       - nats_data:/data
     restart: unless-stopped
     networks:
-      - cultku-network
+      - cliffracer-network
 
   # ================================
   # Monitoring Stack
@@ -60,7 +60,7 @@ services:
     volumes:
       - zabbix_postgres_data:/var/lib/postgresql/data
     networks:
-      - cultku-network
+      - cliffracer-network
     profiles:
       - monitoring
       - full
@@ -83,7 +83,7 @@ services:
     depends_on:
       - zabbix-postgres
     networks:
-      - cultku-network
+      - cliffracer-network
     profiles:
       - monitoring
       - full
@@ -105,7 +105,7 @@ services:
       - zabbix-server
       - zabbix-postgres
     networks:
-      - cultku-network
+      - cliffracer-network
     profiles:
       - monitoring
       - full
@@ -127,7 +127,7 @@ services:
     depends_on:
       - zabbix-server
     networks:
-      - cultku-network
+      - cliffracer-network
     privileged: true
     profiles:
       - monitoring
@@ -153,7 +153,7 @@ services:
       - ./monitoring/metrics:/app/metrics
       - ./logs:/app/logs
     networks:
-      - cultku-network
+      - cliffracer-network
     profiles:
       - monitoring
       - full
@@ -175,7 +175,7 @@ services:
       - ZABBIX_SERVER=zabbix-server
       - LOG_LEVEL=INFO
       - LOG_FORMAT=json
-      - DATABASE_URL=postgresql://cultku_user:cultku_password@postgres:5432/cultku
+      - DATABASE_URL=postgresql://cliffracer_user:cliffracer_password@postgres:5432/cliffracer
     depends_on:
       - nats
       - postgres
@@ -185,7 +185,7 @@ services:
     volumes:
       - ./logs:/app/logs
     networks:
-      - cultku-network
+      - cliffracer-network
     profiles:
       - microservices
       - full
@@ -219,7 +219,7 @@ services:
     volumes:
       - ./logs:/app/logs
     networks:
-      - cultku-network
+      - cliffracer-network
     profiles:
       - microservices
       - full
@@ -251,7 +251,7 @@ services:
     volumes:
       - ./logs:/app/logs
     networks:
-      - cultku-network
+      - cliffracer-network
     profiles:
       - microservices
       - full
@@ -284,7 +284,7 @@ services:
     volumes:
       - ./logs:/app/logs
     networks:
-      - cultku-network
+      - cliffracer-network
     profiles:
       - legacy
       - basic
@@ -305,21 +305,21 @@ services:
     volumes:
       - ./logs:/app/logs
     networks:
-      - cultku-network
+      - cliffracer-network
     profiles:
       - legacy
       - basic
     command: python -m example_services inventory
 
   # Haiku formatter service (from your original project)
-  haiku_formatter:
+  cliffracer_formatter:
     build:
       context: .
       dockerfile: Dockerfile.monitoring
-    container_name: haiku_formatter
+    container_name: cliffracer_formatter
     environment:
-      - SERVICE_NAME=haiku_formatter
-      - DATABASE_URL=postgresql://cultku_user:cultku_password@postgres:5432/cultku
+      - SERVICE_NAME=cliffracer_formatter
+      - DATABASE_URL=postgresql://cliffracer_user:cliffracer_password@postgres:5432/cliffracer
       - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID:-}
       - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET:-}
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT:-HaikuFormatter/1.0}
@@ -330,9 +330,9 @@ services:
       - ./logs:/app/logs
       - .:/app/data
     networks:
-      - cultku-network
+      - cliffracer-network
     profiles:
-      - haiku
+      - cliffracer-app
       - full
     # This would need custom implementation to run as a service
     # For now it's available for manual execution
@@ -345,7 +345,7 @@ volumes:
   zabbix_server_data:
 
 networks:
-  cultku-network:
+  cliffracer-network:
     driver: bridge
 
 # ================================
@@ -367,8 +367,8 @@ networks:
 # Legacy services only:
 #   docker-compose --profile legacy up -d
 #
-# Just haiku services:
-#   docker-compose --profile haiku up -d
+# Just cliffracer services:
+#   docker-compose --profile cliffracer-app up -d
 #
 # Development (core + microservices):
 #   docker-compose up postgres nats user_service notification_service analytics_service -d

@@ -38,7 +38,7 @@ class AWSLambdaRunner(ServiceRunner):
         self.iam_client = None
 
         # Lambda configuration
-        self.function_prefix = config.environment_variables.get("LAMBDA_PREFIX", "cultku")
+        self.function_prefix = config.environment_variables.get("LAMBDA_PREFIX", "cliffracer")
         self.runtime = config.environment_variables.get("LAMBDA_RUNTIME", "python3.11")
         self.role_arn = config.environment_variables.get("LAMBDA_ROLE_ARN")
         self.vpc_config = self._parse_vpc_config()
@@ -240,8 +240,8 @@ class AWSLambdaRunner(ServiceRunner):
                 },
                 "Tags": {
                     **self.config.tags,
-                    "cultku:service": service_name,
-                    "cultku:runner": "lambda",
+                    "cliffracer:service": service_name,
+                    "cliffracer:runner": "lambda",
                 },
             }
 

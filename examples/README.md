@@ -298,6 +298,6 @@ if __name__ == "__main__":
 If you have questions about any example:
 
 - 📖 Check the [main documentation](../docs/)
-- 🐛 Report issues in [GitHub Issues](https://github.com/your-username/cultku/issues)
-- 💬 Ask questions in [GitHub Discussions](https://github.com/your-username/cultku/discussions)
+- 🐛 Report issues in [GitHub Issues](https://github.com/your-username/cliffracer/issues)
+- 💬 Ask questions in [GitHub Discussions](https://github.com/your-username/cliffracer/discussions)
 - 📧 Email support@your-domain.com

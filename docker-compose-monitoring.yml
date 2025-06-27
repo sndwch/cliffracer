@@ -4,23 +4,23 @@ services:
   # PostgreSQL for existing services and Zabbix
   postgres:
     image: postgres:15
-    container_name: cultku_postgres
+    container_name: cliffracer_postgres
     environment:
-      POSTGRES_DB: cultku
-      POSTGRES_USER: cultku_user
-      POSTGRES_PASSWORD: cultku_password
+      POSTGRES_DB: cliffracer
+      POSTGRES_USER: cliffracer_user
+      POSTGRES_PASSWORD: cliffracer_password
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cultku_user -d cultku"]
+      test: ["CMD-SHELL", "pg_isready -U cliffracer_user -d cliffracer"]
       interval: 5s
       timeout: 5s
       retries: 5
     networks:
-      - cultku-network
+      - cliffracer-network
 
   # NATS messaging
   nats:
@@ -38,7 +38,7 @@ services:
       - nats_data:/data
     restart: unless-stopped
     networks:
-      - cultku-network
+      - cliffracer-network
 
   # Zabbix Database
   zabbix-postgres:
@@ -52,7 +52,7 @@ services:
     volumes:
       - zabbix_postgres_data:/var/lib/postgresql/data
     networks:
-      - cultku-network
+      - cliffracer-network
 
   # Zabbix Server
   zabbix-server:
@@ -72,7 +72,7 @@ services:
     depends_on:
       - zabbix-postgres
     networks:
-      - cultku-network
+      - cliffracer-network
 
   # Zabbix Web Interface
   zabbix-web:
@@ -91,7 +91,7 @@ services:
       - zabbix-server
       - zabbix-postgres
     networks:
-      - cultku-network
+      - cliffracer-network
 
   # Zabbix Agent for monitoring services
   zabbix-agent:
@@ -110,7 +110,7 @@ services:
     depends_on:
       - zabbix-server
     networks:
-      - cultku-network
+      - cliffracer-network
     privileged: true
 
   # Metrics exporter service
@@ -130,7 +130,7 @@ services:
     volumes:
       - ./monitoring/metrics:/app/metrics
     networks:
-      - cultku-network
+      - cliffracer-network
 
   # Enhanced microservices with monitoring
   user_service:
@@ -152,7 +152,7 @@ services:
     volumes:
       - ./logs:/app/logs
     networks:
-      - cultku-network
+      - cliffracer-network
 
   notification_service:
     build:
@@ -172,7 +172,7 @@ services:
     volumes:
       - ./logs:/app/logs
     networks:
-      - cultku-network
+      - cliffracer-network
 
   analytics_service:
     build:
@@ -190,7 +190,7 @@ services:
     volumes:
       - ./logs:/app/logs
     networks:
-      - cultku-network
+      - cliffracer-network
 
 volumes:
   postgres_data:
@@ -199,5 +199,5 @@ volumes:
   zabbix_server_data:
 
 networks:
-  cultku-network:
+  cliffracer-network:
     driver: bridge

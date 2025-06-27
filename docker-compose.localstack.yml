@@ -27,7 +27,7 @@ services:
       - EXTRA_CORS_EXPOSED_HEADERS=ETag
       
       # Service-specific configurations
-      - LAMBDA_DOCKER_NETWORK=cultku-localstack
+      - LAMBDA_DOCKER_NETWORK=cliffracer-localstack
       - LAMBDA_RUNTIME_EXECUTOR=docker-reuse
       - LAMBDA_REMOVE_CONTAINERS=true
       - SQS_ENDPOINT_STRATEGY=standard
@@ -42,7 +42,7 @@ services:
       - "./tmp/localstack:/tmp/localstack"
       - "./localstack-data:/var/lib/localstack"
     networks:
-      - cultku-localstack
+      - cliffracer-localstack
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 30s
@@ -64,7 +64,7 @@ services:
       - ./scripts/localstack-init.sh:/init.sh
     command: ["/bin/bash", "/init.sh"]
     networks:
-      - cultku-localstack
+      - cliffracer-localstack
   
   # User Service with full AWS stack (Lambda + SNS/SQS + CloudWatch)
   user-service-aws-lambda:
@@ -88,17 +88,17 @@ services:
       - SERVICE_NAME=user_service
       
       # Lambda configuration
-      - LAMBDA_PREFIX=cultku-dev
+      - LAMBDA_PREFIX=cliffracer-dev
       - LAMBDA_RUNTIME=python3.11
       - LAMBDA_TIMEOUT=300
       - LAMBDA_MEMORY=512
       
       # Monitoring configuration
-      - CLOUDWATCH_NAMESPACE=Cultku/Development
-      - CLOUDWATCH_LOG_GROUP=/aws/lambda/cultku-dev
+      - CLOUDWATCH_NAMESPACE=Cliffracer/Development
+      - CLOUDWATCH_LOG_GROUP=/aws/lambda/cliffracer-dev
       
     networks:
-      - cultku-localstack
+      - cliffracer-localstack
     command: python example_full_aws_stack.py
   
   # Traditional service for comparison (NATS + Docker + Zabbix)
@@ -117,7 +117,7 @@ services:
     ports:
       - "8001:8001"
     networks:
-      - cultku-localstack
+      - cliffracer-localstack
     command: python example_modular_services.py nats run
     profiles: ["comparison"]
   
@@ -129,7 +129,7 @@ services:
       - "8222:8222"
     command: ["-js", "-m", "8222"]
     networks:
-      - cultku-localstack
+      - cliffracer-localstack
     profiles: ["comparison"]
   
   # Zabbix for traditional comparison
@@ -140,7 +140,7 @@ services:
     ports:
       - "10051:10051"
     networks:
-      - cultku-localstack
+      - cliffracer-localstack
     profiles: ["comparison"]
   
   # LocalStack Web UI (if using Pro)
@@ -153,7 +153,7 @@ services:
     depends_on:
       - localstack
     networks:
-      - cultku-localstack
+      - cliffracer-localstack
     profiles: ["ui"]
   
   # Monitoring dashboard aggregator
@@ -168,11 +168,11 @@ services:
       - AWS_DEFAULT_REGION=us-east-1
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
-      - CLOUDWATCH_NAMESPACE=Cultku/Development
+      - CLOUDWATCH_NAMESPACE=Cliffracer/Development
     ports:
       - "8090:8090"
     networks:
-      - cultku-localstack
+      - cliffracer-localstack
     command: python monitoring_dashboard.py
   
   # Load test client to generate metrics
@@ -188,7 +188,7 @@ services:
       - MESSAGING_BACKEND=aws
       - TARGET_SERVICE=user_service
     networks:
-      - cultku-localstack
+      - cliffracer-localstack
     command: python load_test.py --duration 300 --rps 10
     profiles: ["load-test"]
   
@@ -206,13 +206,13 @@ services:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
     networks:
-      - cultku-localstack
+      - cliffracer-localstack
     profiles: ["logging"]
 
 networks:
-  cultku-localstack:
+  cliffracer-localstack:
     driver: bridge
-    name: cultku-localstack
+    name: cliffracer-localstack
 
 volumes:
   localstack-data:

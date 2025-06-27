@@ -26,7 +26,7 @@ class AWSClient(MessageClient):
         access_key_id: Optional[str] = None,
         secret_access_key: Optional[str] = None,
         session_token: Optional[str] = None,
-        prefix: str = "cultku"
+        prefix: str = "cliffracer"
     ):
         self.region = region
         self.prefix = prefix

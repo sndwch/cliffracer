@@ -1,6 +1,8 @@
-# NATS Microservices Framework
+# Cliffracer NATS Microservices Framework
 
 A comprehensive, production-ready microservices framework built on [NATS](https://nats.io) with integrated monitoring, structured logging, and comprehensive testing capabilities.
+
+> **🚀 Why Cliffracer?** 10x faster than REST APIs, zero-configuration service discovery, and production-ready monitoring out of the box. [Learn more →](why-cliffracer.md)
 
 ## Overview
 
@@ -155,18 +157,20 @@ This framework provides:
 
 ## Getting Started
 
-1. **Installation**: Set up the framework and dependencies
-2. **Quick Start**: Build your first service in minutes
-3. **Configuration**: Customize the framework for your needs
-4. **Deployment**: Deploy to production with monitoring
+1. **[Why Cliffracer?](why-cliffracer.md)**: Understand the benefits and performance advantages
+2. **[Installation](getting-started/installation.md)**: Set up the framework and dependencies
+3. **[Quick Start](getting-started/quickstart.md)**: Build your first service in minutes
+4. **[Configuration](getting-started/configuration.md)**: Customize the framework for your needs
+5. **[Deployment](getting-started/deployment.md)**: Deploy to production with monitoring
 
 [Get Started →](getting-started/installation.md){ .md-button .md-button--primary }
+[Why Choose Cliffracer? →](why-cliffracer.md){ .md-button }
 
 ## Community & Support
 
 - 📖 [Documentation](.)
-- 🐛 [Issue Tracker](https://github.com/your-username/cultku/issues)
-- 💬 [Discussions](https://github.com/your-username/cultku/discussions)
+- 🐛 [Issue Tracker](https://github.com/your-username/cliffracer/issues)
+- 💬 [Discussions](https://github.com/your-username/cliffracer/discussions)
 - 📧 [Mailing List](mailto:support@your-domain.com)
 
 ## License

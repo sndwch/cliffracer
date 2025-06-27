@@ -98,7 +98,7 @@ class MonitoringConfig:
     backend: str
     connection_params: dict[str, Any]
     default_tags: dict[str, str] = field(default_factory=dict)
-    metric_prefix: str = "cultku"
+    metric_prefix: str = "cliffracer"
     batch_size: int = 100
     flush_interval_seconds: int = 30
     retention_days: int = 30
@@ -440,25 +440,25 @@ def create_service_dashboard(service_name: str) -> Dashboard:
         {
             "type": "metric_chart",
             "title": f"{service_name} Request Rate",
-            "metrics": [f"cultku.{service_name}.requests"],
+            "metrics": [f"cliffracer.{service_name}.requests"],
             "chart_type": "line",
         },
         {
             "type": "metric_chart",
             "title": f"{service_name} Response Time",
-            "metrics": [f"cultku.{service_name}.execution_time"],
+            "metrics": [f"cliffracer.{service_name}.execution_time"],
             "chart_type": "line",
         },
         {
             "type": "metric_chart",
             "title": f"{service_name} Error Rate",
-            "metrics": [f"cultku.{service_name}.errors"],
+            "metrics": [f"cliffracer.{service_name}.errors"],
             "chart_type": "line",
         },
         {
             "type": "metric_chart",
             "title": f"{service_name} Memory Usage",
-            "metrics": [f"cultku.{service_name}.memory_usage"],
+            "metrics": [f"cliffracer.{service_name}.memory_usage"],
             "chart_type": "area",
         },
     ]
@@ -477,28 +477,28 @@ def create_service_alerts(service_name: str) -> list[Alert]:
         Alert(
             name=f"{service_name} High Error Rate",
             description=f"Error rate is above 5% for {service_name}",
-            condition=f"cultku.{service_name}.error_rate > 5",
+            condition=f"cliffracer.{service_name}.error_rate > 5",
             severity=AlertSeverity.HIGH,
             threshold=5.0,
-            metric_name=f"cultku.{service_name}.error_rate",
+            metric_name=f"cliffracer.{service_name}.error_rate",
             tags={"service": service_name},
         ),
         Alert(
             name=f"{service_name} High Response Time",
             description=f"Response time is above 1000ms for {service_name}",
-            condition=f"cultku.{service_name}.execution_time > 1000",
+            condition=f"cliffracer.{service_name}.execution_time > 1000",
             severity=AlertSeverity.MEDIUM,
             threshold=1000.0,
-            metric_name=f"cultku.{service_name}.execution_time",
+            metric_name=f"cliffracer.{service_name}.execution_time",
             tags={"service": service_name},
         ),
         Alert(
             name=f"{service_name} Service Down",
             description=f"{service_name} service is not responding",
-            condition=f"cultku.{service_name}.health == 0",
+            condition=f"cliffracer.{service_name}.health == 0",
             severity=AlertSeverity.CRITICAL,
             threshold=0,
-            metric_name=f"cultku.{service_name}.health",
+            metric_name=f"cliffracer.{service_name}.health",
             tags={"service": service_name},
         ),
     ]

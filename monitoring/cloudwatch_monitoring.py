@@ -31,7 +31,7 @@ class CloudWatchClient(MonitoringClient):
 
         self.region = config.connection_params.get("region", "us-east-1")
         self.endpoint_url = config.connection_params.get("endpoint_url")  # For LocalStack
-        self.namespace = config.connection_params.get("namespace", "Cultku/Services")
+        self.namespace = config.connection_params.get("namespace", "Cliffracer/Services")
 
         # AWS clients
         self.cloudwatch = None

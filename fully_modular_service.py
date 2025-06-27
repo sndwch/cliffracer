@@ -473,7 +473,7 @@ class ConfigFactory:
                 environment=RuntimeEnvironment.DEVELOPMENT,
                 environment_variables={
                     "AWS_ENDPOINT_URL": "http://localhost:4566",
-                    "LAMBDA_PREFIX": "cultku-dev",
+                    "LAMBDA_PREFIX": "cliffracer-dev",
                 },
             ),
             monitoring=MonitoringConfig(

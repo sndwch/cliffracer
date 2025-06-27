@@ -23,8 +23,8 @@ curl https://pyenv.run | bash
 pyenv install 3.11.9
 
 # Create virtual environment
-pyenv virtualenv 3.11.9 cultku
-pyenv activate cultku
+pyenv virtualenv 3.11.9 cliffracer
+pyenv activate cliffracer
 ```
 
 ## Installation Methods
@@ -34,8 +34,8 @@ pyenv activate cultku
 #### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/cultku.git
-cd cultku
+git clone https://github.com/your-username/cliffracer.git
+cd cliffracer
 ```
 
 #### 2. Install Dependencies
@@ -88,8 +88,8 @@ print('✅ Installation successful!')
 #### 1. Clone and Configure
 
 ```bash
-git clone https://github.com/your-username/cultku.git
-cd cultku
+git clone https://github.com/your-username/cliffracer.git
+cd cliffracer
 
 # Create environment file
 cp .env.example .env
@@ -119,11 +119,11 @@ docker-compose -f docker-compose-monitoring.yml ps
 
 ```bash
 # Create production directory
-mkdir -p /opt/cultku
-cd /opt/cultku
+mkdir -p /opt/cliffracer
+cd /opt/cliffracer
 
 # Clone repository
-git clone https://github.com/your-username/cultku.git .
+git clone https://github.com/your-username/cliffracer.git .
 
 # Set up environment
 cp .env.production .env
@@ -190,7 +190,7 @@ For automatic environment activation when entering the project directory:
 
 ```bash
 # Create .python-version file
-echo "cultku" > .python-version
+echo "cliffracer" > .python-version
 
 # Add to your shell configuration
 echo 'eval "$(pyenv init -)"' >> ~/.zshrc
@@ -325,5 +325,5 @@ docker stats
 
 - **Documentation**: Check the [troubleshooting section](../deployment/production.md#troubleshooting)
 - **Logs**: Enable debug logging with `LOG_LEVEL=DEBUG`
-- **Community**: Ask questions in [GitHub Discussions](https://github.com/your-username/cultku/discussions)
-- **Issues**: Report bugs in [GitHub Issues](https://github.com/your-username/cultku/issues)
+- **Community**: Ask questions in [GitHub Discussions](https://github.com/your-username/cliffracer/discussions)
+- **Issues**: Report bugs in [GitHub Issues](https://github.com/your-username/cliffracer/issues)

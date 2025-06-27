@@ -363,7 +363,7 @@ SMTP_SERVER=smtp.company.com
 
 ```bash
 # Automatic log rotation with logrotate
-/var/log/cultku/*.log {
+/var/log/cliffracer/*.log {
     daily
     rotate 30
     compress
@@ -371,7 +371,7 @@ SMTP_SERVER=smtp.company.com
     missingok
     create 644 app app
     postrotate
-        systemctl reload cultku-services
+        systemctl reload cliffracer-services
     endscript
 }
 ```
@@ -413,7 +413,7 @@ DELETE FROM trends WHERE clock < UNIX_TIMESTAMP(NOW() - INTERVAL 1 YEAR);
    ls -la logs/
    
    # Test log rotation
-   logrotate -d /etc/logrotate.d/cultku
+   logrotate -d /etc/logrotate.d/cliffracer
    ```
 
 ## Next Steps

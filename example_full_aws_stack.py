@@ -491,7 +491,7 @@ async def deploy_to_lambda():
             "AWS_REGION": "us-east-1",
             "AWS_ACCESS_KEY_ID": "test",
             "AWS_SECRET_ACCESS_KEY": "test",
-            "LAMBDA_PREFIX": "cultku-dev",
+            "LAMBDA_PREFIX": "cliffracer-dev",
         },
     )
 
