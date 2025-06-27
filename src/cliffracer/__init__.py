@@ -38,6 +38,9 @@ from cliffracer.logging import LoggedExtendedService
 # Runner exports
 from cliffracer.runners.orchestrator import ServiceRunner, ServiceOrchestrator
 
+# Debug exports
+from cliffracer.debug import BackdoorServer, BackdoorClient
+
 # Auth exports (optional)
 try:
     from cliffracer.auth.framework import AuthenticatedService, require_auth
@@ -77,6 +80,10 @@ __all__ = [
     # Runners
     "ServiceRunner",
     "ServiceOrchestrator",
+    
+    # Debug
+    "BackdoorServer",
+    "BackdoorClient",
     
     # Utils
     "LoggingConfig",

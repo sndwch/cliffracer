@@ -75,6 +75,8 @@ nav:
     - Structured Logging: logging/structured-logging.md
     - Log Configuration: logging/configuration.md
     - Best Practices: logging/best-practices.md
+  - Debugging:
+    - Backdoor (Live Debugging): debugging/backdoor.md
   - Testing:
     - Unit Testing: testing/unit-tests.md
     - Integration Testing: testing/integration-tests.md
