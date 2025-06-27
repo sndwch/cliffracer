@@ -1,0 +1,187 @@
+# Cliffracer Load Testing Configuration
+
+# Test Environment Settings
+environment:
+  nats_url: "nats://localhost:4222"
+  nats_monitoring_url: "http://localhost:8222"
+  python_path_extensions:
+    - "."
+    - "./services"
+    - "./shared"
+
+# Load Test Scenarios Configuration
+scenarios:
+  baseline:
+    description: "Basic performance baseline with minimal load"
+    users: 10
+    spawn_rate: 2
+    duration: "60s"
+    error_rate: 0.01  # 1% error injection
+    
+  high_throughput:
+    description: "High throughput test with complex validation"
+    users: 100
+    spawn_rate: 10
+    duration: "120s"
+    error_rate: 0.05  # 5% error injection
+    
+  error_resilience:
+    description: "Error handling performance under failure conditions"
+    users: 50
+    spawn_rate: 5
+    duration: "90s"
+    error_rate: 0.20  # 20% error injection (stress test error handling)
+    
+  large_payloads:
+    description: "Memory efficiency with large payload processing"
+    users: 20
+    spawn_rate: 2
+    duration: "180s"
+    error_rate: 0.02  # 2% error injection
+    payload_sizes:
+      small: 100
+      medium: 1000
+      large: 5000
+      
+  mixed_workload:
+    description: "Realistic mixed workload simulation"
+    users: 80
+    spawn_rate: 8
+    duration: "150s"
+    error_rate: 0.03  # 3% error injection
+    workload_distribution:
+      simple_orders: 0.6      # 60% simple orders
+      complex_orders: 0.2     # 20% complex orders
+      analytics_events: 0.15  # 15% analytics
+      batch_processing: 0.05  # 5% batch operations
+      
+  stress_test:
+    description: "Maximum capacity stress testing"
+    users: 200
+    spawn_rate: 20
+    duration: "300s"
+    error_rate: 0.10  # 10% error injection
+    
+  comparison_baseline:
+    description: "Baseline for comparing with other frameworks"
+    users: 50
+    spawn_rate: 5
+    duration: "180s"
+    error_rate: 0.05
+    # This scenario is designed to match HTTP REST API patterns
+    # for fair comparison with FastAPI, Flask, etc.
+
+# Data Generation Settings
+data_generation:
+  customer_pool_size: 1000      # Number of unique customers to generate
+  product_pool_size: 500        # Number of unique products to generate
+  cache_generated_data: true    # Cache data for consistency across tests
+  
+  # Complex object settings
+  order_complexity:
+    min_items: 1
+    max_items: 8
+    average_items: 3
+    
+  analytics_batch_sizes:
+    small: [5, 20]
+    medium: [20, 100]
+    large: [100, 500]
+    
+  payload_complexity:
+    validation_depth: 5         # Nested validation levels
+    metadata_size_kb: [1, 50]   # Random metadata size range
+    
+# Performance Expectations (for automated validation)
+performance_expectations:
+  baseline:
+    max_median_response_time_ms: 50
+    min_requests_per_second: 100
+    max_failure_rate_percent: 1.0
+    
+  high_throughput:
+    max_median_response_time_ms: 100
+    min_requests_per_second: 500
+    max_failure_rate_percent: 5.0
+    
+  error_resilience:
+    max_median_response_time_ms: 150
+    min_requests_per_second: 50
+    max_failure_rate_percent: 25.0  # Higher acceptable due to error injection
+    
+  large_payloads:
+    max_median_response_time_ms: 500
+    min_requests_per_second: 20
+    max_failure_rate_percent: 2.0
+    
+  mixed_workload:
+    max_median_response_time_ms: 200
+    min_requests_per_second: 100
+    max_failure_rate_percent: 5.0
+    
+  stress_test:
+    max_median_response_time_ms: 1000
+    min_requests_per_second: 200
+    max_failure_rate_percent: 15.0
+
+# Monitoring and Reporting
+monitoring:
+  collect_system_metrics: true
+  memory_sampling_interval_seconds: 5
+  cpu_sampling_interval_seconds: 1
+  
+  # Custom metrics to track
+  custom_metrics:
+    - validation_time_ms
+    - serialization_time_ms
+    - business_logic_time_ms
+    - database_simulation_time_ms
+    
+reporting:
+  generate_html_reports: true
+  generate_csv_exports: true
+  generate_summary_markdown: true
+  include_performance_analysis: true
+  
+  # Comparison with claimed performance
+  benchmark_claims:
+    sub_millisecond_claim: true
+    ten_x_faster_than_rest: true
+    high_throughput_claim: 10000  # RPS
+    
+# Framework Comparison Settings (for future comparison tests)
+comparison_frameworks:
+  fastapi:
+    enabled: false
+    endpoint: "http://localhost:8000"
+    scenarios: ["baseline", "high_throughput"]
+    
+  flask:
+    enabled: false
+    endpoint: "http://localhost:5000"
+    scenarios: ["baseline"]
+    
+  celery_redis:
+    enabled: false
+    broker_url: "redis://localhost:6379"
+    scenarios: ["baseline", "large_payloads"]
+
+# Advanced Test Settings
+advanced:
+  # Gradual load increase for stress testing
+  gradual_load_increase:
+    enabled: false
+    steps: [10, 25, 50, 100, 150, 200]
+    step_duration_seconds: 60
+    
+  # Memory leak detection
+  memory_leak_detection:
+    enabled: true
+    max_memory_increase_mb: 500
+    measurement_interval_seconds: 30
+    
+  # Performance regression detection
+  regression_detection:
+    enabled: false
+    baseline_results_path: "./reports/baseline"
+    max_performance_degradation_percent: 20
