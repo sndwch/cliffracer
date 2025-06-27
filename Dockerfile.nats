@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements-nats.txt .
+RUN pip install --no-cache-dir -r requirements-nats.txt
+
+# Copy service code
+COPY nats_service.py .
+COPY nats_runner.py .
+COPY example_services.py .
+
+# Default command (can be overridden)
+CMD ["python", "-m", "example_services"]

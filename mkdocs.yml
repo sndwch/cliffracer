@@ -1,0 +1,126 @@
+site_name: NATS Microservices Framework
+site_description: A comprehensive microservices framework built on NATS with monitoring, logging, and testing
+site_author: Your Name
+site_url: https://your-domain.com
+
+# Repository
+repo_name: cultku/nats-microservices
+repo_url: https://github.com/your-username/cultku
+
+# Configuration
+theme:
+  name: material
+  palette:
+    # Palette toggle for light mode
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - toc.integrate
+    - search.highlight
+    - search.share
+    - content.code.annotate
+    - content.code.copy
+
+# Plugins
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_object_full_path: false
+            merge_init_into_class: true
+
+# Navigation
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Configuration: getting-started/configuration.md
+  - Core Framework:
+    - Service Base: framework/service-base.md
+    - Decorators: framework/decorators.md
+    - Schema Validation: framework/schema-validation.md
+    - Message Patterns: framework/message-patterns.md
+  - Extended Features:
+    - HTTP Services: extended/http-services.md
+    - WebSocket Services: extended/websocket-services.md
+    - Broadcast & Listeners: extended/broadcast-listeners.md
+  - Monitoring:
+    - Zabbix Integration: monitoring/zabbix.md
+    - Metrics Collection: monitoring/metrics.md
+    - Dashboards: monitoring/dashboards.md
+  - Logging:
+    - Structured Logging: logging/structured-logging.md
+    - Log Configuration: logging/configuration.md
+    - Best Practices: logging/best-practices.md
+  - Testing:
+    - Unit Testing: testing/unit-tests.md
+    - Integration Testing: testing/integration-tests.md
+    - Test Fixtures: testing/fixtures.md
+  - Deployment:
+    - Docker: deployment/docker.md
+    - Docker Compose: deployment/docker-compose.md
+    - Production Setup: deployment/production.md
+  - Examples:
+    - Basic Services: examples/basic-services.md
+    - E-commerce System: examples/ecommerce-system.md
+    - Monitoring Setup: examples/monitoring-setup.md
+  - API Reference:
+    - Service Classes: api/services.md
+    - Decorators: api/decorators.md
+    - Configuration: api/configuration.md
+    - Utilities: api/utilities.md
+
+# Extensions
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+# Extra
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/your-username
+    - icon: fontawesome/brands/docker
+      link: https://hub.docker.com/your-username
+  version:
+    provider: mike

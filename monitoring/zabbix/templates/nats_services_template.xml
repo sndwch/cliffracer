@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<zabbix_export>
+    <version>7.0</version>
+    <template_groups>
+        <template_group>
+            <uuid>7df96b18c230490a9a0a9e2307226338</uuid>
+            <name>Templates/Applications</name>
+        </template_group>
+    </template_groups>
+    <templates>
+        <template>
+            <uuid>a571c0d144b241fbab6c9fcbf19426b7</uuid>
+            <template>NATS Microservices</template>
+            <name>NATS Microservices Template</name>
+            <description>Template for monitoring NATS-based microservices</description>
+            <groups>
+                <group>
+                    <name>Templates/Applications</name>
+                </group>
+            </groups>
+            <items>
+                <!-- NATS Server Items -->
+                <item>
+                    <uuid>1234567890abcdef1234567890abcdef</uuid>
+                    <name>NATS Server Connections</name>
+                    <type>ZABBIX_PASSIVE</type>
+                    <key>nats.server.connections</key>
+                    <delay>30s</delay>
+                    <value_type>UNSIGNED</value_type>
+                    <description>Number of active connections to NATS server</description>
+                </item>
+                <item>
+                    <uuid>1234567890abcdef1234567890abcde0</uuid>
+                    <name>NATS Server Messages In</name>
+                    <type>ZABBIX_PASSIVE</type>
+                    <key>nats.server.messages.in</key>
+                    <delay>30s</delay>
+                    <value_type>UNSIGNED</value_type>
+                    <preprocessing>
+                        <step>
+                            <type>CHANGE_PER_SECOND</type>
+                        </step>
+                    </preprocessing>
+                    <description>Rate of incoming messages per second</description>
+                </item>
+                <item>
+                    <uuid>1234567890abcdef1234567890abcde1</uuid>
+                    <name>NATS Server Messages Out</name>
+                    <type>ZABBIX_PASSIVE</type>
+                    <key>nats.server.messages.out</key>
+                    <delay>30s</delay>
+                    <value_type>UNSIGNED</value_type>
+                    <preprocessing>
+                        <step>
+                            <type>CHANGE_PER_SECOND</type>
+                        </step>
+                    </preprocessing>
+                    <description>Rate of outgoing messages per second</description>
+                </item>
+                <item>
+                    <uuid>1234567890abcdef1234567890abcde2</uuid>
+                    <name>NATS Server Bytes In</name>
+                    <type>ZABBIX_PASSIVE</type>
+                    <key>nats.server.bytes.in</key>
+                    <delay>30s</delay>
+                    <value_type>UNSIGNED</value_type>
+                    <units>B</units>
+                    <preprocessing>
+                        <step>
+                            <type>CHANGE_PER_SECOND</type>
+                        </step>
+                    </preprocessing>
+                    <description>Rate of incoming bytes per second</description>
+                </item>
+                <item>
+                    <uuid>1234567890abcdef1234567890abcde3</uuid>
+                    <name>NATS Server Bytes Out</name>
+                    <type>ZABBIX_PASSIVE</type>
+                    <key>nats.server.bytes.out</key>
+                    <delay>30s</delay>
+                    <value_type>UNSIGNED</value_type>
+                    <units>B</units>
+                    <preprocessing>
+                        <step>
+                            <type>CHANGE_PER_SECOND</type>
+                        </step>
+                    </preprocessing>
+                    <description>Rate of outgoing bytes per second</description>
+                </item>
+                <item>
+                    <uuid>1234567890abcdef1234567890abcde4</uuid>
+                    <name>NATS Server Uptime</name>
+                    <type>ZABBIX_PASSIVE</type>
+                    <key>nats.server.uptime</key>
+                    <delay>60s</delay>
+                    <value_type>TEXT</value_type>
+                    <description>NATS server uptime</description>
+                </item>
+                
+                <!-- Service Discovery Items -->
+                <item>
+                    <uuid>1234567890abcdef1234567890abcde5</uuid>
+                    <name>User Service Status</name>
+                    <type>ZABBIX_PASSIVE</type>
+                    <key>nats.service.status[user_service,8001]</key>
+                    <delay>30s</delay>
+                    <value_type>TEXT</value_type>
+                    <description>Status of User Service</description>
+                    <triggers>
+                        <trigger>
+                            <uuid>1234567890abcdef1234567890abcde6</uuid>
+                            <expression>last(/NATS Microservices/nats.service.status[user_service,8001])&lt;&gt;"healthy"</expression>
+                            <name>User Service is down</name>
+                            <priority>HIGH</priority>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <uuid>1234567890abcdef1234567890abcde7</uuid>
+                    <name>Notification Service Status</name>
+                    <type>ZABBIX_PASSIVE</type>
+                    <key>nats.service.status[notification_service,8002]</key>
+                    <delay>30s</delay>
+                    <value_type>TEXT</value_type>
+                    <description>Status of Notification Service</description>
+                    <triggers>
+                        <trigger>
+                            <uuid>1234567890abcdef1234567890abcde8</uuid>
+                            <expression>last(/NATS Microservices/nats.service.status[notification_service,8002])&lt;&gt;"healthy"</expression>
+                            <name>Notification Service is down</name>
+                            <priority>HIGH</priority>
+                        </trigger>
+                    </triggers>
+                </item>
+                
+                <!-- Container Monitoring -->
+                <item>
+                    <uuid>1234567890abcdef1234567890abcde9</uuid>
+                    <name>User Service Container CPU</name>
+                    <type>ZABBIX_PASSIVE</type>
+                    <key>container.cpu[user_service]</key>
+                    <delay>30s</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>%</units>
+                    <description>CPU usage of User Service container</description>
+                </item>
+                <item>
+                    <uuid>1234567890abcdef1234567890abcdea</uuid>
+                    <name>User Service Container Memory</name>
+                    <type>ZABBIX_PASSIVE</type>
+                    <key>container.memory[user_service]</key>
+                    <delay>30s</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>B</units>
+                    <description>Memory usage of User Service container</description>
+                </item>
+            </items>
+            
+            <discovery_rules>
+                <discovery_rule>
+                    <uuid>1234567890abcdef1234567890abcdeb</uuid>
+                    <name>Service Discovery</name>
+                    <type>EXTERNAL</type>
+                    <key>service.discovery</key>
+                    <delay>300s</delay>
+                    <description>Automatically discover running services</description>
+                    <item_prototypes>
+                        <item_prototype>
+                            <uuid>1234567890abcdef1234567890abcdec</uuid>
+                            <name>Service {#SERVICE.NAME} Status</name>
+                            <type>ZABBIX_PASSIVE</type>
+                            <key>nats.service.status[{#SERVICE.NAME},{#SERVICE.PORT}]</key>
+                            <delay>30s</delay>
+                            <value_type>TEXT</value_type>
+                            <description>Status of service {#SERVICE.NAME}</description>
+                        </item_prototype>
+                        <item_prototype>
+                            <uuid>1234567890abcdef1234567890abcded</uuid>
+                            <name>Service {#SERVICE.NAME} RPC Methods</name>
+                            <type>ZABBIX_PASSIVE</type>
+                            <key>nats.service.rpc_count[{#SERVICE.NAME},{#SERVICE.PORT}]</key>
+                            <delay>300s</delay>
+                            <value_type>UNSIGNED</value_type>
+                            <description>Number of RPC methods in service {#SERVICE.NAME}</description>
+                        </item_prototype>
+                    </item_prototypes>
+                    <trigger_prototypes>
+                        <trigger_prototype>
+                            <uuid>1234567890abcdef1234567890abcdee</uuid>
+                            <expression>last(/NATS Microservices/nats.service.status[{#SERVICE.NAME},{#SERVICE.PORT}])&lt;&gt;"healthy"</expression>
+                            <name>Service {#SERVICE.NAME} is down</name>
+                            <priority>HIGH</priority>
+                        </trigger_prototype>
+                    </trigger_prototypes>
+                </discovery_rule>
+            </discovery_rules>
+            
+            <graphs>
+                <graph>
+                    <uuid>1234567890abcdef1234567890abcdef</uuid>
+                    <name>NATS Message Throughput</name>
+                    <graph_items>
+                        <graph_item>
+                            <color>1A7C11</color>
+                            <item>
+                                <host>NATS Microservices</host>
+                                <key>nats.server.messages.in</key>
+                            </item>
+                        </graph_item>
+                        <graph_item>
+                            <color>F63100</color>
+                            <item>
+                                <host>NATS Microservices</host>
+                                <key>nats.server.messages.out</key>
+                            </item>
+                        </graph_item>
+                    </graph_items>
+                </graph>
+                <graph>
+                    <uuid>1234567890abcdef1234567890abcdf0</uuid>
+                    <name>NATS Data Throughput</name>
+                    <graph_items>
+                        <graph_item>
+                            <color>1A7C11</color>
+                            <item>
+                                <host>NATS Microservices</host>
+                                <key>nats.server.bytes.in</key>
+                            </item>
+                        </graph_item>
+                        <graph_item>
+                            <color>F63100</color>
+                            <item>
+                                <host>NATS Microservices</host>
+                                <key>nats.server.bytes.out</key>
+                            </item>
+                        </graph_item>
+                    </graph_items>
+                </graph>
+            </graphs>
+        </template>
+    </templates>
+</zabbix_export>

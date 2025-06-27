@@ -1,0 +1,132 @@
+# Multi-stage Dockerfile for Lambda-optimized deployments
+# Supports both LocalStack development and AWS Lambda production
+
+# Stage 1: Base Python environment
+FROM python:3.11-slim as base
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    make \
+    libffi-dev \
+    libssl-dev \
+    curl \
+    zip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Stage 2: Dependencies
+FROM base as deps
+
+WORKDIR /app
+
+# Copy requirements
+COPY requirements-aws.txt .
+COPY requirements-monitoring.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements-aws.txt
+RUN pip install --no-cache-dir -r requirements-monitoring.txt
+
+# Stage 3: Application
+FROM deps as app
+
+# Copy framework code
+COPY messaging/ ./messaging/
+COPY runners/ ./runners/
+COPY monitoring/ ./monitoring/
+COPY *.py ./
+
+# Create Lambda deployment packages
+RUN mkdir -p /lambda-packages
+
+# Create deployment package for each service
+RUN python -c "
+import zipfile
+import os
+import shutil
+
+# Create base package with framework
+def create_base_package():
+    with zipfile.ZipFile('/lambda-packages/base.zip', 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Add framework modules
+        for root, dirs, files in os.walk('messaging'):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    zf.write(file_path, file_path)
+        
+        for root, dirs, files in os.walk('runners'):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    zf.write(file_path, file_path)
+        
+        for root, dirs, files in os.walk('monitoring'):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    zf.write(file_path, file_path)
+        
+        # Add core files
+        core_files = [
+            'fully_modular_service.py',
+            'modular_service.py'
+        ]
+        for file in core_files:
+            if os.path.exists(file):
+                zf.write(file, file)
+
+create_base_package()
+print('Created base Lambda package')
+"
+
+# Stage 4: Runtime environment (for development/testing)
+FROM app as runtime
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV AWS_DEFAULT_REGION=us-east-1
+ENV AWS_ACCESS_KEY_ID=test
+ENV AWS_SECRET_ACCESS_KEY=test
+
+# Configure for LocalStack by default
+ENV AWS_ENDPOINT_URL=http://localstack:4566
+ENV MESSAGING_BACKEND=aws
+ENV RUNNER_TYPE=lambda
+ENV MONITORING_BACKEND=localstack
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "
+import asyncio
+from fully_modular_service import FullyModularService, ConfigFactory
+async def health():
+    try:
+        config = ConfigFactory.from_environment('health_check')
+        service = FullyModularService(config)
+        await service.initialize()
+        health = await service.health_check()
+        print(f'Health: {health[\"status\"]}')
+        await service.stop()
+        exit(0 if health['status'] == 'healthy' else 1)
+    except Exception as e:
+        print(f'Health check failed: {e}')
+        exit(1)
+asyncio.run(health())
+"
+
+# Default command
+CMD ["python", "example_full_aws_stack.py"]
+
+# Stage 5: Lambda runtime (for actual Lambda deployment)
+FROM public.ecr.aws/lambda/python:3.11 as lambda-runtime
+
+# Copy dependencies
+COPY --from=deps /usr/local/lib/python3.11/site-packages ${LAMBDA_RUNTIME_DIR}
+
+# Copy application code
+COPY --from=app /app ${LAMBDA_RUNTIME_DIR}
+
+# Set the CMD to your handler
+CMD ["example_full_aws_stack.lambda_handler"]

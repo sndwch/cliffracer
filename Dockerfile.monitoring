@@ -1,0 +1,34 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies for monitoring
+RUN apt-get update && apt-get install -y \
+    curl \
+    jq \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements-monitoring.txt .
+RUN pip install --no-cache-dir -r requirements-monitoring.txt
+
+# Copy service code
+COPY nats_service.py .
+COPY nats_service_extended.py .
+COPY nats_runner.py .
+COPY example_services.py .
+COPY example_extended_services.py .
+COPY monitoring/metrics_service.py .
+
+# Copy monitoring configurations
+COPY monitoring/ monitoring/
+
+# Create logs and metrics directories
+RUN mkdir -p /app/logs /app/metrics
+
+# Expose ports for HTTP/WebSocket services and metrics
+EXPOSE 8001 8002 9090
+
+# Default command
+CMD ["python", "-m", "example_extended_services"]
