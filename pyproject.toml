@@ -3,23 +3,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = [
-    "nats_service.py",
-    "nats_service_extended.py", 
-    "nats_service_logged.py",
-    "nats_runner.py",
-    "logging_config.py",
-    "auth_framework.py",
-    "auth_middleware.py",
-    "modular_service.py",
-    "fully_modular_service.py",
-    "messaging",
-    "monitoring",
-    "runners"
-]
+packages = ["src"]
 
 [project]
-name = "nats-microservices"
+name = "cliffracer"
 version = "0.1.0"
 description = "A comprehensive, production-ready microservices framework built on NATS"
 authors = [
@@ -88,14 +75,14 @@ docs = [
 
 # All optional dependencies
 all = [
-    "nats-microservices[extended,aws,monitoring,dev,docs]",
+    "cliffracer[extended,aws,monitoring,dev,docs]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-username/nats-microservices"
-Documentation = "https://your-username.github.io/nats-microservices"
-Repository = "https://github.com/your-username/nats-microservices"
-Issues = "https://github.com/your-username/nats-microservices/issues"
+Homepage = "https://github.com/sndwch/cliffracer"
+Documentation = "https://sndwch.github.io/cliffracer"
+Repository = "https://github.com/sndwch/cliffracer"
+Issues = "https://github.com/sndwch/cliffracer/issues"
 
 [dependency-groups]
 dev = [

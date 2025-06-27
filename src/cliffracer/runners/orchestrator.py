@@ -8,7 +8,7 @@ import logging
 import signal
 import sys
 
-from nats_service import NATSService, ServiceConfig
+from ..core import NATSService, ServiceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class ServiceRunner:
     """Runs services with automatic restart on failure"""
 
-    def __init__(self, service_class: type[Service], config: NATSServiceConfig):
+    def __init__(self, service_class: type[NATSService], config: ServiceConfig):
         self.service_class = service_class
         self.config = config
         self.service: NATSService | None = None
@@ -132,7 +132,7 @@ class ServiceOrchestrator:
         self._running = False
         self._shutdown_event = asyncio.Event()
 
-    def add_service(self, service_class: type[Service], config: ServiceConfig):
+    def add_service(self, service_class: type[NATSService], config: ServiceConfig):
         """Add a service to run"""
         runner = ServiceRunner(service_class, config)
         self.runners.append(runner)

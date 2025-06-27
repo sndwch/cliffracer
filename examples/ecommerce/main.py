@@ -23,7 +23,7 @@ from typing import Dict, List, Optional
 from uuid import uuid4
 
 from nats_service_extended import ValidatedNATSService, HTTPNATSService, ServiceConfig
-from nats_service_extended import validated_rpc, broadcast, listener, event_handler
+from nats_service_extended import validated_rpc, broadcast, listener
 from nats_runner import ServiceOrchestrator, configure_logging
 from pydantic import BaseModel, Field, EmailStr
 

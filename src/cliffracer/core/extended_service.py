@@ -15,7 +15,8 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
 
-from nats_service import NATSService, ServiceConfig, NATSServiceMeta
+from .base_service import NATSService, NATSServiceMeta
+from .service_config import ServiceConfig
 
 logger = logging.getLogger(__name__)
 

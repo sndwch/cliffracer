@@ -12,6 +12,7 @@ services:
     command: [
       "--js",                    # Enable JetStream
       "--m", "8222",            # Monitoring port
+      "--server_name", "cliffracer-nats",
       "--cluster_name", "cliffracer",
       "--cluster", "nats://0.0.0.0:6222",
       "--routes", "nats-route://nats:6222",
@@ -66,7 +67,6 @@ services:
       - "10051:10051"
     volumes:
       - /etc/localtime:/etc/localtime:ro
-      - ./monitoring/zabbix/:/etc/zabbix/
     networks:
       - cliffracer-network
     depends_on:

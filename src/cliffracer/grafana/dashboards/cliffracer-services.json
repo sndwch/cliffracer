@@ -1,0 +1,25 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Cliffracer Services Dashboard",
+    "tags": ["cliffracer", "microservices"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "title": "Service Health",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "up",
+            "legendFormat": "{{service}}"
+          }
+        ]
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s"
+  }
+}

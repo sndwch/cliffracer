@@ -17,20 +17,9 @@ import nats
 from nats.errors import TimeoutError
 from nats.js import JetStreamContext
 
+from .service_config import ServiceConfig
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ServiceConfig:
-    """Configuration for a NATS service"""
-
-    name: str
-    nats_url: str = "nats://localhost:4222"
-    max_reconnect_attempts: int = 60
-    reconnect_time_wait: int = 2
-    request_timeout: float = 30.0
-    auto_restart: bool = True
-    jetstream_enabled: bool = False
 
 
 class BaseNATSService:
