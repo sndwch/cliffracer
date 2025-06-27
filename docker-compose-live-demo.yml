@@ -1,0 +1,196 @@
+version: '3.8'
+
+services:
+  # NATS Server with JetStream and monitoring
+  nats:
+    image: nats:alpine
+    container_name: cliffracer-nats
+    ports:
+      - "4222:4222"    # NATS client port
+      - "8222:8222"    # HTTP monitoring port
+      - "6222:6222"    # Cluster port
+    command: [
+      "--js",                    # Enable JetStream
+      "--m", "8222",            # Monitoring port
+      "--cluster_name", "cliffracer",
+      "--cluster", "nats://0.0.0.0:6222",
+      "--routes", "nats-route://nats:6222",
+      "--jetstream"
+    ]
+    volumes:
+      - nats_data:/data
+    networks:
+      - cliffracer-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/varz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # PostgreSQL for Zabbix
+  postgres:
+    image: postgres:15-alpine
+    container_name: cliffracer-postgres
+    environment:
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbix_password
+      POSTGRES_ROOT_PASSWORD: root_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - cliffracer-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zabbix -d zabbix"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Zabbix Server
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:alpine-6.4-latest
+    container_name: cliffracer-zabbix-server
+    environment:
+      DB_SERVER_HOST: postgres
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbix_password
+      ZBX_ENABLE_SNMP_TRAPS: "true"
+      ZBX_STARTPINGERS: 5
+      ZBX_STARTPOLLERS: 10
+      ZBX_STARTPOLLERSUNREACHABLE: 5
+      ZBX_STARTTRAPPERS: 10
+      ZBX_STARTDISCOVERERS: 5
+      ZBX_STARTHTTPPOLLERS: 5
+    ports:
+      - "10051:10051"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./monitoring/zabbix/:/etc/zabbix/
+    networks:
+      - cliffracer-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "zabbix_server", "--test-config"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Zabbix Web Interface
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-6.4-latest
+    container_name: cliffracer-zabbix-web
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      DB_SERVER_HOST: postgres
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: zabbix_password
+      PHP_TZ: "America/New_York"
+    ports:
+      - "8080:8080"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - cliffracer-network
+    depends_on:
+      - postgres
+      - zabbix-server
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Zabbix Agent for monitoring the host
+  zabbix-agent:
+    image: zabbix/zabbix-agent:alpine-6.4-latest
+    container_name: cliffracer-zabbix-agent
+    environment:
+      ZBX_HOSTNAME: "Docker Host"
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_PASSIVE_ALLOW: "true"
+      ZBX_ACTIVE_ALLOW: "true"
+    ports:
+      - "10050:10050"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /dev:/host/dev:ro
+    networks:
+      - cliffracer-network
+    depends_on:
+      - zabbix-server
+    privileged: true
+    pid: host
+
+  # Redis for caching (optional, can be used by services)
+  redis:
+    image: redis:7-alpine
+    container_name: cliffracer-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - cliffracer-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Grafana for additional visualization (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cliffracer-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - cliffracer-network
+    depends_on:
+      - postgres
+
+  # NATS Exporter for Prometheus metrics
+  nats-exporter:
+    image: natsio/prometheus-nats-exporter:latest
+    container_name: cliffracer-nats-exporter
+    ports:
+      - "7777:7777"
+    command: [
+      "-varz", "-connz", "-routez", "-subz", "-gatewayz", "-leafz", "-jsz=all",
+      "http://nats:8222"
+    ]
+    networks:
+      - cliffracer-network
+    depends_on:
+      - nats
+
+volumes:
+  nats_data:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  cliffracer-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
