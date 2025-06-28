@@ -32,7 +32,7 @@ class ServiceConfig(BaseModel):
     version: str = Field(default="0.1.0")
 
     # Backdoor debugging configuration
-    backdoor_enabled: bool = Field(default=True)
+    backdoor_enabled: bool = Field(default=False)  # Disabled by default for security
     backdoor_port: int = Field(default=0)  # 0 for auto-assign
     disable_backdoor: bool = Field(default=False)  # Global disable flag
     description: str | None = None
