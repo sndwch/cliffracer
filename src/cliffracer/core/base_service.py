@@ -223,6 +223,19 @@ class BaseNATSService:
         await self.disconnect()
         logger.info(f"Service '{self.config.name}' stopped")
 
+    def get_service_info(self) -> dict[str, Any]:
+        """Get service metadata for client generation"""
+        return {
+            "name": self.config.name,
+            "version": self.config.version,
+            "rpc_methods": list(self._rpc_handlers.keys()),
+            "event_patterns": list(self._event_handlers.keys()),
+            "subjects": {
+                "rpc": f"{self.config.name}.rpc.*",
+                "events": f"{self.config.name}.events.*",
+            },
+        }
+
     async def call_rpc(self, service: str, method: str, **kwargs) -> Any:
         """
         Call an RPC method on another service (synchronous - waits for response)
@@ -403,6 +416,9 @@ class NATSService(BaseNATSService, metaclass=NATSServiceMeta):
     def __init__(self, config: ServiceConfig):
         super().__init__(config)
 
+        # Register built-in introspection RPC method
+        self._rpc_handlers["get_service_info"] = self._handle_get_service_info
+
         # Register RPC handlers
         if hasattr(self.__class__, "_rpc_methods"):
             for name, method in self.__class__._rpc_methods.items():
@@ -412,3 +428,7 @@ class NATSService(BaseNATSService, metaclass=NATSServiceMeta):
         if hasattr(self.__class__, "_event_methods"):
             for pattern, method in self.__class__._event_methods.items():
                 self._event_handlers[pattern] = method
+
+    async def _handle_get_service_info(self, **kwargs) -> dict[str, Any]:
+        """RPC handler for service introspection"""
+        return self.get_service_info()
