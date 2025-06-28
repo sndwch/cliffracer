@@ -23,6 +23,7 @@ import json
 
 # Configure boto3 for LocalStack
 import os
+import random
 import time
 import uuid
 from datetime import UTC, datetime
@@ -626,8 +627,6 @@ async def generate_orders(order_service: OrderService):
             # Create random order
             num_items = random.randint(1, 3)
             items = []
-
-            import random
 
             for _ in range(num_items):
                 product_id, name, price = random.choice(products)

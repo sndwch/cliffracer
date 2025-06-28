@@ -140,7 +140,7 @@ async def test_services():
     """Test the services by making some calls"""
     # Create a test client service
     client_config = ServiceConfig(name="test_client")
-    client = Service(client_config)
+    client = NATSService(client_config)
 
     await client.connect()
 

@@ -203,7 +203,7 @@ async def demonstrate_patterns():
 
     # Create a client service
     client_config = ServiceConfig(name="demo_client")
-    client = Service(client_config)
+    client = NATSService(client_config)
     await client.connect()
 
     try:

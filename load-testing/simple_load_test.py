@@ -35,7 +35,7 @@ class SimpleNATSUser(User):
                 print(f"✅ User {id(self)} connected to NATS")
             except Exception as e:
                 print(f"❌ Failed to connect to NATS: {e}")
-                raise StopUser()
+                raise StopUser() from e
 
         gevent.spawn(self._run_async(connect)).get()
 

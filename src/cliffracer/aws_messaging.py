@@ -66,12 +66,12 @@ class AWSClient(MessageClient):
             print(f"Connected to AWS messaging in region {self.region}")
 
         except Exception as e:
-            raise ConnectionError(f"Failed to connect to AWS: {e}")
+            raise ConnectionError(f"Failed to connect to AWS: {e}") from e
 
     async def disconnect(self) -> None:
         """Cleanup AWS resources"""
         # Stop any polling tasks
-        for sub_id, sub_info in self._subscriptions.items():
+        for _sub_id, sub_info in self._subscriptions.items():
             if "task" in sub_info:
                 sub_info["task"].cancel()
 
@@ -126,7 +126,7 @@ class AWSClient(MessageClient):
             print(f"Published to SNS topic {subject}: {response['MessageId']}")
 
         except ClientError as e:
-            raise RuntimeError(f"Failed to publish to SNS: {e}")
+            raise RuntimeError(f"Failed to publish to SNS: {e}") from e
 
     async def _publish_to_eventbridge(self, subject: str, data: bytes, attrs: dict[str, str]):
         """Publish to EventBridge"""
@@ -157,7 +157,7 @@ class AWSClient(MessageClient):
             print(f"Published to EventBridge: {subject}")
 
         except ClientError as e:
-            raise RuntimeError(f"Failed to publish to EventBridge: {e}")
+            raise RuntimeError(f"Failed to publish to EventBridge: {e}") from e
 
     async def request(
         self,
@@ -341,7 +341,7 @@ class AWSClient(MessageClient):
             print(f"Created EventBridge rule for stream: {name}")
 
         except ClientError as e:
-            raise RuntimeError(f"Failed to create stream: {e}")
+            raise RuntimeError(f"Failed to create stream: {e}") from e
 
     async def delete_stream(self, name: str) -> None:
         """Delete EventBridge rule"""
@@ -360,7 +360,7 @@ class AWSClient(MessageClient):
                 del self._event_rules[name]
 
             except ClientError as e:
-                raise RuntimeError(f"Failed to delete stream: {e}")
+                raise RuntimeError(f"Failed to delete stream: {e}") from e
 
     async def get_stats(self) -> dict[str, Any]:
         """Get AWS messaging statistics"""
@@ -394,7 +394,7 @@ class AWSClient(MessageClient):
             return topic_arn
 
         except ClientError as e:
-            raise RuntimeError(f"Failed to create topic {topic_name}: {e}")
+            raise RuntimeError(f"Failed to create topic {topic_name}: {e}") from e
 
     async def _create_queue(self, queue_name: str, temporary: bool = False) -> str:
         """Create SQS queue"""
@@ -410,13 +410,13 @@ class AWSClient(MessageClient):
             response = self.sqs.create_queue(QueueName=queue_name, Attributes=attributes)
             return response["QueueUrl"]
 
-        except ClientError as e:
+        except ClientError:
             # Queue might already exist
             try:
                 response = self.sqs.get_queue_url(QueueName=queue_name)
                 return response["QueueUrl"]
-            except ClientError:
-                raise RuntimeError(f"Failed to create/get queue {queue_name}: {e}")
+            except ClientError as e:
+                raise RuntimeError(f"Failed to create/get queue {queue_name}: {e}") from e
 
     async def _subscribe_queue_to_topic(self, queue_url: str, topic_arn: str):
         """Subscribe SQS queue to SNS topic"""

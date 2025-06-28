@@ -14,6 +14,8 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from cliffracer import HTTPNATSService, ServiceConfig
+
 
 class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware to extract and validate authentication from HTTP requests"""
@@ -51,9 +53,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return response
 
         except AuthenticationError as e:
-            raise HTTPException(status_code=401, detail=str(e))
-        except Exception:
-            raise HTTPException(status_code=500, detail="Authentication error")
+            raise HTTPException(status_code=401, detail=str(e)) from e
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Authentication error") from e
         finally:
             # Clear context
             current_context.set(None)
@@ -103,7 +105,6 @@ def require_roles(*roles: Role):
 
 
 # Example authenticated HTTP service
-from nats_service_extended import HTTPNATSService, ServiceConfig
 
 
 class AuthenticatedHTTPService(HTTPNATSService):
@@ -173,8 +174,8 @@ class AuthenticatedHTTPService(HTTPNATSService):
 
             except HTTPException:
                 raise
-            except Exception:
-                raise HTTPException(status_code=500, detail="Login failed")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail="Login failed") from e
 
         @self.app.get("/auth/me")
         async def get_current_user(context: RequestContext = Depends(get_current_context)):

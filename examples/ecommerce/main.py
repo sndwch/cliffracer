@@ -19,7 +19,6 @@ import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, EmailStr, Field
@@ -234,7 +233,7 @@ class OrderService(HTTPNATSService):
             await self.record_metric("orders.processing_time", processing_time)
             raise
 
-    @validated_rpc(str, Optional[Order])
+    @validated_rpc(str, Order | None)
     async def get_order(self, order_id: str) -> Order | None:
         """Get order by ID"""
         start_time = time.time()
@@ -659,7 +658,7 @@ class LoadGeneratorService(ValidatedNATSService):
             ("mouse-wireless", "Wireless Mouse", Decimal("49.99")),
         ]
 
-        order_counter = 1
+        # order_counter = 1  # Unused variable
 
         while self.running:
             try:

@@ -138,7 +138,7 @@ from typing import TYPE_CHECKING
 '''
 
     # Add imports for new classes
-    for old_name, new_name in mappings.items():
+    for _old_name, new_name in mappings.items():
         if "Service" in new_name:
             alias_content += f"from nats_service import {new_name}\n"
         elif "Client" in new_name:

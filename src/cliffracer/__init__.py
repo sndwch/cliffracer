@@ -40,10 +40,10 @@ from cliffracer.logging import LoggedExtendedService, LoggingConfig, get_service
 # Runner exports
 from cliffracer.runners.orchestrator import ServiceOrchestrator, ServiceRunner
 
-# Auth exports (optional)
+# Auth exports (optional) - Currently disabled until auth module is complete
 try:
-    from cliffracer.auth.framework import AuthenticatedService, require_auth
-    from cliffracer.auth.middleware import AuthMiddleware
+    # from cliffracer.auth.framework import AuthenticatedService, require_auth
+    # from cliffracer.auth.middleware import AuthMiddleware
 
     _auth_available = True
 except ImportError:

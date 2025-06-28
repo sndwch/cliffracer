@@ -19,7 +19,6 @@ from .abstract_monitoring import (
     MetricUnit,
     MonitoringClient,
     MonitoringConfig,
-    MonitoringFactory,
 )
 
 
@@ -533,5 +532,5 @@ class LocalStackCloudWatchClient(CloudWatchClient):
 
 
 # Register CloudWatch clients
-MonitoringFactory.register_client("cloudwatch", CloudWatchMonitoringClient)
-MonitoringFactory.register_client("localstack", LocalStackCloudWatchClient)
+# MonitoringFactory.register_client("cloudwatch", CloudWatchMonitoringClient)  # Not implemented yet
+# MonitoringFactory.register_client("localstack", LocalStackCloudWatchClient)  # Not implemented yet

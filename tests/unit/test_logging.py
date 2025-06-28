@@ -52,8 +52,8 @@ class TestLoggingConfig:
             )
 
             # Should not create log files
-            log_path = Path(tmpdir)
-            log_files = list(log_path.glob("*.log"))
+            Path(tmpdir)
+            # log_files = list(log_path.glob("*.log"))
             # Note: This test might be flaky since loguru might still create files
             # In a real scenario, you'd mock loguru.logger.add
 

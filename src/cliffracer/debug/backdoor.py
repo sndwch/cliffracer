@@ -187,13 +187,13 @@ Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 Available commands:
   help_backdoor()    - Show available debugging commands
   inspect_service()  - Show service information
-  inspect_nats()     - Show NATS connection details  
+  inspect_nats()     - Show NATS connection details
   list_workers()     - Show active workers
   show_metrics()     - Show service metrics
-  
+
 Variables:
   service           - Your service instance
-  
+
 Type help() for Python help, exit() to disconnect.
 {"=" * 50}
 
@@ -209,22 +209,22 @@ Service Inspection:
   inspect_nats()        - Show NATS connection information
   list_workers()        - Show currently running workers
   show_metrics()        - Show performance metrics
-  
+
 Direct Access:
   service              - Your service instance
   service.nats         - NATS connection (if available)
   service.config       - Service configuration
-  
+
 Examples:
   # Check if NATS is connected
   service.nats.is_connected if hasattr(service, 'nats') else 'No NATS'
-  
+
   # Get service configuration
   vars(service.config)
-  
+
   # Manual RPC call (if service supports it)
   await service.some_rpc_method(arg1, arg2)
-  
+
   # Check service state
   inspect_service()
 """

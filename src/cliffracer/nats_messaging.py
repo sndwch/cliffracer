@@ -63,7 +63,7 @@ class NATSClient(MessageClient):
             print(f"Connected to NATS at {self.url}")
 
         except Exception as e:
-            raise ConnectionError(f"Failed to connect to NATS: {e}")
+            raise ConnectionError(f"Failed to connect to NATS: {e}") from e
 
     async def disconnect(self) -> None:
         """Disconnect from NATS"""
@@ -103,7 +103,7 @@ class NATSClient(MessageClient):
                 await self.nc.publish(subject, data, headers=nats_headers)
 
         except Exception as e:
-            raise RuntimeError(f"Failed to publish to NATS: {e}")
+            raise RuntimeError(f"Failed to publish to NATS: {e}") from e
 
     async def request(
         self,
@@ -139,7 +139,7 @@ class NATSClient(MessageClient):
             )
 
         except Exception as e:
-            raise RuntimeError(f"NATS request failed: {e}")
+            raise RuntimeError(f"NATS request failed: {e}") from e
 
     async def subscribe(
         self, config: SubscriptionConfig, callback: Callable[[Message], Any]
@@ -198,7 +198,7 @@ class NATSClient(MessageClient):
             return subscription_id
 
         except Exception as e:
-            raise RuntimeError(f"Failed to subscribe to NATS: {e}")
+            raise RuntimeError(f"Failed to subscribe to NATS: {e}") from e
 
     async def unsubscribe(self, subscription_id: str) -> None:
         """Unsubscribe from NATS subject"""
@@ -233,7 +233,7 @@ class NATSClient(MessageClient):
             print(f"Created NATS stream: {name}")
 
         except Exception as e:
-            raise RuntimeError(f"Failed to create NATS stream: {e}")
+            raise RuntimeError(f"Failed to create NATS stream: {e}") from e
 
     async def delete_stream(self, name: str) -> None:
         """Delete JetStream stream"""
@@ -247,7 +247,7 @@ class NATSClient(MessageClient):
             print(f"Deleted NATS stream: {name}")
 
         except Exception as e:
-            raise RuntimeError(f"Failed to delete NATS stream: {e}")
+            raise RuntimeError(f"Failed to delete NATS stream: {e}") from e
 
     async def get_stats(self) -> dict[str, Any]:
         """Get NATS statistics"""

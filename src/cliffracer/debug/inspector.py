@@ -273,7 +273,7 @@ class NATSInspector:
         print(f"📋 Active Subscriptions ({len(subs)} total)")
         print("=" * 50)
 
-        for i, (sid, sub) in enumerate(subs.items()):
+        for i, (_sid, sub) in enumerate(subs.items()):
             if i >= limit:
                 print(f"... and {len(subs) - limit} more")
                 break

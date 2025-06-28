@@ -84,7 +84,7 @@ async def test_service(test_config) -> AsyncGenerator[ValidatedNATSService]:
     if hasattr(service, "stop"):
         try:
             await service.stop()
-        except:
+        except Exception:
             pass
 
 
@@ -108,7 +108,7 @@ async def logged_test_service(test_config, temp_log_dir) -> AsyncGenerator[Logge
     if hasattr(service, "stop"):
         try:
             await service.stop()
-        except:
+        except Exception:
             pass
 
 

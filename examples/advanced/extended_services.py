@@ -6,19 +6,22 @@ import asyncio
 import logging
 from datetime import datetime
 
-from nats_runner import ServiceOrchestrator, configure_logging
-from nats_service_extended import (
+from pydantic import BaseModel, Field
+
+from cliffracer import (
     BroadcastMessage,
+    HTTPNATSService,
     RPCRequest,
     RPCResponse,
     ServiceConfig,
+    ServiceOrchestrator,
+    ValidatedNATSService,
     broadcast,
-    event_handler,
     listener,
     rpc,
     validated_rpc,
 )
-from pydantic import BaseModel, Field
+from cliffracer.core.base_service import event_handler
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +84,7 @@ class NotificationRequest(BaseModel):
 
 
 # Services
-class UserNATSNATSService(HTTPNATSService):
+class UserService(HTTPNATSService):
     """User management service with HTTP API"""
 
     def __init__(self, config: ServiceConfig):
@@ -150,7 +153,7 @@ class UserNATSNATSService(HTTPNATSService):
         )
 
 
-class NotificationService(WebSocketNATSService):
+class NotificationService(ValidatedNATSService):
     """Notification service with WebSocket support"""
 
     def __init__(self, config: ServiceConfig):
@@ -222,7 +225,7 @@ class NotificationService(WebSocketNATSService):
 
         return notification
 
-    @websocket_handler("/ws")
+    # @websocket_handler("/ws")  # WebSocket support not yet implemented
     async def handle_notifications_ws(self, websocket):
         """WebSocket handler for real-time notifications"""
         # Send initial connection message
@@ -302,7 +305,7 @@ async def test_extended_services():
 
     # Create test client
     client_config = ServiceConfig(name="test_client")
-    client = Service(client_config)
+    client = ValidatedNATSService(client_config)
     await client.connect()
 
     await asyncio.sleep(2)
@@ -354,7 +357,7 @@ async def test_extended_services():
 
 def run_extended_services():
     """Run all extended services"""
-    configure_logging()
+    # configure_logging()  # Function not implemented
 
     runner = ServiceOrchestrator()
 

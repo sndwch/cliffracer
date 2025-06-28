@@ -199,7 +199,7 @@ async def main():
                     print("❌ Order service is not running at http://localhost:8001")
                     print("   Please start the system with: ./setup_live_demo.sh")
                     return
-        except:
+        except Exception:
             print("❌ Cannot connect to order service at http://localhost:8001")
             print("   Please start the system with: ./setup_live_demo.sh")
             return

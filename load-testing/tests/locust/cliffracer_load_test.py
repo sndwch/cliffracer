@@ -53,7 +53,7 @@ class NATSUser(User):
             print(f"✅ User {id(self)} connected to NATS")
         except Exception as e:
             print(f"❌ Failed to connect to NATS: {e}")
-            raise StopUser()
+            raise StopUser() from e
 
     async def on_stop(self):
         """Disconnect from NATS when user stops."""
@@ -351,7 +351,7 @@ class MixedWorkloadUser(NATSUser):
 
         order_data = order.dict()
 
-        response = self.run_async_task(
+        _ = self.run_async_task(
             self.nats_rpc_call("order_processing_service.process_order", order_data)
         )
 
@@ -363,7 +363,7 @@ class MixedWorkloadUser(NATSUser):
         events = generate_analytics_batch(batch_size)
         events_data = [event.dict() for event in events]
 
-        response = self.run_async_task(
+        _ = self.run_async_task(
             self.nats_rpc_call("order_processing_service.analytics_ingestion", events_data)
         )
 
@@ -379,7 +379,7 @@ class MixedWorkloadUser(NATSUser):
         batch_request = self.data_generator.generate_batch_request(batch_size)
         batch_data = batch_request.dict()
 
-        response = self.run_async_task(
+        _ = self.run_async_task(
             self.nats_rpc_call(
                 "order_processing_service.large_payload_processing", batch_data, timeout=20.0
             )

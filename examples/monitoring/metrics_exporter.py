@@ -161,45 +161,45 @@ async def dashboard_handler(request):
         <div class="container">
             <h1>🚀 Cliffracer E-Commerce Metrics</h1>
             <p>Auto-refreshes every 5 seconds</p>
-            
+
             <div class="metrics">
                 <div class="metric">
                     <h3>Orders Created</h3>
                     <div class="value">{metrics["orders_total"]}</div>
                     <div class="unit">{metrics["orders_per_minute"]} per minute</div>
                 </div>
-                
+
                 <div class="metric">
                     <h3>Payment Success Rate</h3>
                     <div class="value {"success" if metrics["payment_success_rate"] > 80 else "warning"}">{metrics["payment_success_rate"]}%</div>
                     <div class="unit">{metrics["payments_total"]} successful / {metrics["payments_failed_total"]} failed</div>
                 </div>
-                
+
                 <div class="metric">
                     <h3>Average Latency</h3>
                     <div class="value {"success" if metrics["avg_message_latency_ms"] < 1 else "warning"}">{metrics["avg_message_latency_ms"]}</div>
                     <div class="unit">milliseconds</div>
                 </div>
-                
+
                 <div class="metric">
                     <h3>Inventory Reserved</h3>
                     <div class="value">{metrics["inventory_items_reserved"]}</div>
                     <div class="unit">items</div>
                 </div>
-                
+
                 <div class="metric">
                     <h3>Notifications Sent</h3>
                     <div class="value">{metrics["notifications_sent_total"]}</div>
                     <div class="unit">emails/SMS</div>
                 </div>
-                
+
                 <div class="metric">
                     <h3>Average Order Value</h3>
                     <div class="value">${metrics["avg_order_value"]}</div>
                     <div class="unit">per order</div>
                 </div>
             </div>
-            
+
             <h2 style="margin-top: 40px;">📊 Real-time Performance</h2>
             <p>Message processing: <strong>{metrics["avg_message_latency_ms"]}ms</strong> average (sub-millisecond is excellent!)</p>
             <p>System uptime: <strong>{int(metrics["uptime_seconds"])}s</strong></p>

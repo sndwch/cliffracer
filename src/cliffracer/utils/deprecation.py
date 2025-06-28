@@ -155,7 +155,8 @@ def _deprecated_abstractmessagebroker(*args, **kwargs):
         DeprecationWarning,
         stacklevel=2,
     )
-    return MessageBroker(*args, **kwargs)
+    # return MessageBroker(*args, **kwargs)  # MessageBroker not implemented yet
+    raise NotImplementedError("MessageBroker is not yet implemented")
 
 
 AbstractMessageBroker = _deprecated_abstractmessagebroker
@@ -213,7 +214,8 @@ def _deprecated_zabbixsender(*args, **kwargs):
     warnings.warn(
         "ZabbixSender is deprecated. Use ZabbixExporter instead.", DeprecationWarning, stacklevel=2
     )
-    return ZabbixExporter(*args, **kwargs)
+    # return ZabbixExporter(*args, **kwargs)  # ZabbixExporter not implemented yet
+    raise NotImplementedError("ZabbixExporter is not yet implemented")
 
 
 ZabbixSender = _deprecated_zabbixsender
@@ -225,7 +227,8 @@ def _deprecated_metricscollector(*args, **kwargs):
         DeprecationWarning,
         stacklevel=2,
     )
-    return SystemMetricsCollector(*args, **kwargs)
+    # return SystemMetricsCollector(*args, **kwargs)  # SystemMetricsCollector not implemented yet
+    raise NotImplementedError("SystemMetricsCollector is not yet implemented")
 
 
 MetricsCollector = _deprecated_metricscollector
@@ -271,7 +274,8 @@ def _deprecated_lambdaservicerunner(*args, **kwargs):
         DeprecationWarning,
         stacklevel=2,
     )
-    return AWSLambdaRunner(*args, **kwargs)
+    # return AWSLambdaRunner(*args, **kwargs)  # AWSLambdaRunner not implemented yet
+    raise NotImplementedError("AWSLambdaRunner is not yet implemented")
 
 
 LambdaServiceRunner = _deprecated_lambdaservicerunner
