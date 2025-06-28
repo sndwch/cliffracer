@@ -7,12 +7,12 @@ Provides live debugging capabilities for running services including:
 - Service state and performance monitoring
 """
 
-from .backdoor import BackdoorServer, BackdoorClient, is_backdoor_enabled
-from .inspector import ServiceInspector, NATSInspector
+from .backdoor import BackdoorClient, BackdoorServer, is_backdoor_enabled
+from .inspector import NATSInspector, ServiceInspector
 
 __all__ = [
     "BackdoorServer",
-    "BackdoorClient", 
+    "BackdoorClient",
     "ServiceInspector",
     "NATSInspector",
     "is_backdoor_enabled",

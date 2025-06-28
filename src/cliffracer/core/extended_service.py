@@ -443,4 +443,3 @@ class WebSocketNATSService(HTTPNATSService):
     async def relay_broadcasts_to_websockets(self, message: BroadcastMessage):
         """Automatically relay NATS broadcasts to WebSocket clients"""
         await self.broadcast_to_websockets(message.model_dump())
-

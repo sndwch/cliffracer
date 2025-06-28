@@ -1,260 +1,181 @@
 """
 Backward compatibility aliases for refactored class names.
 These will be removed in a future version.
+
+WARNING: Many of these classes reference broken or non-existent modules.
+See IMPLEMENTATION_STATUS.md for what actually works.
 """
 
 import warnings
-from typing import TYPE_CHECKING
+from typing import Any
 
-# Import new classes
-from nats_service import BaseNATSService
-from nats_service import NATSService
-from nats_service_extended import ValidatedNATSService
-from nats_service_extended import HTTPNATSService  
-from nats_service_extended import WebSocketNATSService
-from nats_service_extended import ConfigurableNATSService
-from nats_service_extended import PluggableNATSService
-from nats_service_extended import SecureNATSService
-from messaging import NATSClient
-from messaging import AWSClient
-from messaging import MessageClient
-from messaging import MessageClientFactory
-from monitoring.metrics import ZabbixMetricsService
-from monitoring.clients import MonitoringClient
-from monitoring.clients import CloudWatchClient
-from nats_service import NATSServiceMeta
-from nats_service_extended import ValidatedNATSServiceMeta as ValidatedServiceMeta
-from nats_runner import ServiceRunner
-from nats_runner import ServiceOrchestrator
 
-# Create deprecated aliases
+class _DeprecatedClass:
+    """Placeholder for deprecated classes that no longer exist"""
 
-def _deprecated_natsservice(*args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        warnings.warn(
+            f"{self.__class__.__name__} is deprecated and no longer functional. "
+            "See IMPLEMENTATION_STATUS.md for current alternatives.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+
+def _create_deprecated_alias(old_name: str, new_name: str | None = None) -> type[_DeprecatedClass]:
+    """Create a deprecated class alias that warns when used"""
+
+    class DeprecatedAlias(_DeprecatedClass):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            if new_name:
+                message = f"{old_name} is deprecated. Use {new_name} instead."
+            else:
+                message = f"{old_name} is deprecated and no longer available."
+
+            warnings.warn(message, DeprecationWarning, stacklevel=2)
+
+    DeprecatedAlias.__name__ = old_name
+    return DeprecatedAlias
+
+
+# Messaging aliases (broken imports)
+NATSClient = _create_deprecated_alias("NATSClient", "cliffracer.NATSService")
+MessageClient = _create_deprecated_alias("MessageClient", "cliffracer.NATSService")
+AWSClient = _create_deprecated_alias("AWSClient", None)  # Not implemented
+MessageClientFactory = _create_deprecated_alias("MessageClientFactory", None)  # Not implemented
+
+# Monitoring aliases (broken imports)
+CloudWatchClient = _create_deprecated_alias("CloudWatchClient", None)  # Not integrated
+MonitoringClient = _create_deprecated_alias("MonitoringClient", None)  # Not integrated
+ZabbixMetricsService = _create_deprecated_alias("ZabbixMetricsService", None)  # Not integrated
+
+
+# Service aliases (working replacements available)
+def _deprecated_natsservice(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
-        "NatsService is deprecated. Use BaseNATSService instead.",
-        DeprecationWarning,
-        stacklevel=2
+        "NatsService is deprecated. Use BaseNATSService instead.", DeprecationWarning, stacklevel=2
     )
-    return BaseNATSService(*args, **kwargs)
+    from cliffracer import NATSService
 
-NatsService = _deprecated_natsservice
-
-def _deprecated_service(*args, **kwargs):
-    warnings.warn(
-        "Service is deprecated. Use NATSService instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
     return NATSService(*args, **kwargs)
 
-Service = _deprecated_service
 
-def _deprecated_extendedservice(*args, **kwargs):
+def _deprecated_extendedservice(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
         "ExtendedService is deprecated. Use ValidatedNATSService instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
+    from cliffracer import ValidatedNATSService
+
     return ValidatedNATSService(*args, **kwargs)
 
-ExtendedService = _deprecated_extendedservice
 
-def _deprecated_httpservice(*args, **kwargs):
+def _deprecated_httpservice(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
-        "HTTPService is deprecated. Use HTTPNATSService instead.",
-        DeprecationWarning,
-        stacklevel=2
+        "HTTPService is deprecated. Use HTTPNATSService instead.", DeprecationWarning, stacklevel=2
     )
+    from cliffracer import HTTPNATSService
+
     return HTTPNATSService(*args, **kwargs)
 
-HTTPService = _deprecated_httpservice
 
-def _deprecated_websocketservice(*args, **kwargs):
+def _deprecated_websocketservice(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
         "WebSocketService is deprecated. Use WebSocketNATSService instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
-    return WebSocketNATSService(*args, **kwargs)
-
-WebSocketService = _deprecated_websocketservice
-
-def _deprecated_modularservice(*args, **kwargs):
+    # WebSocketNATSService not in main exports yet
     warnings.warn(
-        "ModularService is deprecated. Use ConfigurableNATSService instead.",
-        DeprecationWarning,
-        stacklevel=2
+        "WebSocketNATSService not yet available in main exports", UserWarning, stacklevel=2
     )
-    return ConfigurableNATSService(*args, **kwargs)
+    return None
 
-ModularService = _deprecated_modularservice
 
-def _deprecated_fullymodularservice(*args, **kwargs):
+def _deprecated_servicerunner(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
-        "FullyModularService is deprecated. Use PluggableNATSService instead.",
+        "ServiceRunner is deprecated. Use ServiceOrchestrator instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
-    return PluggableNATSService(*args, **kwargs)
+    from cliffracer import ServiceOrchestrator
 
-FullyModularService = _deprecated_fullymodularservice
-
-def _deprecated_authenticatedservice(*args, **kwargs):
-    warnings.warn(
-        "AuthenticatedService is deprecated. Use SecureNATSService instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return SecureNATSService(*args, **kwargs)
-
-AuthenticatedService = _deprecated_authenticatedservice
-
-def _deprecated_natsmessagingclient(*args, **kwargs):
-    warnings.warn(
-        "NATSMessagingClient is deprecated. Use NATSClient instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return NATSClient(*args, **kwargs)
-
-NATSMessagingClient = _deprecated_natsmessagingclient
-
-def _deprecated_awsmessagingclient(*args, **kwargs):
-    warnings.warn(
-        "AWSMessagingClient is deprecated. Use AWSClient instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return AWSClient(*args, **kwargs)
-
-AWSMessagingClient = _deprecated_awsmessagingclient
-
-def _deprecated_abstractmessagingclient(*args, **kwargs):
-    warnings.warn(
-        "AbstractMessagingClient is deprecated. Use MessageClient instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return MessageClient(*args, **kwargs)
-
-AbstractMessagingClient = _deprecated_abstractmessagingclient
-
-def _deprecated_abstractmessagebroker(*args, **kwargs):
-    warnings.warn(
-        "AbstractMessageBroker is deprecated. Use MessageBroker instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return MessageBroker(*args, **kwargs)
-
-AbstractMessageBroker = _deprecated_abstractmessagebroker
-
-def _deprecated_messagingfactory(*args, **kwargs):
-    warnings.warn(
-        "MessagingFactory is deprecated. Use MessageClientFactory instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return MessageClientFactory(*args, **kwargs)
-
-MessagingFactory = _deprecated_messagingfactory
-
-def _deprecated_metricsexporterservice(*args, **kwargs):
-    warnings.warn(
-        "MetricsExporterService is deprecated. Use ZabbixMetricsService instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return ZabbixMetricsService(*args, **kwargs)
-
-MetricsExporterService = _deprecated_metricsexporterservice
-
-def _deprecated_abstractmonitoringclient(*args, **kwargs):
-    warnings.warn(
-        "AbstractMonitoringClient is deprecated. Use MonitoringClient instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return MonitoringClient(*args, **kwargs)
-
-AbstractMonitoringClient = _deprecated_abstractmonitoringclient
-
-def _deprecated_cloudwatchmonitoringclient(*args, **kwargs):
-    warnings.warn(
-        "CloudWatchMonitoringClient is deprecated. Use CloudWatchClient instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return CloudWatchClient(*args, **kwargs)
-
-CloudWatchMonitoringClient = _deprecated_cloudwatchmonitoringclient
-
-def _deprecated_zabbixsender(*args, **kwargs):
-    warnings.warn(
-        "ZabbixSender is deprecated. Use ZabbixExporter instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return ZabbixExporter(*args, **kwargs)
-
-ZabbixSender = _deprecated_zabbixsender
-
-def _deprecated_metricscollector(*args, **kwargs):
-    warnings.warn(
-        "MetricsCollector is deprecated. Use SystemMetricsCollector instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return SystemMetricsCollector(*args, **kwargs)
-
-MetricsCollector = _deprecated_metricscollector
-
-def _deprecated_servicemeta(*args, **kwargs):
-    warnings.warn(
-        "ServiceMeta is deprecated. Use NATSServiceMeta instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return NATSServiceMeta(*args, **kwargs)
-
-ServiceMeta = _deprecated_servicemeta
-
-def _deprecated_extendedservicemeta(*args, **kwargs):
-    warnings.warn(
-        "ExtendedServiceMeta is deprecated. Use ValidatedServiceMeta instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return ValidatedServiceMeta(*args, **kwargs)
-
-ExtendedServiceMeta = _deprecated_extendedservicemeta
-
-def _deprecated_abstractservicerunner(*args, **kwargs):
-    warnings.warn(
-        "AbstractServiceRunner is deprecated. Use ServiceRunner instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return ServiceRunner(*args, **kwargs)
-
-AbstractServiceRunner = _deprecated_abstractservicerunner
-
-def _deprecated_lambdaservicerunner(*args, **kwargs):
-    warnings.warn(
-        "LambdaServiceRunner is deprecated. Use AWSLambdaRunner instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return AWSLambdaRunner(*args, **kwargs)
-
-LambdaServiceRunner = _deprecated_lambdaservicerunner
-
-def _deprecated_multiservicerunner(*args, **kwargs):
-    warnings.warn(
-        "MultiServiceRunner is deprecated. Use ServiceOrchestrator instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
     return ServiceOrchestrator(*args, **kwargs)
 
-MultiServiceRunner = _deprecated_multiservicerunner
+
+# Create aliases that work (redirect to new classes)
+NatsService = _deprecated_natsservice
+ExtendedService = _deprecated_extendedservice
+HTTPService = _deprecated_httpservice
+WebSocketService = _deprecated_websocketservice
+ServiceRunner = _deprecated_servicerunner
+
+# Create aliases for broken functionality
+ConfigurableNATSService = _create_deprecated_alias(
+    "ConfigurableNATSService", "cliffracer.NATSService"
+)
+PluggableNATSService = _create_deprecated_alias("PluggableNATSService", None)  # Not implemented
+SecureNATSService = _create_deprecated_alias("SecureNATSService", None)  # Not implemented
+
+# Metaclass aliases
+BaseNATSServiceMeta = _create_deprecated_alias("BaseNATSServiceMeta", None)
+ValidatedServiceMeta = _create_deprecated_alias("ValidatedServiceMeta", None)
+
+
+# Service orchestration aliases that work
+def _deprecated_serviceorchestrator(*args: Any, **kwargs: Any) -> Any:
+    warnings.warn(
+        "Importing ServiceOrchestrator from deprecation module is deprecated. "
+        "Import directly from cliffracer instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from cliffracer import ServiceOrchestrator
+
+    return ServiceOrchestrator(*args, **kwargs)
+
+
+ServiceOrchestrator = _deprecated_serviceorchestrator
+
+# Define what names are available for import
+deprecated_names: dict[str, str | None] = {
+    # Working replacements
+    "NatsService": "cliffracer.NATSService",
+    "ExtendedService": "cliffracer.ValidatedNATSService",
+    "HTTPService": "cliffracer.HTTPNATSService",
+    "WebSocketService": "cliffracer.WebSocketNATSService",
+    "ServiceRunner": "cliffracer.ServiceOrchestrator",
+    "ServiceOrchestrator": "cliffracer.ServiceOrchestrator",
+    # Non-working (broken/not implemented)
+    "NATSClient": None,
+    "MessageClient": None,
+    "AWSClient": None,
+    "MessageClientFactory": None,
+    "CloudWatchClient": None,
+    "MonitoringClient": None,
+    "ZabbixMetricsService": None,
+    "ConfigurableNATSService": None,
+    "PluggableNATSService": None,
+    "SecureNATSService": None,
+}
+
+
+def get_replacement(deprecated_name: str) -> str | None:
+    """Get the recommended replacement for a deprecated class name"""
+    return deprecated_names.get(deprecated_name)
+
+
+def list_deprecated() -> list[str]:
+    """List all deprecated class names"""
+    return list(deprecated_names.keys())
+
+
+def list_working_replacements() -> dict[str, str]:
+    """List deprecated names that have working replacements"""
+    return {name: replacement for name, replacement in deprecated_names.items() if replacement}
+
+
+def list_broken() -> list[str]:
+    """List deprecated names that have no working replacement"""
+    return [name for name, replacement in deprecated_names.items() if replacement is None]

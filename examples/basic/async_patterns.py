@@ -6,7 +6,7 @@ import asyncio
 import time
 from datetime import datetime
 
-from cliffracer import ServiceOrchestrator, NATSService, ServiceConfig, async_rpc, rpc
+from cliffracer import NATSService, ServiceConfig, ServiceOrchestrator, async_rpc, rpc
 from cliffracer.core.base_service import event_handler
 from cliffracer.logging import LoggingConfig
 
@@ -203,7 +203,7 @@ async def demonstrate_patterns():
 
     # Create a client service
     client_config = ServiceConfig(name="demo_client")
-    client = Service(client_config)
+    client = NATSService(client_config)
     await client.connect()
 
     try:

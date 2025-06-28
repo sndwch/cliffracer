@@ -6,7 +6,7 @@ import asyncio
 import random
 from datetime import datetime
 
-from cliffracer import ServiceOrchestrator, ServiceRunner, NATSService, ServiceConfig, rpc
+from cliffracer import NATSService, ServiceConfig, ServiceOrchestrator, ServiceRunner, rpc
 from cliffracer.core.base_service import event_handler
 from cliffracer.logging import LoggingConfig
 
@@ -140,7 +140,7 @@ async def test_services():
     """Test the services by making some calls"""
     # Create a test client service
     client_config = ServiceConfig(name="test_client")
-    client = Service(client_config)
+    client = NATSService(client_config)
 
     await client.connect()
 

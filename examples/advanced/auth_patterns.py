@@ -5,15 +5,13 @@ Examples demonstrating different RBAC patterns in the NATS framework
 import asyncio
 from datetime import datetime, timedelta
 
-from pydantic import BaseModel
-
 from auth_framework import (
-    SecureNATSService,
     AuthenticationError,
     AuthorizationError,
     Permission,
     RequestContext,
     Role,
+    SecureNATSService,
     TokenService,
     authenticated_rpc,
     get_current_context,
@@ -22,6 +20,7 @@ from auth_framework import (
     requires_auth,
 )
 from nats_service_extended import RPCRequest, RPCResponse, ServiceConfig, validated_rpc
+from pydantic import BaseModel
 
 
 # Request/Response models

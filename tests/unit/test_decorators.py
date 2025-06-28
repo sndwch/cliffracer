@@ -2,21 +2,19 @@
 Unit tests for service decorators
 """
 
-
 import pytest
 from pydantic import Field
 
 from cliffracer import (
-    rpc,
     BroadcastMessage,
     RPCRequest,
     RPCResponse,
     broadcast,
     listener,
+    rpc,
 )
 from cliffracer.core.base_service import event_handler
-    validated_rpc,
-)
+from cliffracer.core.extended_service import validated_rpc
 
 
 # Test models for validation tests

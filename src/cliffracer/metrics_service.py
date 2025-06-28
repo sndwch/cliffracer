@@ -12,7 +12,7 @@ from typing import Any
 
 import aiohttp
 
-from cliffracer import ValidatedNATSService, ServiceConfig, rpc
+from cliffracer import ServiceConfig, ValidatedNATSService, rpc
 
 
 @dataclass
@@ -318,7 +318,7 @@ class ZabbixMetricsService(ValidatedNATSService):
 if __name__ == "__main__":
     from cliffracer import ServiceRunner
     from cliffracer.logging import LoggingConfig
-    
+
     # Configure logging
     LoggingConfig.configure()
 

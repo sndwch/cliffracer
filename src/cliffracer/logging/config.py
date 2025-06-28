@@ -2,6 +2,7 @@
 Structured logging configuration using loguru
 """
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -255,5 +256,4 @@ def log_event_handling(logger_instance: ContextualLogger):
     return decorator
 
 
-# Import asyncio for checking coroutine functions
-import asyncio
+# asyncio is already imported at the top of the file

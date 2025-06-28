@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from cliffracer import ServiceConfig, ValidatedNATSService, LoggedExtendedService
+from cliffracer import LoggedExtendedService, ServiceConfig, ValidatedNATSService
 
 
 # Configure asyncio for pytest
@@ -73,25 +73,22 @@ async def test_service(test_config) -> AsyncGenerator[ValidatedNATSService]:
     """Create a test service instance"""
     service = ValidatedNATSService(test_config)
 
-    # Mock the NATS connection
+    # Mock the NATS connection completely
     service.nc = AsyncMock()
     service.nc.is_closed = False
     service._running = True
 
-    yield service
+    # Mock connection methods to prevent actual NATS calls
+    service.start = AsyncMock()
+    service.stop = AsyncMock()
+    service._connect = AsyncMock()
+    service._setup_subscriptions = AsyncMock()
 
-    # Cleanup
-    if hasattr(service, "stop"):
-        try:
-            await service.stop()
-        except:
-            pass
+    yield service
 
 
 @pytest_asyncio.fixture
-async def logged_test_service(
-    test_config, temp_log_dir
-) -> AsyncGenerator[LoggedExtendedService]:
+async def logged_test_service(test_config, temp_log_dir) -> AsyncGenerator[LoggedExtendedService]:
     """Create a logged test service instance"""
     # Set log directory for test
     os.environ["LOG_DIR"] = temp_log_dir
@@ -99,19 +96,18 @@ async def logged_test_service(
 
     service = LoggedExtendedService(test_config)
 
-    # Mock the NATS connection
+    # Mock the NATS connection completely
     service.nc = AsyncMock()
     service.nc.is_closed = False
     service._running = True
 
-    yield service
+    # Mock connection methods to prevent actual NATS calls
+    service.start = AsyncMock()
+    service.stop = AsyncMock()
+    service._connect = AsyncMock()
+    service._setup_subscriptions = AsyncMock()
 
-    # Cleanup
-    if hasattr(service, "stop"):
-        try:
-            await service.stop()
-        except:
-            pass
+    yield service
 
 
 @pytest.fixture

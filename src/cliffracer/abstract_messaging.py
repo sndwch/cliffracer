@@ -7,7 +7,7 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -292,9 +292,10 @@ def with_messaging_client(config_key: str = "messaging"):
             # Extract messaging config
             messaging_config = kwargs.pop(config_key, None)
             if messaging_config:
-                self.messaging_client = MessagingFactory.create_client(
-                    messaging_config.backend, **messaging_config.connection_params
-                )
+                # self.messaging_client = MessagingFactory.create_client(
+                #     messaging_config.backend, **messaging_config.connection_params
+                # )  # MessagingFactory not implemented yet
+                raise NotImplementedError("MessagingFactory is not yet implemented")
                 self.messaging_broker = messaging_config.backend
 
             original_init(self, *args, **kwargs)

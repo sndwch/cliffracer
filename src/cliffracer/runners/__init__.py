@@ -2,7 +2,7 @@
 Service runners and orchestration for Cliffracer
 """
 
-from .orchestrator import ServiceRunner, ServiceOrchestrator
+from .orchestrator import ServiceOrchestrator, ServiceRunner
 
 __all__ = [
     "ServiceRunner",

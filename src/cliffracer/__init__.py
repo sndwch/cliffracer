@@ -15,36 +15,36 @@ from cliffracer.core.base_service import (
     BaseNATSService,
     NATSService,
     NATSServiceMeta,
-    rpc,
     async_rpc,
+    rpc,
 )
-from cliffracer.core.service_config import ServiceConfig
 from cliffracer.core.extended_service import (
-    ValidatedNATSService,
+    BroadcastMessage,
     HTTPNATSService,
-    validated_rpc,
-    broadcast,
-    listener,
     Message,
     RPCRequest,
     RPCResponse,
-    BroadcastMessage,
+    ValidatedNATSService,
+    broadcast,
+    listener,
+    validated_rpc,
 )
-
-# Logging exports
-from cliffracer.logging import LoggingConfig, get_service_logger
-from cliffracer.logging import LoggedExtendedService
-
-# Runner exports
-from cliffracer.runners.orchestrator import ServiceRunner, ServiceOrchestrator
+from cliffracer.core.service_config import ServiceConfig
 
 # Debug exports
-from cliffracer.debug import BackdoorServer, BackdoorClient
+from cliffracer.debug import BackdoorClient, BackdoorServer
 
-# Auth exports (optional)
+# Logging exports
+from cliffracer.logging import LoggedExtendedService, LoggingConfig, get_service_logger
+
+# Runner exports
+from cliffracer.runners.orchestrator import ServiceOrchestrator, ServiceRunner
+
+# Auth exports (optional) - Currently disabled until auth module is complete
 try:
-    from cliffracer.auth.framework import AuthenticatedService, require_auth
-    from cliffracer.auth.middleware import AuthMiddleware
+    # from cliffracer.auth.framework import AuthenticatedService, require_auth
+    # from cliffracer.auth.middleware import AuthMiddleware
+
     _auth_available = True
 except ImportError:
     _auth_available = False
@@ -52,39 +52,32 @@ except ImportError:
 __all__ = [
     # Version
     "__version__",
-    
     # Core classes
     "BaseNATSService",
-    "NATSService", 
+    "NATSService",
     "NATSServiceMeta",
     "ServiceConfig",
-    
     # Extended classes
     "ValidatedNATSService",
     "HTTPNATSService",
     "LoggedExtendedService",
-    
     # Decorators
     "rpc",
     "async_rpc",
     "validated_rpc",
     "broadcast",
     "listener",
-    
     # Message types
     "Message",
-    "RPCRequest", 
+    "RPCRequest",
     "RPCResponse",
     "BroadcastMessage",
-    
     # Runners
     "ServiceRunner",
     "ServiceOrchestrator",
-    
     # Debug
     "BackdoorServer",
     "BackdoorClient",
-    
     # Utils
     "LoggingConfig",
     "get_service_logger",
@@ -92,8 +85,10 @@ __all__ = [
 
 # Add auth exports if available
 if _auth_available:
-    __all__.extend([
-        "AuthenticatedService",
-        "require_auth", 
-        "AuthMiddleware",
-    ])
+    __all__.extend(
+        [
+            "AuthenticatedService",
+            "require_auth",
+            "AuthMiddleware",
+        ]
+    )

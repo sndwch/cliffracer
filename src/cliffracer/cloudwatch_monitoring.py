@@ -11,15 +11,14 @@ from typing import Any
 import boto3
 
 from .abstract_monitoring import (
-    MonitoringClient,
     AbstractMonitoringCollector,
     Alert,
     Dashboard,
     Metric,
     MetricType,
     MetricUnit,
+    MonitoringClient,
     MonitoringConfig,
-    MonitoringFactory,
 )
 
 
@@ -533,5 +532,5 @@ class LocalStackCloudWatchClient(CloudWatchClient):
 
 
 # Register CloudWatch clients
-MonitoringFactory.register_client("cloudwatch", CloudWatchMonitoringClient)
-MonitoringFactory.register_client("localstack", LocalStackCloudWatchClient)
+# MonitoringFactory.register_client("cloudwatch", CloudWatchMonitoringClient)  # Not implemented yet
+# MonitoringFactory.register_client("localstack", LocalStackCloudWatchClient)  # Not implemented yet

@@ -8,12 +8,12 @@ import pytest
 from pydantic import Field
 
 from cliffracer import (
-    ServiceRunner,
-    ServiceConfig,
     BroadcastMessage,
-    ValidatedNATSService,
     RPCRequest,
     RPCResponse,
+    ServiceConfig,
+    ServiceRunner,
+    ValidatedNATSService,
     broadcast,
     listener,
     validated_rpc,
@@ -281,7 +281,7 @@ class TestIntegrationServices:
 
             # Verify all orders were created
             assert len(orders) == 3
-            for i, order in enumerate(orders):
+            for _i, order in enumerate(orders):
                 assert order["status"] == "created"
                 assert order["order_id"] in order_service.orders
 

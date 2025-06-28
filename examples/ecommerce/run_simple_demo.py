@@ -16,13 +16,14 @@ Or use an existing NATS server.
 import asyncio
 import logging
 import sys
+
 from example_ecommerce_live import main as run_ecommerce
 
 # Configure simpler logging for demo
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
 )
 
 print("🚀 Cliffracer NATS Framework - Simplified Demo")
