@@ -1,303 +1,87 @@
 # Examples Directory
 
-This directory contains comprehensive examples demonstrating all features of Cliffracer. Each example includes complete code, documentation, and usage instructions.
+**⚠️ IMPORTANT: Read [../IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md) first to understand what examples actually work.**
 
-## Quick Start Examples
+This directory contains examples of working Cliffracer functionality. We've focused on examples that demonstrate the solid, production-ready core features.
 
-### [Basic Services](basic-services.md)
-**File**: `../example_services.py`
+## ✅ Working Examples
 
-Demonstrates core framework features with a simple e-commerce scenario:
-- Order processing service
-- Inventory management
-- Notification system
-- Event-driven communication
-- Service orchestration
-
-**Perfect for**: First-time users learning the framework basics
-
-### [E-commerce System](ecommerce-system.md) 
-**File**: `../example_extended_services.py`
-
-Comprehensive user management system showcasing advanced features:
-- HTTP/REST APIs with FastAPI
+### [E-commerce System](ecommerce/)
+**Complete working system** demonstrating:
+- NATS-based microservices communication
+- HTTP/REST APIs with FastAPI integration
+- Service orchestration and lifecycle management
 - Schema validation with Pydantic
-- WebSocket real-time communication
-- Broadcast/listener patterns
-- Multi-protocol services
+- Structured logging
+- Load testing framework
 
-**Perfect for**: Understanding production-ready service architecture
+**Status**: ✅ Fully functional and tested
+**Use case**: Production-ready microservices architecture
 
-## Advanced Examples
+### [Load Testing](../load-testing/)
+**Performance validation framework** with:
+- Sub-millisecond latency validation
+- Throughput testing
+- Service reliability testing
+- Comprehensive metrics collection
 
-### [Authentication & RBAC](auth-patterns.md)
-**File**: `../example_auth_patterns.py`
+**Status**: ✅ Fully functional
+**Use case**: Validating service performance
 
-Complete authentication and authorization system:
-- JWT token authentication
-- Role-based access control (RBAC)
-- Multiple authentication patterns
-- HTTP middleware integration
-- Context propagation
-- Permission decorators
+## ❌ Broken Examples (Avoid)
 
-**Perfect for**: Adding security to your services
+### [Auth Patterns](auth-patterns.md)
+**Status**: ❌ Broken - Authentication system has import errors
+**Issue**: `@require_auth` decorators don't work, auth framework disabled
 
-### [Async Communication Patterns](async-patterns.md)
-**File**: `../example_async_patterns.py`
+### [Backend Migration](backend-migration.md) 
+**Status**: ❌ Broken - Backend switching not implemented
+**Issue**: `MessagingFactory` has `NotImplementedError`
 
-Different asynchronous communication patterns:
-- Synchronous RPC (request-response)
-- Asynchronous RPC (fire-and-forget)
-- Event-driven architecture
-- Performance comparisons
-- Error handling strategies
-- Batch processing
+### [Monitoring Setup](monitoring-setup.md)
+**Status**: ❌ Misleading - Only basic file export works
+**Issue**: Claims about Zabbix/Prometheus integration are false
 
-**Perfect for**: Optimizing service communication patterns
+### [AWS Examples](aws/)
+**Status**: ⚠️ Partial - AWS client exists but not integrated
+**Issue**: Not connected to core framework functionality
 
-## Example Categories
+## 🚀 Getting Started
 
-### 🚀 **Getting Started**
-- [Basic Services](basic-services.md) - Start here for framework introduction
-- [E-commerce System](ecommerce-system.md) - Comprehensive example with HTTP APIs
+1. **Start with [E-commerce Example](ecommerce/)** - It's a complete working system
+2. **Read the [Load Testing Guide](../load-testing/)** to understand performance
+3. **Focus on NATS core features** which are production-ready
+4. **Avoid broken examples** until they're fixed
 
-### 🔒 **Security & Authentication**
-- [Authentication Patterns](auth-patterns.md) - JWT, RBAC, and security middleware
-- Session Management (coming soon)
-- OAuth Integration (coming soon)
+## 📂 Directory Structure
 
-### ⚡ **Performance & Patterns**
-- [Async Patterns](async-patterns.md) - Sync vs async communication
-- Circuit Breakers (coming soon)
-- Load Balancing (coming soon)
-
-### 🔧 **Production Features**
-- [Monitoring Setup](monitoring-setup.md) - Zabbix integration (coming soon)
-- Database Integration (coming soon)
-- Error Handling (coming soon)
-
-### 🧪 **Testing**
-- Unit Testing (see `../tests/unit/`)
-- Integration Testing (see `../tests/integration/`)
-- Load Testing (coming soon)
-
-## How to Use These Examples
-
-### 1. Prerequisites
-
-Ensure you have the framework installed and NATS running:
-
-```bash
-# Install dependencies
-pip install -r requirements-monitoring.txt
-
-# Start NATS server
-docker run -d --name nats-server \
-  -p 4222:4222 -p 8222:8222 \
-  nats:alpine -js -m 8222
+```
+examples/
+├── ecommerce/          # ✅ Complete working e-commerce system
+├── aws/               # ⚠️ Partial - AWS client only, not integrated
+├── auth-patterns.md   # ❌ Broken - Auth system disabled
+├── backend-migration.md # ❌ Broken - Not implemented
+└── monitoring-setup.md  # ❌ Misleading - False integration claims
 ```
 
-### 2. Run an Example
+## 🛠️ What You Can Build Today
 
-```bash
-# Basic services example
-python example_services.py
+Based on the working examples:
 
-# Extended services with HTTP APIs
-python example_extended_services.py
+- **High-performance NATS microservices** with RPC communication
+- **HTTP APIs** backed by NATS messaging
+- **WebSocket services** for real-time communication  
+- **Service orchestration** with multiple coordinated services
+- **Event-driven architectures** using NATS pub/sub
+- **Load testing frameworks** for performance validation
 
-# Authentication patterns
-python example_auth_patterns.py
+## 🚫 What to Avoid Until Fixed
 
-# Async communication patterns
-python example_async_patterns.py
-```
+- Authentication and authorization systems
+- Multi-backend messaging (AWS, etc.)
+- Production monitoring integrations
+- Complex broadcast patterns (some are broken)
 
-### 3. Test the Examples
+---
 
-Most examples include built-in test clients:
-
-```bash
-# Run test client for basic services
-python example_services.py test
-
-# Run test client for extended services
-python example_extended_services.py test
-
-# Run authentication demo
-python example_auth_patterns.py
-
-# Run async patterns demo
-python example_async_patterns.py
-```
-
-### 4. Explore HTTP APIs
-
-For examples with HTTP services, check the interactive documentation:
-
-- **User Service**: http://localhost:8001/docs
-- **Notification Service**: http://localhost:8002/docs
-
-## Example Code Organization
-
-Each example follows a consistent structure:
-
-```python
-# 1. Message schemas (Pydantic models)
-class CreateUserRequest(RPCRequest):
-    username: str
-    email: str
-
-# 2. Service classes
-class UserService(HTTPService):
-    @validated_rpc(CreateUserRequest, UserResponse)
-    async def create_user(self, request: CreateUserRequest):
-        # Service logic
-        pass
-
-# 3. Event handlers
-@listener(UserCreatedEvent)
-async def on_user_created(self, event: UserCreatedEvent):
-    # Event handling logic
-    pass
-
-# 4. Test/demo functions
-async def test_services():
-    # Example usage and testing
-    pass
-
-# 5. Main execution
-if __name__ == "__main__":
-    # Service runner setup
-    pass
-```
-
-## Learning Path
-
-Recommended order for exploring the examples:
-
-1. **[Basic Services](basic-services.md)** - Learn core concepts
-2. **[E-commerce System](ecommerce-system.md)** - Understand HTTP integration
-3. **[Async Patterns](async-patterns.md)** - Master communication patterns
-4. **[Authentication](auth-patterns.md)** - Add security features
-5. **Production Examples** - Deploy and monitor services
-
-## Common Patterns Demonstrated
-
-### Service Definition
-
-```python
-class MyService(HTTPService):
-    def __init__(self):
-        config = ServiceConfig(name="my_service")
-        super().__init__(config, port=8001)
-    
-    @validated_rpc(RequestModel, ResponseModel)
-    async def my_method(self, request: RequestModel) -> ResponseModel:
-        # Implementation
-        pass
-```
-
-### Event Broadcasting
-
-```python
-@broadcast(EventModel)
-async def broadcast_event(self, data: str) -> EventModel:
-    return EventModel(data=data, timestamp=datetime.utcnow())
-```
-
-### Event Listening
-
-```python
-@listener(EventModel)
-async def handle_event(self, event: EventModel):
-    print(f"Received event: {event.data}")
-```
-
-### HTTP Integration
-
-```python
-@self.post("/api/endpoint")
-async def http_endpoint(request: RequestModel):
-    return await self.rpc_method(request)
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **NATS Connection Failed**
-   ```bash
-   # Check NATS is running
-   docker ps | grep nats
-   curl http://localhost:8222/varz
-   ```
-
-2. **Import Errors**
-   ```bash
-   # Verify installation
-   python -c "from cliffracer import NATSService as Service; print('✅ Framework ready')"
-   ```
-
-3. **Port Already in Use**
-   ```bash
-   # Find and kill process using port
-   lsof -ti:8001 | xargs kill
-   ```
-
-4. **Schema Validation Errors**
-   - Check Pydantic model definitions
-   - Ensure request data matches schema
-   - Verify field types and constraints
-
-### Debug Mode
-
-Enable debug logging for troubleshooting:
-
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
-
-## Contributing Examples
-
-We welcome contributions of new examples! Please:
-
-1. Follow the existing code structure
-2. Include comprehensive documentation
-3. Add test/demo functions
-4. Update this README with your example
-5. Submit a pull request
-
-### Example Template
-
-```python
-"""
-Example: [Your Example Name]
-Demonstrates: [Key features demonstrated]
-"""
-
-# Your example code here...
-
-if __name__ == "__main__":
-    # Demo/test code
-    pass
-```
-
-## Additional Resources
-
-- **[Framework Documentation](../docs/)** - Complete API reference
-- **[Production Deployment](../docs/deployment/)** - Production best practices
-- **[Monitoring Guide](../docs/monitoring/)** - Observability and metrics
-- **[Testing Guide](../docs/testing/)** - Testing strategies
-- **[NATS Documentation](https://docs.nats.io/)** - NATS server documentation
-
-## Support
-
-If you have questions about any example:
-
-- 📖 Check the [main documentation](../docs/)
-- 🐛 Report issues in [GitHub Issues](https://github.com/sndwch/cliffracer/issues)
-- 💬 Ask questions in [GitHub Discussions](https://github.com/sndwch/cliffracer/discussions)
-- 📧 Email support@your-domain.com
+**Focus on the working examples to build solid microservices on the proven NATS foundation.**
