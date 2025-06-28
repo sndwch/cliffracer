@@ -16,7 +16,9 @@ class ClientGenerator:
     def __init__(self, nats_client: nats.NATS):
         self.nc = nats_client
 
-    async def discover_service(self, service_name: str, timeout: float = 5.0) -> dict[str, Any] | None:
+    async def discover_service(
+        self, service_name: str, timeout: float = 5.0
+    ) -> dict[str, Any] | None:
         """Discover service info by calling get_service_info"""
         try:
             subject = f"{service_name}.rpc.get_service_info"
@@ -150,7 +152,9 @@ async def main():
 
         if success:
             print("\n🎉 Client generated successfully!")
-            print(f"   Import with: from {output_file.replace('.py', '')} import {generator._to_class_name(service_name)}Client")
+            print(
+                f"   Import with: from {output_file.replace('.py', '')} import {generator._to_class_name(service_name)}Client"
+            )
         else:
             sys.exit(1)
 
@@ -161,4 +165,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())

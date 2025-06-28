@@ -48,7 +48,7 @@ async def main():
 
         if success:
             class_name = generator._to_class_name(service_name)
-            module_name = output_file.replace('.py', '').replace('/', '.')
+            module_name = output_file.replace(".py", "").replace("/", ".")
 
             print()
             print("🎉 Client generated successfully!")

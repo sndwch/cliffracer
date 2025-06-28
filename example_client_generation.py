@@ -30,11 +30,7 @@ class ExampleService(NATSService):
     @rpc
     async def create_user(self, username: str, email: str) -> dict:
         """Create a new user"""
-        return {
-            "user_id": f"user_{username}",
-            "username": username,
-            "status": "created"
-        }
+        return {"user_id": f"user_{username}", "username": username, "status": "created"}
 
     @rpc
     async def get_user(self, user_id: str) -> dict:
@@ -43,7 +39,7 @@ class ExampleService(NATSService):
             "user_id": user_id,
             "username": f"user_for_{user_id}",
             "email": f"{user_id}@example.com",
-            "status": "active"
+            "status": "active",
         }
 
     @rpc
@@ -51,10 +47,9 @@ class ExampleService(NATSService):
         """List users with pagination"""
         return {
             "users": [
-                {"user_id": f"user_{i}", "username": f"user{i}"}
-                for i in range(1, limit + 1)
+                {"user_id": f"user_{i}", "username": f"user{i}"} for i in range(1, limit + 1)
             ],
-            "total": limit
+            "total": limit,
         }
 
 

@@ -232,8 +232,8 @@ class BaseNATSService:
             "event_patterns": list(self._event_handlers.keys()),
             "subjects": {
                 "rpc": f"{self.config.name}.rpc.*",
-                "events": f"{self.config.name}.events.*"
-            }
+                "events": f"{self.config.name}.events.*",
+            },
         }
 
     async def call_rpc(self, service: str, method: str, **kwargs) -> Any:
