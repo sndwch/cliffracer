@@ -122,8 +122,8 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/your-username
+      link: https://github.com/sndwch
     - icon: fontawesome/brands/docker
-      link: https://hub.docker.com/your-username
+      link: https://hub.docker.com/sndwch
   version:
     provider: mike

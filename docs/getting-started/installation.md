@@ -13,18 +13,14 @@ This guide will help you install and set up Cliffracer.
 
 ### Development Environment
 
-We recommend using `pyenv` for Python version management:
+We recommend using `uv` for Python version management and dependency installation:
 
 ```bash
-# Install pyenv (if not already installed)
-curl https://pyenv.run | bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install Python 3.11
-pyenv install 3.11.9
-
-# Create virtual environment
-pyenv virtualenv 3.11.9 cliffracer
-pyenv activate cliffracer
+# The project includes a .python-version file specifying Python 3.13.2
+# uv will automatically use this version
 ```
 
 ## Installation Methods
@@ -34,18 +30,20 @@ pyenv activate cliffracer
 #### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/cliffracer.git
+git clone https://github.com/sndwch/cliffracer.git
 cd cliffracer
 ```
 
 #### 2. Install Dependencies
 
 ```bash
-# Core dependencies
-pip install -r requirements-monitoring.txt
+# Install all dependencies with uv (includes virtual environment creation)
+uv sync --extra dev --extra monitoring
 
-# Or install specific components
-pip install nats-py pydantic fastapi loguru
+# Alternative: Install different dependency groups
+uv sync --extra extended          # Basic HTTP/WebSocket support
+uv sync --extra aws              # AWS messaging backend
+uv sync --extra all              # All features
 ```
 
 #### 3. Set Up NATS Server
@@ -88,7 +86,7 @@ print('✅ Installation successful!')
 #### 1. Clone and Configure
 
 ```bash
-git clone https://github.com/your-username/cliffracer.git
+git clone https://github.com/sndwch/cliffracer.git
 cd cliffracer
 
 # Create environment file
@@ -123,7 +121,7 @@ mkdir -p /opt/cliffracer
 cd /opt/cliffracer
 
 # Clone repository
-git clone https://github.com/your-username/cliffracer.git .
+git clone https://github.com/sndwch/cliffracer.git .
 
 # Set up environment
 cp .env.production .env
@@ -186,18 +184,12 @@ JWT_SECRET=your-jwt-secret-here
 
 ### Auto-Activation Setup
 
-For automatic environment activation when entering the project directory:
+The project includes a `.python-version` file that uv automatically uses. No additional setup is required.
 
 ```bash
-# Create .python-version file
-echo "cliffracer" > .python-version
-
-# Add to your shell configuration
-echo 'eval "$(pyenv init -)"' >> ~/.zshrc
-echo 'eval "$(pyenv virtualenv-init -)"' >> ~/.zshrc
-
-# Reload shell
-source ~/.zshrc
+# uv automatically detects and uses the Python version specified in .python-version
+# Just run any uv command and it will use the correct Python version
+uv run python --version  # Should show Python 3.13.2
 ```
 
 ## Verification
@@ -325,5 +317,5 @@ docker stats
 
 - **Documentation**: Check the [troubleshooting section](../deployment/production.md#troubleshooting)
 - **Logs**: Enable debug logging with `LOG_LEVEL=DEBUG`
-- **Community**: Ask questions in [GitHub Discussions](https://github.com/your-username/cliffracer/discussions)
-- **Issues**: Report bugs in [GitHub Issues](https://github.com/your-username/cliffracer/issues)
+- **Community**: Ask questions in [GitHub Discussions](https://github.com/sndwch/cliffracer/discussions)
+- **Issues**: Report bugs in [GitHub Issues](https://github.com/sndwch/cliffracer/issues)

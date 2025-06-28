@@ -184,8 +184,8 @@ This framework provides:
 ## Community & Support
 
 - 📖 [Documentation](.)
-- 🐛 [Issue Tracker](https://github.com/your-username/cliffracer/issues)
-- 💬 [Discussions](https://github.com/your-username/cliffracer/discussions)
+- 🐛 [Issue Tracker](https://github.com/sndwch/cliffracer/issues)
+- 💬 [Discussions](https://github.com/sndwch/cliffracer/discussions)
 - 📧 [Mailing List](mailto:support@your-domain.com)
 
 ## License
