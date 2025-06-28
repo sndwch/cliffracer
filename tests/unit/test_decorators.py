@@ -6,12 +6,12 @@ import pytest
 from pydantic import Field
 
 from cliffracer import (
-    rpc,
     BroadcastMessage,
     RPCRequest,
     RPCResponse,
     broadcast,
     listener,
+    rpc,
 )
 from cliffracer.core.base_service import event_handler, validated_rpc
 
