@@ -6,9 +6,9 @@ See IMPLEMENTATION_STATUS.md for details.
 """
 
 import warnings
-from typing import Any, Dict, List, Optional
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
 
 # This module is broken - the imports don't exist
 # Commenting out to prevent import errors
@@ -28,8 +28,8 @@ class Permission:
     """A permission that can be granted to users or roles"""
     name: str
     description: str = ""
-    resource: Optional[str] = None
-    action: Optional[str] = None
+    resource: str | None = None
+    action: str | None = None
 
 
 @dataclass
@@ -37,7 +37,7 @@ class Role:
     """A role that groups permissions"""
     name: str
     description: str = ""
-    permissions: List[Permission] = field(default_factory=list)
+    permissions: list[Permission] = field(default_factory=list)
 
 
 @dataclass
@@ -46,10 +46,10 @@ class User:
     user_id: str
     username: str
     email: str
-    roles: List[Role] = field(default_factory=list)
-    permissions: List[Permission] = field(default_factory=list)
+    roles: list[Role] = field(default_factory=list)
+    permissions: list[Permission] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)
-    last_login: Optional[datetime] = None
+    last_login: datetime | None = None
 
 
 @dataclass
@@ -58,16 +58,16 @@ class AuthToken:
     token: str
     user_id: str
     expires_at: datetime
-    scopes: List[str] = field(default_factory=list)
+    scopes: list[str] = field(default_factory=list)
 
 
 @dataclass
 class RequestContext:
     """Context information for an authenticated request"""
-    user: Optional[User] = None
-    token: Optional[AuthToken] = None
-    permissions: List[Permission] = field(default_factory=list)
-    roles: List[Role] = field(default_factory=list)
+    user: User | None = None
+    token: AuthToken | None = None
+    permissions: list[Permission] = field(default_factory=list)
+    roles: list[Role] = field(default_factory=list)
 
 
 class AuthenticationError(Exception):
@@ -82,34 +82,34 @@ class AuthorizationError(Exception):
 
 class TokenService:
     """Service for managing authentication tokens"""
-    
+
     def __init__(self, secret_key: str) -> None:
         self.secret_key = secret_key
-        self.users: Dict[str, User] = {}
-        self.tokens: Dict[str, AuthToken] = {}
-    
+        self.users: dict[str, User] = {}
+        self.tokens: dict[str, AuthToken] = {}
+
     def create_user(self, username: str, email: str, password: str) -> User:
         """Create a new user"""
         raise NotImplementedError("TokenService is not yet implemented")
-    
-    def authenticate(self, username: str, password: str) -> Optional[AuthToken]:
+
+    def authenticate(self, username: str, password: str) -> AuthToken | None:
         """Authenticate a user and return a token"""
         raise NotImplementedError("TokenService is not yet implemented")
-    
-    def validate_token(self, token: str) -> Optional[AuthToken]:
+
+    def validate_token(self, token: str) -> AuthToken | None:
         """Validate a token and return token info"""
         raise NotImplementedError("TokenService is not yet implemented")
-    
+
     def revoke_token(self, token: str) -> None:
         """Revoke a token"""
         raise NotImplementedError("TokenService is not yet implemented")
 
 
 # Context variable (placeholder)
-current_context: Optional[RequestContext] = None
+current_context: RequestContext | None = None
 
 
-def requires_auth(*permissions: Permission, roles: Optional[List[Role]] = None) -> Any:
+def requires_auth(*permissions: Permission, roles: list[Role] | None = None) -> Any:
     """Decorator to require authentication and authorization"""
     def decorator(func: Any) -> Any:
         warnings.warn(
@@ -131,7 +131,7 @@ def authenticated_rpc(func: Any) -> Any:
     return func
 
 
-def has_permission(permission: Permission, context: Optional[RequestContext] = None) -> bool:
+def has_permission(permission: Permission, context: RequestContext | None = None) -> bool:
     """Check if the current context has a specific permission"""
     warnings.warn(
         "has_permission is not functional. Auth system is broken.",
@@ -141,7 +141,7 @@ def has_permission(permission: Permission, context: Optional[RequestContext] = N
     return False
 
 
-def has_role(role: Role, context: Optional[RequestContext] = None) -> bool:
+def has_role(role: Role, context: RequestContext | None = None) -> bool:
     """Check if the current context has a specific role"""
     warnings.warn(
         "has_role is not functional. Auth system is broken.",
@@ -151,7 +151,7 @@ def has_role(role: Role, context: Optional[RequestContext] = None) -> bool:
     return False
 
 
-def require_auth(*permissions: Optional[List[Permission]], roles: Optional[List[Role]] = None) -> Any:
+def require_auth(*permissions: list[Permission] | None, roles: list[Role] | None = None) -> Any:
     """Decorator that requires specific permissions or roles"""
     def decorator(func: Any) -> Any:
         warnings.warn(
@@ -159,10 +159,10 @@ def require_auth(*permissions: Optional[List[Permission]], roles: Optional[List[
             UserWarning,
             stacklevel=2
         )
-        
+
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             return func(*args, **kwargs)
-        
+
         return wrapper
     return decorator
 
@@ -170,7 +170,7 @@ def require_auth(*permissions: Optional[List[Permission]], roles: Optional[List[
 # Placeholder class for backward compatibility
 class AuthenticatedService:
     """Placeholder for authenticated service class"""
-    
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         warnings.warn(
             "AuthenticatedService is not functional. Auth system is broken. "
@@ -180,7 +180,7 @@ class AuthenticatedService:
         )
 
 
-def get_current_user() -> Optional[User]:
+def get_current_user() -> User | None:
     """Get the current authenticated user"""
     warnings.warn(
         "get_current_user is not functional. Auth system is broken.",
@@ -206,3 +206,4 @@ def clear_current_context() -> None:
         UserWarning,
         stacklevel=2
     )
+

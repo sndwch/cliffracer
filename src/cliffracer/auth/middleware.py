@@ -2,6 +2,12 @@
 HTTP Authentication Middleware for FastAPI services
 """
 
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from cliffracer import HTTPNATSService, ServiceConfig
+
 from .framework import (
     AuthenticationError,
     Permission,
@@ -10,11 +16,6 @@ from .framework import (
     TokenService,
     current_context,
 )
-from fastapi import Depends, HTTPException, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from starlette.middleware.base import BaseHTTPMiddleware
-
-from cliffracer import HTTPNATSService, ServiceConfig
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

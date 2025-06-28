@@ -7,12 +7,12 @@ See IMPLEMENTATION_STATUS.md for what actually works.
 """
 
 import warnings
-from typing import Any, Dict, List, Optional, Type
+from typing import Any
 
 
 class _DeprecatedClass:
     """Placeholder for deprecated classes that no longer exist"""
-    
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         warnings.warn(
             f"{self.__class__.__name__} is deprecated and no longer functional. "
@@ -22,18 +22,18 @@ class _DeprecatedClass:
         )
 
 
-def _create_deprecated_alias(old_name: str, new_name: Optional[str] = None) -> Type[_DeprecatedClass]:
+def _create_deprecated_alias(old_name: str, new_name: str | None = None) -> type[_DeprecatedClass]:
     """Create a deprecated class alias that warns when used"""
-    
+
     class DeprecatedAlias(_DeprecatedClass):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             if new_name:
                 message = f"{old_name} is deprecated. Use {new_name} instead."
             else:
                 message = f"{old_name} is deprecated and no longer available."
-            
+
             warnings.warn(message, DeprecationWarning, stacklevel=2)
-    
+
     DeprecatedAlias.__name__ = old_name
     return DeprecatedAlias
 
@@ -52,8 +52,8 @@ ZabbixMetricsService = _create_deprecated_alias("ZabbixMetricsService", None)  #
 # Service aliases (working replacements available)
 def _deprecated_natsservice(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
-        "NatsService is deprecated. Use BaseNATSService instead.", 
-        DeprecationWarning, 
+        "NatsService is deprecated. Use BaseNATSService instead.",
+        DeprecationWarning,
         stacklevel=2
     )
     from cliffracer import NATSService
@@ -87,7 +87,7 @@ def _deprecated_websocketservice(*args: Any, **kwargs: Any) -> Any:
         stacklevel=2
     )
     # WebSocketNATSService not in main exports yet
-    warnings.warn("WebSocketNATSService not yet available in main exports", UserWarning)
+    warnings.warn("WebSocketNATSService not yet available in main exports", UserWarning, stacklevel=2)
     return None
 
 
@@ -132,15 +132,15 @@ def _deprecated_serviceorchestrator(*args: Any, **kwargs: Any) -> Any:
 ServiceOrchestrator = _deprecated_serviceorchestrator
 
 # Define what names are available for import
-deprecated_names: Dict[str, Optional[str]] = {
+deprecated_names: dict[str, str | None] = {
     # Working replacements
     "NatsService": "cliffracer.NATSService",
-    "ExtendedService": "cliffracer.ValidatedNATSService", 
+    "ExtendedService": "cliffracer.ValidatedNATSService",
     "HTTPService": "cliffracer.HTTPNATSService",
     "WebSocketService": "cliffracer.WebSocketNATSService",
     "ServiceRunner": "cliffracer.ServiceOrchestrator",
     "ServiceOrchestrator": "cliffracer.ServiceOrchestrator",
-    
+
     # Non-working (broken/not implemented)
     "NATSClient": None,
     "MessageClient": None,
@@ -155,21 +155,22 @@ deprecated_names: Dict[str, Optional[str]] = {
 }
 
 
-def get_replacement(deprecated_name: str) -> Optional[str]:
+def get_replacement(deprecated_name: str) -> str | None:
     """Get the recommended replacement for a deprecated class name"""
     return deprecated_names.get(deprecated_name)
 
 
-def list_deprecated() -> List[str]:
+def list_deprecated() -> list[str]:
     """List all deprecated class names"""
     return list(deprecated_names.keys())
 
 
-def list_working_replacements() -> Dict[str, str]:
+def list_working_replacements() -> dict[str, str]:
     """List deprecated names that have working replacements"""
     return {name: replacement for name, replacement in deprecated_names.items() if replacement}
 
 
-def list_broken() -> List[str]:
+def list_broken() -> list[str]:
     """List deprecated names that have no working replacement"""
     return [name for name, replacement in deprecated_names.items() if replacement is None]
+
