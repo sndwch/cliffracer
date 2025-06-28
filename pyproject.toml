@@ -2,8 +2,8 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src"]
+[tool.hatch.build]
+sources = ["src"]
 
 [project]
 name = "cliffracer"
@@ -86,7 +86,12 @@ Issues = "https://github.com/sndwch/cliffracer/issues"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "mypy>=1.16.1",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
+    "pytest-cov>=6.2.1",
+    "pytest-mock>=3.14.1",
     "ruff>=0.12.1",
 ]
 

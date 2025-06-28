@@ -13,7 +13,8 @@ from cliffracer import (
     listener,
     rpc,
 )
-from cliffracer.core.base_service import event_handler, validated_rpc
+from cliffracer.core.extended_service import validated_rpc
+from cliffracer.core.base_service import event_handler
 
 
 # Test models for validation tests

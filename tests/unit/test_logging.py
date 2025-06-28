@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from logging_config import ContextualLogger, LoggingConfig, get_service_logger
+from cliffracer.logging.config import ContextualLogger, LoggingConfig, get_service_logger
 
 
 class TestLoggingConfig:
@@ -117,7 +117,7 @@ class TestContextualLogger:
 
         assert chained_logger.context == expected_context
 
-    @patch("logging_config.logger")
+    @patch("cliffracer.logging.config.logger")
     def test_logging_methods(self, mock_logger):
         """Test that logging methods call loguru correctly"""
         logger = ContextualLogger("test_service", {"component": "test"})
@@ -184,21 +184,21 @@ class TestLoggingDecorators:
 
     def test_log_rpc_calls_decorator_import(self):
         """Test that log_rpc_calls decorator can be imported"""
-        from logging_config import log_rpc_calls
+        from cliffracer.logging.config import log_rpc_calls
 
         assert callable(log_rpc_calls)
 
     def test_log_event_handling_decorator_import(self):
         """Test that log_event_handling decorator can be imported"""
-        from logging_config import log_event_handling
+        from cliffracer.logging.config import log_event_handling
 
         assert callable(log_event_handling)
 
-    @patch("logging_config.logger")
+    @patch("cliffracer.logging.config.logger")
     @pytest.mark.asyncio
     async def test_log_rpc_calls_decorator_async(self, mock_logger, test_logger, mock_service):
         """Test log_rpc_calls decorator with async function"""
-        from logging_config import log_rpc_calls
+        from cliffracer.logging.config import log_rpc_calls
 
         @log_rpc_calls(test_logger)
         async def test_rpc_method(service, param1: str, param2: int):
@@ -210,11 +210,11 @@ class TestLoggingDecorators:
         # Check result
         assert result == {"result": "test_123"}
 
-    @patch("logging_config.logger")
+    @patch("cliffracer.logging.config.logger")
     @pytest.mark.asyncio
     async def test_log_event_handling_decorator_async(self, mock_logger, test_logger, mock_service):
         """Test log_event_handling decorator with async function"""
-        from logging_config import log_event_handling
+        from cliffracer.logging.config import log_event_handling
 
         @log_event_handling(test_logger)
         async def test_event_handler(service, subject: str, **kwargs):
@@ -226,11 +226,11 @@ class TestLoggingDecorators:
         # Check result
         assert result == "handled test.event"
 
-    @patch("logging_config.logger")
+    @patch("cliffracer.logging.config.logger")
     @pytest.mark.asyncio
     async def test_decorator_exception_handling(self, mock_logger, test_logger, mock_service):
         """Test that decorators handle exceptions properly"""
-        from logging_config import log_rpc_calls
+        from cliffracer.logging.config import log_rpc_calls
 
         @log_rpc_calls(test_logger)
         async def failing_rpc_method(service):
