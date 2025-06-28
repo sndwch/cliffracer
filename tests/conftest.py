@@ -73,19 +73,18 @@ async def test_service(test_config) -> AsyncGenerator[ValidatedNATSService]:
     """Create a test service instance"""
     service = ValidatedNATSService(test_config)
 
-    # Mock the NATS connection
+    # Mock the NATS connection completely
     service.nc = AsyncMock()
     service.nc.is_closed = False
     service._running = True
 
-    yield service
+    # Mock connection methods to prevent actual NATS calls
+    service.start = AsyncMock()
+    service.stop = AsyncMock()
+    service._connect = AsyncMock()
+    service._setup_subscriptions = AsyncMock()
 
-    # Cleanup
-    if hasattr(service, "stop"):
-        try:
-            await service.stop()
-        except Exception:
-            pass
+    yield service
 
 
 @pytest_asyncio.fixture
@@ -97,19 +96,18 @@ async def logged_test_service(test_config, temp_log_dir) -> AsyncGenerator[Logge
 
     service = LoggedExtendedService(test_config)
 
-    # Mock the NATS connection
+    # Mock the NATS connection completely
     service.nc = AsyncMock()
     service.nc.is_closed = False
     service._running = True
 
-    yield service
+    # Mock connection methods to prevent actual NATS calls
+    service.start = AsyncMock()
+    service.stop = AsyncMock()
+    service._connect = AsyncMock()
+    service._setup_subscriptions = AsyncMock()
 
-    # Cleanup
-    if hasattr(service, "stop"):
-        try:
-            await service.stop()
-        except Exception:
-            pass
+    yield service
 
 
 @pytest.fixture
