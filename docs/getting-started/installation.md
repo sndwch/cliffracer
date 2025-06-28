@@ -1,33 +1,29 @@
 # Installation
 
-This guide will help you install and set up Cliffracer.
+**⚠️ IMPORTANT: Read [../../IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md) first to understand what features are working.**
+
+This guide will help you install and set up the working parts of Cliffracer.
 
 ## Prerequisites
 
 ### System Requirements
 
-- **Python**: 3.11 or higher
-- **Docker**: 20.10+ (for containerized deployment)
-- **Docker Compose**: 2.0+ (for multi-service setup)
-- **NATS Server**: 2.9+ (can be run via Docker)
+- **Python**: 3.13+ (project uses Python 3.13.2)
+- **NATS Server**: 2.9+ (for the core messaging functionality that works)
+- **Docker** (optional, for running NATS server)
 
 ### Development Environment
 
-We recommend using `uv` for Python version management and dependency installation:
+This project uses `uv` for dependency management:
 
 ```bash
 # Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# The project includes a .python-version file specifying Python 3.13.2
-# uv will automatically use this version
 ```
 
-## Installation Methods
+## Installation
 
-### Method 1: Local Development
-
-#### 1. Clone the Repository
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/sndwch/cliffracer.git
