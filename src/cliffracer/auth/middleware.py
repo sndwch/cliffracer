@@ -2,7 +2,7 @@
 HTTP Authentication Middleware for FastAPI services
 """
 
-from auth_framework import (
+from .framework import (
     AuthenticationError,
     Permission,
     RequestContext,
