@@ -19,13 +19,14 @@ warnings.warn(
     "The auth module is currently broken and not functional. "
     "See IMPLEMENTATION_STATUS.md for alternatives.",
     UserWarning,
-    stacklevel=2
+    stacklevel=2,
 )
 
 
 @dataclass
 class Permission:
     """A permission that can be granted to users or roles"""
+
     name: str
     description: str = ""
     resource: str | None = None
@@ -35,6 +36,7 @@ class Permission:
 @dataclass
 class Role:
     """A role that groups permissions"""
+
     name: str
     description: str = ""
     permissions: list[Permission] = field(default_factory=list)
@@ -43,6 +45,7 @@ class Role:
 @dataclass
 class User:
     """A user in the authentication system"""
+
     user_id: str
     username: str
     email: str
@@ -55,6 +58,7 @@ class User:
 @dataclass
 class AuthToken:
     """An authentication token"""
+
     token: str
     user_id: str
     expires_at: datetime
@@ -64,6 +68,7 @@ class AuthToken:
 @dataclass
 class RequestContext:
     """Context information for an authenticated request"""
+
     user: User | None = None
     token: AuthToken | None = None
     permissions: list[Permission] = field(default_factory=list)
@@ -72,11 +77,13 @@ class RequestContext:
 
 class AuthenticationError(Exception):
     """Raised when authentication fails"""
+
     pass
 
 
 class AuthorizationError(Exception):
     """Raised when authorization fails"""
+
     pass
 
 
@@ -111,13 +118,15 @@ current_context: RequestContext | None = None
 
 def requires_auth(*permissions: Permission, roles: list[Role] | None = None) -> Any:
     """Decorator to require authentication and authorization"""
+
     def decorator(func: Any) -> Any:
         warnings.warn(
             "requires_auth decorator is not functional. Auth system is broken.",
             UserWarning,
-            stacklevel=2
+            stacklevel=2,
         )
         return func
+
     return decorator
 
 
@@ -126,7 +135,7 @@ def authenticated_rpc(func: Any) -> Any:
     warnings.warn(
         "authenticated_rpc decorator is not functional. Auth system is broken.",
         UserWarning,
-        stacklevel=2
+        stacklevel=2,
     )
     return func
 
@@ -134,36 +143,32 @@ def authenticated_rpc(func: Any) -> Any:
 def has_permission(permission: Permission, context: RequestContext | None = None) -> bool:
     """Check if the current context has a specific permission"""
     warnings.warn(
-        "has_permission is not functional. Auth system is broken.",
-        UserWarning,
-        stacklevel=2
+        "has_permission is not functional. Auth system is broken.", UserWarning, stacklevel=2
     )
     return False
 
 
 def has_role(role: Role, context: RequestContext | None = None) -> bool:
     """Check if the current context has a specific role"""
-    warnings.warn(
-        "has_role is not functional. Auth system is broken.",
-        UserWarning,
-        stacklevel=2
-    )
+    warnings.warn("has_role is not functional. Auth system is broken.", UserWarning, stacklevel=2)
     return False
 
 
 def require_auth(*permissions: list[Permission] | None, roles: list[Role] | None = None) -> Any:
     """Decorator that requires specific permissions or roles"""
+
     def decorator(func: Any) -> Any:
         warnings.warn(
             "require_auth decorator is not functional. Auth system is broken.",
             UserWarning,
-            stacklevel=2
+            stacklevel=2,
         )
 
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             return func(*args, **kwargs)
 
         return wrapper
+
     return decorator
 
 
@@ -176,16 +181,14 @@ class AuthenticatedService:
             "AuthenticatedService is not functional. Auth system is broken. "
             "Use regular NATSService with external auth instead.",
             UserWarning,
-            stacklevel=2
+            stacklevel=2,
         )
 
 
 def get_current_user() -> User | None:
     """Get the current authenticated user"""
     warnings.warn(
-        "get_current_user is not functional. Auth system is broken.",
-        UserWarning,
-        stacklevel=2
+        "get_current_user is not functional. Auth system is broken.", UserWarning, stacklevel=2
     )
     return None
 
@@ -193,17 +196,12 @@ def get_current_user() -> User | None:
 def set_current_context(context: RequestContext) -> None:
     """Set the current request context"""
     warnings.warn(
-        "set_current_context is not functional. Auth system is broken.",
-        UserWarning,
-        stacklevel=2
+        "set_current_context is not functional. Auth system is broken.", UserWarning, stacklevel=2
     )
 
 
 def clear_current_context() -> None:
     """Clear the current request context"""
     warnings.warn(
-        "clear_current_context is not functional. Auth system is broken.",
-        UserWarning,
-        stacklevel=2
+        "clear_current_context is not functional. Auth system is broken.", UserWarning, stacklevel=2
     )
-

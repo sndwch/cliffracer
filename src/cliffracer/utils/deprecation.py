@@ -18,7 +18,7 @@ class _DeprecatedClass:
             f"{self.__class__.__name__} is deprecated and no longer functional. "
             "See IMPLEMENTATION_STATUS.md for current alternatives.",
             DeprecationWarning,
-            stacklevel=2
+            stacklevel=2,
         )
 
 
@@ -49,14 +49,14 @@ CloudWatchClient = _create_deprecated_alias("CloudWatchClient", None)  # Not int
 MonitoringClient = _create_deprecated_alias("MonitoringClient", None)  # Not integrated
 ZabbixMetricsService = _create_deprecated_alias("ZabbixMetricsService", None)  # Not integrated
 
+
 # Service aliases (working replacements available)
 def _deprecated_natsservice(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
-        "NatsService is deprecated. Use BaseNATSService instead.",
-        DeprecationWarning,
-        stacklevel=2
+        "NatsService is deprecated. Use BaseNATSService instead.", DeprecationWarning, stacklevel=2
     )
     from cliffracer import NATSService
+
     return NATSService(*args, **kwargs)
 
 
@@ -64,19 +64,19 @@ def _deprecated_extendedservice(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
         "ExtendedService is deprecated. Use ValidatedNATSService instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
     from cliffracer import ValidatedNATSService
+
     return ValidatedNATSService(*args, **kwargs)
 
 
 def _deprecated_httpservice(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
-        "HTTPService is deprecated. Use HTTPNATSService instead.",
-        DeprecationWarning,
-        stacklevel=2
+        "HTTPService is deprecated. Use HTTPNATSService instead.", DeprecationWarning, stacklevel=2
     )
     from cliffracer import HTTPNATSService
+
     return HTTPNATSService(*args, **kwargs)
 
 
@@ -84,10 +84,12 @@ def _deprecated_websocketservice(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
         "WebSocketService is deprecated. Use WebSocketNATSService instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
     # WebSocketNATSService not in main exports yet
-    warnings.warn("WebSocketNATSService not yet available in main exports", UserWarning, stacklevel=2)
+    warnings.warn(
+        "WebSocketNATSService not yet available in main exports", UserWarning, stacklevel=2
+    )
     return None
 
 
@@ -95,9 +97,10 @@ def _deprecated_servicerunner(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
         "ServiceRunner is deprecated. Use ServiceOrchestrator instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
     from cliffracer import ServiceOrchestrator
+
     return ServiceOrchestrator(*args, **kwargs)
 
 
@@ -109,7 +112,9 @@ WebSocketService = _deprecated_websocketservice
 ServiceRunner = _deprecated_servicerunner
 
 # Create aliases for broken functionality
-ConfigurableNATSService = _create_deprecated_alias("ConfigurableNATSService", "cliffracer.NATSService")
+ConfigurableNATSService = _create_deprecated_alias(
+    "ConfigurableNATSService", "cliffracer.NATSService"
+)
 PluggableNATSService = _create_deprecated_alias("PluggableNATSService", None)  # Not implemented
 SecureNATSService = _create_deprecated_alias("SecureNATSService", None)  # Not implemented
 
@@ -117,15 +122,17 @@ SecureNATSService = _create_deprecated_alias("SecureNATSService", None)  # Not i
 BaseNATSServiceMeta = _create_deprecated_alias("BaseNATSServiceMeta", None)
 ValidatedServiceMeta = _create_deprecated_alias("ValidatedServiceMeta", None)
 
+
 # Service orchestration aliases that work
 def _deprecated_serviceorchestrator(*args: Any, **kwargs: Any) -> Any:
     warnings.warn(
         "Importing ServiceOrchestrator from deprecation module is deprecated. "
         "Import directly from cliffracer instead.",
         DeprecationWarning,
-        stacklevel=2
+        stacklevel=2,
     )
     from cliffracer import ServiceOrchestrator
+
     return ServiceOrchestrator(*args, **kwargs)
 
 
@@ -140,7 +147,6 @@ deprecated_names: dict[str, str | None] = {
     "WebSocketService": "cliffracer.WebSocketNATSService",
     "ServiceRunner": "cliffracer.ServiceOrchestrator",
     "ServiceOrchestrator": "cliffracer.ServiceOrchestrator",
-
     # Non-working (broken/not implemented)
     "NATSClient": None,
     "MessageClient": None,
@@ -173,4 +179,3 @@ def list_working_replacements() -> dict[str, str]:
 def list_broken() -> list[str]:
     """List deprecated names that have no working replacement"""
     return [name for name, replacement in deprecated_names.items() if replacement is None]
-
