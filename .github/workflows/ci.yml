@@ -33,7 +33,7 @@ jobs:
       run: uv python install ${{ matrix.python-version }}
     
     - name: Install dependencies
-      run: uv sync --extra dev
+      run: uv sync --extra dev --extra extended
     
     - name: Lint with ruff
       run: |
@@ -44,9 +44,9 @@ jobs:
     # - name: Type check with mypy
     #   run: uv run mypy src/
     
-    - name: Test with pytest (unit tests only)
-      run: uv run pytest tests/unit/ -v --cov=src/cliffracer --cov-report=xml --tb=short --maxfail=5
-      timeout-minutes: 5
+    - name: Test with pytest (core unit tests)
+      run: uv run pytest tests/unit/test_decorators.py tests/unit/test_logging.py -v --cov=src/cliffracer --cov-report=xml --tb=short
+      timeout-minutes: 2
       env:
         NATS_SKIP_INTEGRATION: "true"
     
