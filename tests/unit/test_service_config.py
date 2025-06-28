@@ -19,7 +19,7 @@ class TestServiceConfig:
         assert config.health_check_interval == 30
         assert config.health_check_timeout == 5
         assert config.version == "0.1.0"
-        assert config.backdoor_enabled is True
+        assert config.backdoor_enabled is False
         assert config.disable_backdoor is False
 
     def test_custom_config(self):
@@ -31,7 +31,7 @@ class TestServiceConfig:
             reconnect_time_wait=5,
             health_check_interval=60,
             version="1.0.0",
-            backdoor_enabled=False,
+            backdoor_enabled=True,
         )
 
         assert config.name == "custom_service"
@@ -40,7 +40,7 @@ class TestServiceConfig:
         assert config.reconnect_time_wait == 5
         assert config.health_check_interval == 60
         assert config.version == "1.0.0"
-        assert config.backdoor_enabled is False
+        assert config.backdoor_enabled is True
 
     def test_config_mutability(self):
         """Test that config can be modified after creation"""
