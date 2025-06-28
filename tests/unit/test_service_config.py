@@ -2,7 +2,6 @@
 Unit tests for ServiceConfig
 """
 
-
 from cliffracer import ServiceConfig
 
 
