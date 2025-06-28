@@ -2,10 +2,6 @@
 HTTP Authentication Middleware for FastAPI services
 """
 
-from fastapi import Depends, HTTPException, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from starlette.middleware.base import BaseHTTPMiddleware
-
 from auth_framework import (
     AuthenticationError,
     Permission,
@@ -14,6 +10,9 @@ from auth_framework import (
     TokenService,
     current_context,
 )
+from fastapi import Depends, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

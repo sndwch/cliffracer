@@ -6,7 +6,7 @@ import asyncio
 import time
 from datetime import datetime
 
-from cliffracer import ServiceOrchestrator, NATSService, ServiceConfig, async_rpc, rpc
+from cliffracer import NATSService, ServiceConfig, ServiceOrchestrator, async_rpc, rpc
 from cliffracer.core.base_service import event_handler
 from cliffracer.logging import LoggingConfig
 

@@ -2,7 +2,7 @@
 Authentication and authorization for Cliffracer services
 """
 
-from .framework import AuthenticatedService, require_auth, AuthToken
+from .framework import AuthenticatedService, AuthToken, require_auth
 from .middleware import AuthMiddleware
 
 __all__ = [

@@ -15,11 +15,10 @@ from datetime import datetime
 from fully_modular_service import (
     ConfigFactory,
     FullyModularConfig,
-    FullyModularService,
     event_handler,
     rpc,
 )
-from runners.lambda_runner import LambdaServiceOrchestrator, AWSLambdaRunner
+from runners.lambda_runner import AWSLambdaRunner, LambdaServiceOrchestrator
 
 
 class UserService(PluggableNATSService):

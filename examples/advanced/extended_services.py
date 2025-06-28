@@ -6,23 +6,19 @@ import asyncio
 import logging
 from datetime import datetime
 
-from pydantic import BaseModel, Field
-
 from nats_runner import ServiceOrchestrator, configure_logging
 from nats_service_extended import (
     BroadcastMessage,
-    ExtendedService,
-    HTTPService,
     RPCRequest,
     RPCResponse,
     ServiceConfig,
-    WebSocketService,
     broadcast,
     event_handler,
     listener,
     rpc,
     validated_rpc,
 )
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -303,7 +299,6 @@ class AnalyticsService(ValidatedNATSService):
 
 async def test_extended_services():
     """Test the extended services"""
-    from nats_service import NATSService
 
     # Create test client
     client_config = ServiceConfig(name="test_client")

@@ -8,12 +8,12 @@ import pytest
 from pydantic import Field
 
 from cliffracer import (
-    ServiceRunner,
-    ServiceConfig,
     BroadcastMessage,
-    ValidatedNATSService,
     RPCRequest,
     RPCResponse,
+    ServiceConfig,
+    ServiceRunner,
+    ValidatedNATSService,
     broadcast,
     listener,
     validated_rpc,

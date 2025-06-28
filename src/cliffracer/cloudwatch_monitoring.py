@@ -11,13 +11,13 @@ from typing import Any
 import boto3
 
 from .abstract_monitoring import (
-    MonitoringClient,
     AbstractMonitoringCollector,
     Alert,
     Dashboard,
     Metric,
     MetricType,
     MetricUnit,
+    MonitoringClient,
     MonitoringConfig,
     MonitoringFactory,
 )

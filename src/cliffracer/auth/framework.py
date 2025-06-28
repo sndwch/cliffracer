@@ -12,11 +12,10 @@ from functools import wraps
 from typing import Any, Optional
 
 import jwt
-
 from nats_service_extended import (
-    ValidatedNATSService,
     RPCRequest,
     ServiceConfig,
+    ValidatedNATSService,
 )
 
 # Global context variable for request context

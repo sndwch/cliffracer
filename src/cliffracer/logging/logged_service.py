@@ -4,13 +4,13 @@ Enhanced NATS services with structured logging using loguru
 
 import os
 
-from .config import LoggingConfig, get_service_logger
 from ..core.extended_service import (
-    ValidatedNATSService,
     HTTPNATSService,
     ServiceConfig,
+    ValidatedNATSService,
     WebSocketNATSService,
 )
+from .config import LoggingConfig, get_service_logger
 
 
 class LoggedExtendedService(ValidatedNATSService):

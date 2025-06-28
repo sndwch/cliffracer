@@ -9,9 +9,8 @@ import json
 import logging
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Any
 
 import nats
 from nats.errors import TimeoutError
@@ -33,7 +32,7 @@ class BaseNATSService:
         self._running = False
         self._rpc_handlers: dict[str, Callable] = {}
         self._event_handlers: dict[str, Callable] = {}
-        self._backdoor_server: Optional[Any] = None
+        self._backdoor_server: Any | None = None
 
     async def connect(self):
         """Connect to NATS server"""
@@ -52,7 +51,7 @@ class BaseNATSService:
             self.js = self.nc.jetstream()
 
         logger.info(f"Service '{self.config.name}' connected to NATS at {self.config.nats_url}")
-        
+
         # Start backdoor server if enabled
         await self._start_backdoor()
 
@@ -60,7 +59,7 @@ class BaseNATSService:
         """Disconnect from NATS server"""
         # Stop backdoor server
         await self._stop_backdoor()
-        
+
         if self.nc and not self.nc.is_closed:
             await self.nc.drain()
             await self.nc.close()
@@ -337,28 +336,27 @@ async def _start_backdoor(self):
     try:
         # Import here to avoid circular imports
         from ..debug.backdoor import BackdoorServer, is_backdoor_enabled
-        
+
         if not is_backdoor_enabled(self.config):
             logger.debug("Backdoor server disabled")
             return
-        
+
         if not self.config.backdoor_enabled or self.config.disable_backdoor:
             logger.debug("Backdoor server disabled in config")
             return
-            
+
         self._backdoor_server = BackdoorServer(
-            service_instance=self,
-            port=self.config.backdoor_port,
-            enabled=True
+            service_instance=self, port=self.config.backdoor_port, enabled=True
         )
-        
+
         port = self._backdoor_server.start()
         if port:
             logger.info(f"🔧 Backdoor server available on localhost:{port}")
-            
+
     except Exception as e:
         logger.warning(f"Failed to start backdoor server: {e}")
         self._backdoor_server = None
+
 
 async def _stop_backdoor(self):
     """Stop backdoor debugging server."""
@@ -369,6 +367,7 @@ async def _stop_backdoor(self):
             logger.debug("Backdoor server stopped")
         except Exception as e:
             logger.warning(f"Error stopping backdoor server: {e}")
+
 
 # Attach methods to BaseNATSService
 BaseNATSService._start_backdoor = _start_backdoor
@@ -413,4 +412,3 @@ class NATSService(BaseNATSService, metaclass=NATSServiceMeta):
         if hasattr(self.__class__, "_event_methods"):
             for pattern, method in self.__class__._event_methods.items():
                 self._event_handlers[pattern] = method
-

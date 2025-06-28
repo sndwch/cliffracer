@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from cliffracer import ServiceConfig, ValidatedNATSService, LoggedExtendedService
+from cliffracer import LoggedExtendedService, ServiceConfig, ValidatedNATSService
 
 
 # Configure asyncio for pytest
@@ -89,9 +89,7 @@ async def test_service(test_config) -> AsyncGenerator[ValidatedNATSService]:
 
 
 @pytest_asyncio.fixture
-async def logged_test_service(
-    test_config, temp_log_dir
-) -> AsyncGenerator[LoggedExtendedService]:
+async def logged_test_service(test_config, temp_log_dir) -> AsyncGenerator[LoggedExtendedService]:
     """Create a logged test service instance"""
     # Set log directory for test
     os.environ["LOG_DIR"] = temp_log_dir
