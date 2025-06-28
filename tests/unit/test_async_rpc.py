@@ -187,7 +187,7 @@ class TestAsyncRPC:
     @pytest.mark.asyncio
     async def test_service_startup_subscribes_to_async(self, service):
         """Test that service startup subscribes to async subjects"""
-        # Mock NATS connection
+        # Mock NATS connection completely
         service.nc = AsyncMock()
         service.nc.is_closed = False
 
@@ -195,8 +195,14 @@ class TestAsyncRPC:
         mock_subscription = AsyncMock()
         service.nc.subscribe = AsyncMock(return_value=mock_subscription)
 
-        # Start service
+        # Mock only the connect method to prevent actual NATS connection
+        service.connect = AsyncMock()
+
+        # Start service - this will test the subscription logic
         await service.start()
+
+        # Verify connection was attempted
+        service.connect.assert_called_once()
 
         # Verify subscriptions were created
         assert service.nc.subscribe.call_count >= 2  # At least RPC and async

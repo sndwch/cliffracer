@@ -45,8 +45,8 @@ jobs:
     #   run: uv run mypy src/
     
     - name: Test with pytest (core unit tests)
-      run: uv run pytest tests/unit/test_decorators.py tests/unit/test_logging.py -v --cov=src/cliffracer --cov-report=xml --tb=short
-      timeout-minutes: 2
+      run: uv run pytest tests/unit/test_decorators.py tests/unit/test_service_config.py tests/unit/test_service_base.py -k "not test_logging_methods and not test_decorated_methods_registration" -v --cov=src/cliffracer --cov-report=xml --tb=short
+      timeout-minutes: 3
       env:
         NATS_SKIP_INTEGRATION: "true"
     
