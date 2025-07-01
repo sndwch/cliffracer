@@ -1,0 +1,12 @@
+[project]
+name = "cliffracer-consumer-example"
+version = "0.1.0"
+description = "Example project consuming Cliffracer"
+requires-python = ">=3.11"
+
+dependencies = [
+    "cliffracer @ file:///Users/jparker/dev/microservices",
+]
+
+[project.optional-dependencies]
+web = ["cliffracer[extended]"]

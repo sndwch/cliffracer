@@ -8,7 +8,7 @@ A comprehensive, production-ready microservices framework that provides:
 - Event-driven architecture patterns
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 # Core exports - Consolidated Service Architecture
 from cliffracer.core.consolidated_service import (
@@ -98,6 +98,7 @@ from cliffracer.logging.correlation_logging import (
 
 # Database exports
 from cliffracer.database import DatabaseConnection, DatabaseModel, Repository, get_db_connection
+from cliffracer.database.secure_repository import SecureRepository
 
 # Debug exports
 from cliffracer.debug import BackdoorClient, BackdoorServer
@@ -198,6 +199,7 @@ __all__ = [
     "DatabaseConnection",
     "DatabaseModel", 
     "Repository",
+    "SecureRepository",
     "get_db_connection",
     
     # Performance
