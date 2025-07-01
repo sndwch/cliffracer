@@ -32,6 +32,8 @@ dependencies = [
     "pydantic>=2.0.0",
     # Structured logging
     "loguru>=0.7.0",
+    # Database support
+    "asyncpg>=0.29.0",
 ]
 
 [project.optional-dependencies]

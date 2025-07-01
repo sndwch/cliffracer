@@ -33,6 +33,7 @@ class BaseNATSService:
         self._rpc_handlers: dict[str, Callable] = {}
         self._event_handlers: dict[str, Callable] = {}
         self._backdoor_server: Any | None = None
+        self._timers: list[Any] = []  # Will be Timer instances
 
     async def connect(self):
         """Connect to NATS server"""
@@ -177,10 +178,42 @@ class BaseNATSService:
 
         return True
 
+    async def _discover_timers(self):
+        """Discover and register timer-decorated methods"""
+        for name in dir(self):
+            if name.startswith('_'):
+                continue
+                
+            method = getattr(self, name)
+            if hasattr(method, '_cliffracer_timers'):
+                for timer_instance in method._cliffracer_timers:
+                    self._timers.append(timer_instance)
+                    logger.debug(f"Discovered timer: {timer_instance.method_name}")
+
+    async def _start_timers(self):
+        """Start all discovered timers"""
+        for timer_instance in self._timers:
+            await timer_instance.start(self)
+
+    async def _stop_timers(self):
+        """Stop all running timers"""
+        for timer_instance in self._timers:
+            await timer_instance.stop()
+
+    def get_timer_stats(self) -> dict[str, Any]:
+        """Get statistics for all timers"""
+        return {
+            "timer_count": len(self._timers),
+            "timers": [timer.get_stats() for timer in self._timers]
+        }
+
     async def start(self):
         """Start the service and subscribe to subjects"""
         await self.connect()
         self._running = True
+
+        # Discover and register timers
+        await self._discover_timers()
 
         # Subscribe to RPC subjects (synchronous - expects response)
         rpc_subject = f"{self.config.name}.rpc.*"
@@ -197,8 +230,13 @@ class BaseNATSService:
             sub = await self.nc.subscribe(pattern, cb=self._handle_event)
             self._subscriptions.add(asyncio.create_task(self._subscription_handler(sub)))
 
+        # Start all timers
+        await self._start_timers()
+
+        timer_count = len(self._timers)
         logger.info(
-            f"Service '{self.config.name}' started with {len(self._rpc_handlers)} RPC handlers and {len(self._event_handlers)} event handlers"
+            f"Service '{self.config.name}' started with {len(self._rpc_handlers)} RPC handlers, "
+            f"{len(self._event_handlers)} event handlers, and {timer_count} timers"
         )
 
     async def _subscription_handler(self, sub):
@@ -212,6 +250,9 @@ class BaseNATSService:
     async def stop(self):
         """Stop the service"""
         self._running = False
+
+        # Stop all timers
+        await self._stop_timers()
 
         # Cancel all subscriptions
         for task in self._subscriptions:
@@ -230,6 +271,7 @@ class BaseNATSService:
             "version": self.config.version,
             "rpc_methods": list(self._rpc_handlers.keys()),
             "event_patterns": list(self._event_handlers.keys()),
+            "timer_methods": [timer.method_name for timer in self._timers],
             "subjects": {
                 "rpc": f"{self.config.name}.rpc.*",
                 "events": f"{self.config.name}.events.*",

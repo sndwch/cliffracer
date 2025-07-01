@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from cliffracer import LoggedExtendedService, ServiceConfig, ValidatedNATSService
+from cliffracer import ServiceConfig, ValidatedNATSService
 
 
 # Configure asyncio for pytest
@@ -88,13 +88,13 @@ async def test_service(test_config) -> AsyncGenerator[ValidatedNATSService]:
 
 
 @pytest_asyncio.fixture
-async def logged_test_service(test_config, temp_log_dir) -> AsyncGenerator[LoggedExtendedService]:
-    """Create a logged test service instance"""
+async def logged_test_service(test_config, temp_log_dir) -> AsyncGenerator[ValidatedNATSService]:
+    """Create a logged test service instance (using ValidatedNATSService with logging mixin)"""
     # Set log directory for test
     os.environ["LOG_DIR"] = temp_log_dir
     os.environ["LOG_LEVEL"] = "DEBUG"
 
-    service = LoggedExtendedService(test_config)
+    service = ValidatedNATSService(test_config)
 
     # Mock the NATS connection completely
     service.nc = AsyncMock()

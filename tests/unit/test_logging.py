@@ -118,34 +118,36 @@ class TestContextualLogger:
 
         assert chained_logger.context == expected_context
 
-    @patch("cliffracer.logging.config.logger")
-    def test_logging_methods(self, mock_logger):
-        """Test that logging methods call loguru correctly"""
-        logger = ContextualLogger("test_service", {"component": "test"})
+    def test_logging_methods(self):
+        """Test that logging methods work correctly"""
+        # Create a logger with test context
+        test_logger = ContextualLogger("test_service", {"component": "test"})
 
-        # Mock the bound logger
+        # Mock the internal _logger
+        mock_logger = MagicMock()
         mock_bound_logger = MagicMock()
         mock_logger.bind.return_value = mock_bound_logger
+        test_logger._logger = mock_logger
 
         # Test each logging method
-        logger.debug("Debug message", extra_field="value")
-        logger.info("Info message", extra_field="value")
-        logger.warning("Warning message", extra_field="value")
-        logger.error("Error message", extra_field="value")
-        logger.critical("Critical message", extra_field="value")
-        logger.exception("Exception message", extra_field="value")
+        test_logger.debug("Debug message", extra_field="value")
+        test_logger.info("Info message", extra_field="value")
+        test_logger.warning("Warning message", extra_field="value")
+        test_logger.error("Error message", extra_field="value")
+        test_logger.critical("Critical message", extra_field="value")
+        test_logger.exception("Exception message", extra_field="value")
 
-        # Verify logger.bind was called with context
-        mock_logger.bind.assert_called_with(component="test")
+        # Verify bind was called for each log method with extra fields
+        assert mock_logger.bind.call_count == 6  # One for each log method
+        mock_logger.bind.assert_called_with(extra_field="value")
 
         # Verify logging methods were called
-        mock_bound_logger.bind.assert_called()
-        mock_bound_logger.debug.assert_called()
-        mock_bound_logger.info.assert_called()
-        mock_bound_logger.warning.assert_called()
-        mock_bound_logger.error.assert_called()
-        mock_bound_logger.critical.assert_called()
-        mock_bound_logger.exception.assert_called()
+        mock_bound_logger.debug.assert_called_once_with("Debug message")
+        mock_bound_logger.info.assert_called_once_with("Info message")
+        mock_bound_logger.warning.assert_called_once_with("Warning message")
+        mock_bound_logger.error.assert_called_once_with("Error message")
+        mock_bound_logger.critical.assert_called_once_with("Critical message")
+        mock_bound_logger.exception.assert_called_once_with("Exception message")
 
 
 class TestServiceLoggerFactory:

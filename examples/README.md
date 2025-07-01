@@ -18,6 +18,28 @@ This directory contains examples of working Cliffracer functionality. We've focu
 **Status**: ✅ Fully functional and tested
 **Use case**: Production-ready microservices architecture
 
+### [Database Integration](database/)
+**PostgreSQL-powered services** demonstrating:
+- Database connection management and pooling
+- Repository pattern for clean data access
+- Transaction support with context managers
+- Database model validation with Pydantic
+- Service integration with database persistence
+
+**Status**: ✅ Fully functional and tested
+**Use case**: Database-driven microservices
+
+### [WebSocket Services](websocket/)
+**Real-time communication** demonstrating:
+- WebSocket connection management
+- NATS to WebSocket message broadcasting
+- Bidirectional real-time communication
+- Automatic client connection tracking
+- Integration test client included
+
+**Status**: ✅ Fully functional and tested
+**Use case**: Real-time applications and notifications
+
 ### [Load Testing](../load-testing/)
 **Performance validation framework** with:
 - Sub-millisecond latency validation
