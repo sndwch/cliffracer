@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "my-business-app"
+version = "0.1.0"
+description = "Example business application using Cliffracer"
+authors = [
+    {name = "Your Name", email = "you@example.com"},
+]
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    # Use the local Cliffracer package
+    "cliffracer @ file://../dist/cliffracer-1.0.0-py3-none-any.whl",
+    # Or for development with editable install:
+    # "cliffracer @ file:///..",
+]
+
+[project.optional-dependencies]
+web = ["cliffracer[extended]"]  # Include HTTP/WebSocket features
+dev = ["pytest>=7.0.0", "pytest-asyncio>=0.21.0"]

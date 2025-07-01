@@ -101,8 +101,8 @@ class DatabaseModel(BaseModel):
             if field_name in ["id", "created_at", "updated_at"]:
                 continue
             
-            # Get field type
-            field_type = field_info.type_
+            # Get field type (compatible with Pydantic v2)
+            field_type = getattr(field_info, 'annotation', getattr(field_info, 'type_', str))
             
             # Handle Optional types
             is_nullable = False

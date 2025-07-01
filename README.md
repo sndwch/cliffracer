@@ -56,7 +56,7 @@ A production-ready NATS-based microservices framework for Python with HTTP, WebS
 - NATS server with JetStream enabled
 - PostgreSQL (optional, for database features)
 
-### Quick Install
+### For Framework Development
 
 ```bash
 # Clone the repository
@@ -69,6 +69,23 @@ uv sync --extra dev
 # Or with pip
 pip install -e ".[dev]"
 ```
+
+### For Using Cliffracer in Your Project
+
+```bash
+# Option 1: Install built package (recommended)
+uv build  # Run this in the Cliffracer directory
+pip install /path/to/cliffracer/dist/cliffracer-1.0.0-py3-none-any.whl
+
+# Option 2: Development install (editable)
+pip install -e /path/to/cliffracer
+
+# Option 3: Add to your pyproject.toml
+# [project]
+# dependencies = ["cliffracer @ file:///path/to/cliffracer"]
+```
+
+📖 **See [INSTALL.md](INSTALL.md) for detailed installation guide for consuming projects.**
 
 ### Start Dependencies
 
@@ -88,13 +105,14 @@ docker-compose up postgres -d
 ### 1. Basic Service
 
 ```python
-from cliffracer import CliffracerService
+from cliffracer import CliffracerService, ServiceConfig
 
 # Create a simple service
-service = CliffracerService(
+config = ServiceConfig(
     name="user_service",
     nats_url="nats://localhost:4222"
 )
+service = CliffracerService(config)
 
 @service.rpc
 async def get_user(user_id: str) -> dict:
@@ -113,16 +131,17 @@ if __name__ == "__main__":
 ### 2. HTTP + NATS Service
 
 ```python
-from cliffracer import CliffracerService
+from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.mixins import HTTPMixin
 
 class UserService(CliffracerService, HTTPMixin):
     def __init__(self):
-        super().__init__(
+        config = ServiceConfig(
             name="user_service",
-            nats_url="nats://localhost:4222",
-            http_port=8080
+            nats_url="nats://localhost:4222"
         )
+        super().__init__(config)
+        self._http_port = 8080
 
     @self.rpc
     @self.http.get("/users/{user_id}")
@@ -136,13 +155,14 @@ service.run()
 ### 3. Database Integration
 
 ```python
-from cliffracer import CliffracerService
+from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.database import SecureRepository
 from cliffracer.database.models import User
 
 class UserService(CliffracerService):
     def __init__(self):
-        super().__init__(name="user_service")
+        config = ServiceConfig(name="user_service")
+        super().__init__(config)
         self.users = SecureRepository(User)
 
     @self.rpc
@@ -160,15 +180,14 @@ class UserService(CliffracerService):
 ### 4. WebSocket Real-time Updates
 
 ```python
-from cliffracer import CliffracerService
+from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.mixins import WebSocketMixin
 
 class NotificationService(CliffracerService, WebSocketMixin):
     def __init__(self):
-        super().__init__(
-            name="notification_service",
-            websocket_port=8081
-        )
+        config = ServiceConfig(name="notification_service")
+        super().__init__(config)
+        self._websocket_port = 8081
 
     @self.event("user.activity")
     async def broadcast_activity(self, activity_data: dict):
