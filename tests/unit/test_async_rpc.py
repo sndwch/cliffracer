@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cliffracer import BaseNATSService, ServiceConfig, async_rpc, rpc
+from cliffracer import NATSService, ServiceConfig, async_rpc, rpc
 
 
 class TestAsyncRPC:
     """Test async RPC calling patterns"""
 
-    class TestService(BaseNATSService):
+    class TestService(NATSService):
         def __init__(self, config):
             super().__init__(config)
             self.sync_calls = []
@@ -166,7 +166,7 @@ class TestAsyncRPC:
     async def test_handle_async_request_error(self, service, test_helper):
         """Test error handling in async requests"""
 
-        class ErrorService(BaseNATSService):
+        class ErrorService(NATSService):
             @async_rpc
             async def error_method(self, data: str):
                 raise ValueError("Test error")
@@ -224,7 +224,7 @@ class TestAsyncRPCIntegration:
         import time
 
         # Mock service that simulates processing time
-        class SlowService(BaseNATSService):
+        class SlowService(NATSService):
             @rpc
             async def slow_sync_method(self, delay: float = 0.1):
                 await asyncio.sleep(delay)
@@ -237,25 +237,32 @@ class TestAsyncRPCIntegration:
         service = SlowService(ServiceConfig(name="slow_service"))
         service.nc = AsyncMock()
 
-        # Mock sync response
-        mock_response = AsyncMock()
-        mock_response.data = json.dumps({"result": "done"}).encode()
-        service.nc.request = AsyncMock(return_value=mock_response)
+        # Mock sync response with simulated delay
+        async def mock_request(*args, **kwargs):
+            await asyncio.sleep(0.01)  # Simulate network delay
+            mock_response = AsyncMock()
+            mock_response.data = json.dumps({"result": "done"}).encode()
+            return mock_response
 
-        # Test sync calls (sequential)
+        service.nc.request = AsyncMock(side_effect=mock_request)
+        service.nc.publish = AsyncMock()  # Async calls just publish
+
+        # Test sync calls (sequential, each waits for response)
         start_time = time.time()
         for _ in range(3):
             await service.call_rpc("target", "slow_method", delay=0.01)
         sync_time = time.time() - start_time
 
-        # Test async calls (parallel)
+        # Test async calls (parallel, no waiting)
         start_time = time.time()
         async_tasks = [service.call_async("target", "slow_method", delay=0.01) for _ in range(3)]
         await asyncio.gather(*async_tasks)
         async_time = time.time() - start_time
 
         # Async should be much faster (no waiting for responses)
-        assert async_time < sync_time
+        # Sync should take at least 3 * 0.01 = 0.03 seconds
+        # Async should be nearly instant
+        assert async_time < sync_time / 2  # Async should be at least 2x faster
 
         # Verify call patterns
         assert service.nc.request.call_count == 3  # Sync calls use request

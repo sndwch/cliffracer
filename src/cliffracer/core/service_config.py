@@ -23,6 +23,12 @@ class ServiceConfig(BaseModel):
     health_check_interval: int = Field(default=30)
     health_check_timeout: int = Field(default=5)
 
+    # Request settings
+    request_timeout: float = Field(default=30.0)
+
+    # JetStream settings
+    jetstream_enabled: bool = Field(default=False)
+
     # Lifecycle hooks
     on_connect: Callable[[], Any] | None = None
     on_disconnect: Callable[[], Any] | None = None
@@ -34,8 +40,14 @@ class ServiceConfig(BaseModel):
     # Backdoor debugging configuration
     backdoor_enabled: bool = Field(default=False)  # Disabled by default for security
     backdoor_port: int = Field(default=0)  # 0 for auto-assign
+    backdoor_password: str | None = Field(default=None)  # Password for backdoor auth
     disable_backdoor: bool = Field(default=False)  # Global disable flag
     description: str | None = None
+
+    # Auto-restart configuration
+    auto_restart: bool = Field(default=True)
+    max_restart_attempts: int = Field(default=5)
+    restart_delay: float = Field(default=1.0)
 
     class Config:
         arbitrary_types_allowed = True

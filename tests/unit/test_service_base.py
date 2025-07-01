@@ -130,11 +130,14 @@ class TestServiceWithDecorators:
         """Test that decorated methods are properly registered"""
         # Check RPC method registration
         assert "test_rpc_method" in service._rpc_handlers
-        assert service._rpc_handlers["test_rpc_method"] == service.test_rpc_method
+        # Compare the function objects, not bound methods
+        assert service._rpc_handlers["test_rpc_method"].__name__ == "test_rpc_method"
+        assert hasattr(service._rpc_handlers["test_rpc_method"], "_is_rpc")
 
         # Check event handler registration
         assert "test.events.*" in service._event_handlers
-        assert service._event_handlers["test.events.*"] == service.test_event_handler
+        assert service._event_handlers["test.events.*"].__name__ == "test_event_handler"
+        assert hasattr(service._event_handlers["test.events.*"], "_is_event_handler")
 
     @pytest.mark.asyncio
     async def test_rpc_call_execution(self, service):

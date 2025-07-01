@@ -3,13 +3,14 @@ Logging utilities for Cliffracer services
 """
 
 from .config import ContextualLogger, LoggingConfig, get_service_logger
-from .logged_service import LoggedExtendedService, LoggedHTTPService, LoggedWebSocketService
+from .logging_mixin import HTTPLoggingMixin, LoggingMixin, WebSocketLoggingMixin
 
 __all__ = [
     "LoggingConfig",
     "get_service_logger",
     "ContextualLogger",
-    "LoggedExtendedService",
-    "LoggedHTTPService",
-    "LoggedWebSocketService",
+    # Consolidated logging approach using mixins
+    "LoggingMixin",
+    "HTTPLoggingMixin",
+    "WebSocketLoggingMixin",
 ]

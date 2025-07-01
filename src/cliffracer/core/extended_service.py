@@ -135,23 +135,6 @@ class SchemaValidationMixin:
         """Expected to be implemented by base class"""
         ...
 
-    def _subject_matches(self, pattern: str, subject: str) -> bool:
-        """Check if subject matches pattern (supports wildcards)"""
-        pattern_parts = pattern.split(".")
-        subject_parts = subject.split(".")
-
-        if len(pattern_parts) != len(subject_parts) and ">" not in pattern:
-            return False
-
-        for _i, (p, s) in enumerate(zip(pattern_parts, subject_parts, strict=False)):
-            if p == ">":
-                return True
-            elif p == "*":
-                continue
-            elif p != s:
-                return False
-
-        return True
 
     async def _handle_rpc_request(self, msg):
         """Enhanced RPC handler with schema validation"""
@@ -390,6 +373,23 @@ class HTTPNATSService(ValidatedNATSService):
         await super().stop()
 
 
+def websocket_handler(path: str) -> Callable:
+    """
+    Decorator to mark a method as a WebSocket handler
+
+    Usage:
+        @websocket_handler("/ws")
+        async def handle_websocket(self, websocket):
+            await websocket.send_json({"message": "Hello"})
+    """
+    def decorator(func: Callable) -> Callable:
+        func._is_websocket_handler = True
+        func._websocket_path = path
+        return func
+
+    return decorator
+
+
 class WebSocketNATSService(HTTPNATSService):
     """Service with WebSocket support"""
 
@@ -398,14 +398,29 @@ class WebSocketNATSService(HTTPNATSService):
         self._websocket_handlers = {}
         self._active_connections: list[WebSocket] = []
 
+        # Register WebSocket handlers from decorated methods
+        self._register_websocket_handlers()
+
+    def _register_websocket_handlers(self):
+        """Register WebSocket handlers from decorated methods"""
+        for attr_name in dir(self):
+            attr = getattr(self, attr_name)
+            if hasattr(attr, "_is_websocket_handler") and hasattr(attr, "_websocket_path"):
+                self.add_websocket_handler(attr._websocket_path, attr)
+
+    def add_websocket_handler(self, path: str, handler: Callable):
+        """Add a WebSocket handler"""
+        self._websocket_handlers[path] = handler
+
+        @self.app.websocket(path)
+        async def websocket_endpoint(websocket: WebSocket):
+            await self._handle_websocket(websocket, handler)
+
     def websocket_handler(self, path: str):
-        """Decorator to add WebSocket handlers"""
+        """Instance method decorator to add WebSocket handlers"""
 
         def decorator(func: Callable) -> Callable:
-            @self.app.websocket(path)
-            async def websocket_endpoint(websocket: WebSocket):
-                await self._handle_websocket(websocket, func)
-
+            self.add_websocket_handler(path, func)
             return func
 
         return decorator
@@ -439,7 +454,10 @@ class WebSocketNATSService(HTTPNATSService):
         for conn in disconnected:
             self._active_connections.remove(conn)
 
-    @listener(BroadcastMessage)
+    @listener(BroadcastMessage, subject="broadcast.*")
     async def relay_broadcasts_to_websockets(self, message: BroadcastMessage):
         """Automatically relay NATS broadcasts to WebSocket clients"""
-        await self.broadcast_to_websockets(message.model_dump())
+        await self.broadcast_to_websockets({
+            "type": "broadcast",
+            "data": message.model_dump()
+        })

@@ -7,7 +7,6 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -42,18 +41,14 @@ class MessageConfig:
 
 @dataclass
 class Message:
-    """Universal message format"""
-
+    """Message representation for the messaging interface"""
+    
     subject: str
     data: bytes
-    headers: dict[str, str]
-    correlation_id: str | None = None
+    headers: dict[str, str] | None = None
     reply_subject: str | None = None
-    timestamp: datetime | None = None
-
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now(UTC)
+    timestamp: float | None = None
+    correlation_id: str | None = None
 
 
 @dataclass
@@ -99,13 +94,13 @@ class MessageClient(ABC):
         data: bytes,
         timeout: float = 30.0,
         headers: dict[str, str] | None = None,
-    ) -> Message:
+    ) -> Any:  # Returns Message object when implemented
         """Send request and wait for response"""
         pass
 
     @abstractmethod
     async def subscribe(
-        self, config: SubscriptionConfig, callback: Callable[[Message], Any]
+        self, config: SubscriptionConfig, callback: Callable[[Any], Any]  # Message object when implemented
     ) -> str:
         """Subscribe to messages"""
         pass
@@ -187,7 +182,7 @@ class MessageBroker(ABC):
     ) -> str:
         """Subscribe to events matching pattern"""
 
-        async def message_handler(msg: Message):
+        async def message_handler(msg: Any):  # Message object when implemented
             try:
                 data = json.loads(msg.data.decode()) if msg.data else {}
                 await callback(msg.subject, data)
@@ -292,11 +287,10 @@ def with_messaging_client(config_key: str = "messaging"):
             # Extract messaging config
             messaging_config = kwargs.pop(config_key, None)
             if messaging_config:
-                # self.messaging_client = MessagingFactory.create_client(
-                #     messaging_config.backend, **messaging_config.connection_params
-                # )  # MessagingFactory not implemented yet
-                raise NotImplementedError("MessagingFactory is not yet implemented")
-                self.messaging_broker = messaging_config.backend
+                self.messaging_client = MessageClientFactory.create_client(
+                    messaging_config.backend, **messaging_config.connection_params
+                )
+                self.messaging_broker = MessageBroker(self.messaging_client)
 
             original_init(self, *args, **kwargs)
 
