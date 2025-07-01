@@ -39,13 +39,17 @@ await service.connect()  # Backdoor starts automatically
 
 ```bash
 # Service will show: "🔧 Backdoor server available on localhost:12345"
+# And if password not set: "🔑 Backdoor password: abc123xyz"
+
 nc localhost 12345
+# Enter password when prompted
 
 # OR use telnet
 telnet localhost 12345
+# Enter password when prompted
 
-# OR use the CLI
-python -m cliffracer.cli.backdoor localhost:12345
+# OR set password via environment
+export BACKDOOR_PASSWORD=your-secure-password
 ```
 
 ### 3. Debug Your Service
@@ -148,10 +152,13 @@ config = ServiceConfig(
 
 ### 🔒 Production Security
 
-- **Default**: Backdoor **disabled** in production (`CLIFFRACER_ENV=production`)
+- **Default**: Backdoor **disabled** by default (must explicitly enable)
 - **Binding**: Only binds to `localhost` (not accessible externally)
-- **No Authentication**: Use firewall rules for additional security
-- **Environment Detection**: Automatically disabled in production environments
+- **Password Authentication**: Required - set via `BACKDOOR_PASSWORD` env var
+- **Rate Limiting**: Max 3 login attempts per IP address
+- **IP Lockout**: 5-minute lockout after failed attempts  
+- **Session Security**: 30-second timeout for authentication
+- **Environment Detection**: Can be disabled in production environments
 
 ---
 

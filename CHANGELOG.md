@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🚀 Major Release - Production Ready
 
-This release marks Cliffracer as production-ready with comprehensive security fixes, performance optimizations, and feature completions.
+This release marks Cliffracer as production-ready for NATS-based microservices with comprehensive security fixes, performance optimizations, and core feature completions.
+
+### ⚠️ Known Limitations
+- **No Rate Limiting**: Not implemented despite being mentioned in some docs
+- **No Database Migrations**: Only basic CREATE TABLE generation  
+- **Basic Service Discovery**: Only service info endpoint, not a full registry
+- **Partial Auth System**: SimpleAuthService works, but old decorators are broken
 
 ### ✨ Added
 

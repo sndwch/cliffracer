@@ -12,7 +12,7 @@ A production-ready NATS-based microservices framework for Python with HTTP, WebS
 - **NATS Integration**: High-performance messaging with JetStream support
 - **RPC Communication**: Type-safe request/response patterns with timeout handling
 - **Event Streaming**: Publish/subscribe patterns with pattern-based routing
-- **Service Discovery**: Automatic service registration and discovery
+- **Service Info**: Basic service information endpoint (get_service_info)
 - **Connection Management**: Auto-reconnection, health monitoring, and graceful shutdown
 
 ### Web Integration
@@ -26,28 +26,36 @@ A production-ready NATS-based microservices framework for Python with HTTP, WebS
 - **Repository Pattern**: Type-safe CRUD operations with Pydantic models
 - **SQL Injection Protection**: Comprehensive input validation and sanitization
 - **Transaction Support**: Context managers for database transactions
-- **Schema Management**: Automatic table creation and migration support
+- **Table Creation**: Basic CREATE TABLE SQL generation (no migration tools)
 
 ### Security & Authentication
 - **JWT Authentication**: Token-based authentication with role/permission support
 - **Input Validation**: Comprehensive parameter validation throughout the framework
 - **Secure Repository**: SQL injection protection with whitelisting
-- **Rate Limiting**: Built-in protection against abuse
 - **Correlation ID Tracking**: Request tracing across distributed services
+- **Note**: Rate limiting is NOT implemented (planned for future release)
 
 ### Performance & Monitoring
-- **High Performance**: 1,800+ RPS throughput with 3.3ms average latency
+- **Benchmarked Performance**: 1,800+ RPS throughput with 3.3ms average latency†
 - **Connection Pooling**: Efficient database and messaging connection management
 - **Batch Processing**: Bulk operations with configurable batch sizes
 - **Resource Management**: Proper cleanup and lifecycle management
 - **Structured Logging**: Correlation ID propagation and service-aware logging
 
+†Performance measured in controlled load testing environment with local NATS server. See [load-testing/LOAD_TESTING_RESULTS.md](load-testing/LOAD_TESTING_RESULTS.md) for methodology.
+
 ### Development Tools
-- **Load Testing**: Comprehensive performance testing framework
-- **Debug Interface**: Secure backdoor for runtime service inspection
+- **Load Testing**: Comprehensive performance testing framework using Locust
+- **Debug Interface**: Secure backdoor for runtime service inspection (disabled by default)
 - **Service Orchestration**: Multi-service coordination with auto-restart
 - **Client Generation**: Automatic typed client generation for services
 - **Comprehensive Examples**: Production-ready example applications
+
+### Distributed Patterns
+- **Saga Pattern**: Distributed transaction management with automatic compensation
+- **Event Sourcing**: Basic event streaming capabilities via NATS
+- **Circuit Breaker**: Available through retry decorators
+- **Correlation Tracking**: Built-in request tracing across services
 
 ## 🛠️ Installation
 
@@ -265,10 +273,26 @@ src/cliffracer/
 ├── logging/               # Structured logging
 │   ├── correlation_logging.py  # Correlation-aware logging
 │   └── config.py          # Logging configuration
+├── patterns/              # Distributed patterns
+│   └── saga.py            # Saga pattern implementation
 └── debug/                 # Development tools
     ├── backdoor.py        # Secure debug interface
     └── inspector.py       # Service inspection tools
 ```
+
+## 📋 Known Limitations & Roadmap
+
+See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for a comprehensive list of:
+- Features that are NOT implemented (despite documentation mentions)
+- Partially working features and their limitations
+- Detailed roadmap with priorities
+- Workarounds for missing features
+
+**Key Limitations**:
+- No rate limiting (use reverse proxy)
+- No database migrations (use Alembic)
+- Basic service discovery only
+- Partial auth system (SimpleAuthService works, decorators broken)
 
 ## 🔧 Configuration
 
@@ -382,3 +406,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Built with ❤️ for the Python microservices community**
+

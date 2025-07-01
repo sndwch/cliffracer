@@ -163,5 +163,8 @@ ZSHRC_SETUP.md
 REORGANIZATION_*.md
 REFACTORING_*.md
 
+# AI Assistant Instructions (keep local only)
+CLAUDE.md
+
 # uv lock file (debatable - some projects track it)
 # uv.lock

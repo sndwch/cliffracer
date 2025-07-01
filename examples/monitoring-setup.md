@@ -27,17 +27,35 @@ The monitoring setup described in this document has the following issues:
 - **Prometheus metrics**: Not implemented despite claims
 - **APM integration**: No application performance monitoring
 
-## Working Alternative
+## What Actually Works
 
-For basic monitoring, you can use the file-based metrics:
+The framework provides these monitoring capabilities:
 
+### 1. Performance Metrics Collection
 ```python
-from cliffracer import NATSService
+from cliffracer.performance import PerformanceMetrics
 
-class MonitoredService(NATSService):
-    async def on_startup(self):
-        # This works - basic file export
-        await self.record_metric("service.startup", 1)
+# Automatic metrics collection for:
+- Request count
+- Response times
+- Error rates
+- Throughput
+```
+
+### 2. Structured Logging with Correlation
+```python
+from cliffracer import CliffracerService
+
+# All services have correlation-aware logging
+# Logs include correlation IDs for distributed tracing
+```
+
+### 3. Service Health Endpoints
+```python
+@service.rpc
+async def get_service_info() -> dict:
+    # Built-in service info endpoint
+    return service.get_service_stats()
 ```
 
 ## What to Use Instead
