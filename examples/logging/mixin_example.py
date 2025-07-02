@@ -39,8 +39,7 @@ class LoggedAPIService(HTTPLoggingMixin, HTTPNATSService):
 
     def __init__(self):
         config = ServiceConfig(
-            name="logged_api_service",
-            description="API service with automatic HTTP logging"
+            name="logged_api_service", description="API service with automatic HTTP logging"
         )
         super().__init__(config, port=8080)
 
@@ -57,8 +56,7 @@ class LoggedRealtimeService(WebSocketLoggingMixin, WebSocketNATSService):
 
     def __init__(self):
         config = ServiceConfig(
-            name="logged_realtime_service",
-            description="Real-time service with WebSocket logging"
+            name="logged_realtime_service", description="Real-time service with WebSocket logging"
         )
         super().__init__(config, port=8081)
 
@@ -68,16 +66,18 @@ class LoggedRealtimeService(WebSocketLoggingMixin, WebSocketNATSService):
         await websocket.send_json({"message": "Connected!"})
 
         # Broadcast to all clients - automatically logged!
-        await self.broadcast_to_websockets({
-            "type": "notification",
-            "message": "New client connected",
-        })
+        await self.broadcast_to_websockets(
+            {
+                "type": "notification",
+                "message": "New client connected",
+            }
+        )
 
 
 # Example 4: Custom service combining multiple mixins
 class UltimateLoggedService(
     WebSocketLoggingMixin,  # Must come before WebSocketNATSService
-    WebSocketNATSService    # Base service class
+    WebSocketNATSService,  # Base service class
 ):
     """
     The ultimate logged service with all features!
@@ -87,8 +87,7 @@ class UltimateLoggedService(
 
     def __init__(self):
         config = ServiceConfig(
-            name="ultimate_service",
-            description="Service with all logging features"
+            name="ultimate_service", description="Service with all logging features"
         )
         super().__init__(config, port=8082)
 
@@ -104,10 +103,7 @@ class UltimateLoggedService(
     @websocket_handler("/ws/ultimate")
     async def ultimate_handler(self, websocket):
         """WebSocket handler - connections logged automatically"""
-        await websocket.send_json({
-            "service": "ultimate",
-            "status": "connected"
-        })
+        await websocket.send_json({"service": "ultimate", "status": "connected"})
 
 
 async def main():

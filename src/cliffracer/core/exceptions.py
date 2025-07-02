@@ -24,78 +24,93 @@ class CliffracerError(Exception):
 
 class ServiceError(CliffracerError):
     """Base exception for service-related errors"""
+
     pass
 
 
 class ConnectionError(ServiceError):
     """Errors related to NATS or other connections"""
+
     pass
 
 
 class ConfigurationError(ServiceError):
     """Errors related to service configuration"""
+
     pass
 
 
 class HandlerError(ServiceError):
     """Errors related to RPC/event handlers"""
+
     pass
 
 
 class ValidationError(ServiceError):
     """Errors related to schema validation"""
+
     pass
 
 
 class TimeoutError(ServiceError):
     """Errors related to timeouts"""
+
     pass
 
 
 class AuthenticationError(ServiceError):
     """Errors related to authentication"""
+
     pass
 
 
 class AuthorizationError(ServiceError):
     """Errors related to authorization"""
+
     pass
 
 
 # NATS-specific errors
 class NATSConnectionError(ConnectionError):
     """NATS connection failed"""
+
     pass
 
 
 class NATSSubscriptionError(ConnectionError):
     """NATS subscription failed"""
+
     pass
 
 
 class NATSPublishError(ConnectionError):
     """NATS publish operation failed"""
+
     pass
 
 
 # RPC-specific errors
 class RPCError(HandlerError):
     """Base RPC error"""
+
     pass
 
 
 class RPCTimeoutError(RPCError, TimeoutError):
     """RPC call timed out"""
+
     pass
 
 
 class RPCMethodNotFoundError(RPCError):
     """RPC method not found"""
+
     pass
 
 
 class RPCValidationError(RPCError, ValidationError):
     """RPC request validation failed"""
+
     pass
 
 
@@ -139,97 +154,116 @@ class HTTPForbiddenError(HTTPError, AuthorizationError):
 class HTTPInternalServerError(HTTPError):
     """HTTP 500 Internal Server Error"""
 
-    def __init__(self, message: str = "Internal Server Error", details: dict[str, Any] | None = None):
+    def __init__(
+        self, message: str = "Internal Server Error", details: dict[str, Any] | None = None
+    ):
         super().__init__(message, 500, details)
 
 
 # WebSocket-specific errors
 class WebSocketError(ServiceError):
     """Base WebSocket error"""
+
     pass
 
 
 class WebSocketConnectionError(WebSocketError, ConnectionError):
     """WebSocket connection failed"""
+
     pass
 
 
 class WebSocketHandlerError(WebSocketError, HandlerError):
     """WebSocket handler error"""
+
     pass
 
 
 # Timer-specific errors
 class TimerError(ServiceError):
     """Base timer error"""
+
     pass
 
 
 class TimerExecutionError(TimerError):
     """Timer method execution failed"""
+
     pass
 
 
 class TimerConfigurationError(TimerError, ConfigurationError):
     """Timer configuration invalid"""
+
     pass
 
 
 # Database-specific errors
 class DatabaseError(ServiceError):
     """Base database error"""
+
     pass
 
 
 class DatabaseConnectionError(DatabaseError, ConnectionError):
     """Database connection failed"""
+
     pass
 
 
 class DatabaseQueryError(DatabaseError):
     """Database query failed"""
+
     pass
 
 
 class DatabaseTransactionError(DatabaseError):
     """Database transaction failed"""
+
     pass
 
 
 # Performance-specific errors
 class PerformanceError(ServiceError):
     """Base performance error"""
+
     pass
 
 
 class ConnectionPoolError(PerformanceError):
     """Connection pool error"""
+
     pass
 
 
 class BatchProcessingError(PerformanceError):
     """Batch processing error"""
+
     pass
 
 
 class MetricsError(PerformanceError):
     """Metrics collection error"""
+
     pass
 
 
 # Monitoring-specific errors
 class MonitoringError(ServiceError):
     """Base monitoring error"""
+
     pass
 
 
 class MetricsCollectionError(MonitoringError):
     """Metrics collection failed"""
+
     pass
 
 
 class AlertingError(MonitoringError):
     """Alerting system error"""
+
     pass
 
 
@@ -238,7 +272,7 @@ def wrap_exception(
     original_exception: Exception,
     new_exception_class: type[CliffracerError],
     message: str | None = None,
-    details: dict[str, Any] | None = None
+    details: dict[str, Any] | None = None,
 ) -> CliffracerError:
     """
     Wrap an external exception in a Cliffracer exception.
@@ -257,7 +291,7 @@ def wrap_exception(
     error_details["original_exception"] = {
         "type": type(original_exception).__name__,
         "message": str(original_exception),
-        "args": original_exception.args
+        "args": original_exception.args,
     }
 
     wrapped = new_exception_class(error_message, error_details)
@@ -295,9 +329,9 @@ def handle_database_error(exception: Exception) -> CliffracerError:
 
     if isinstance(exception, asyncpg.PostgresError):
         details = {
-            "sqlstate": getattr(exception, 'sqlstate', None),
-            "detail": getattr(exception, 'detail', None),
-            "hint": getattr(exception, 'hint', None)
+            "sqlstate": getattr(exception, "sqlstate", None),
+            "detail": getattr(exception, "detail", None),
+            "hint": getattr(exception, "hint", None),
         }
         return DatabaseQueryError(f"Database error: {exception}", details)
     elif isinstance(exception, asyncpg.ConnectionError):
@@ -322,14 +356,14 @@ def create_error_response(exception: CliffracerError) -> dict[str, Any]:
         "error": True,
         "error_type": type(exception).__name__,
         "message": exception.message,
-        "timestamp": datetime.now(UTC).isoformat()
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
     if exception.details:
         response["details"] = exception.details
 
     # Add HTTP status code if available
-    if hasattr(exception, 'status_code'):
+    if hasattr(exception, "status_code"):
         response["status_code"] = exception.status_code
 
     return response
@@ -350,7 +384,7 @@ class ErrorHandler:
         operation_description: str,
         exception_class: type[CliffracerError] = ServiceError,
         details: dict[str, Any] | None = None,
-        reraise: bool = True
+        reraise: bool = True,
     ):
         self.operation_description = operation_description
         self.exception_class = exception_class
@@ -370,10 +404,7 @@ class ErrorHandler:
 
         # Wrap external exceptions
         wrapped_exception = wrap_exception(
-            exc_val,
-            self.exception_class,
-            self.operation_description,
-            self.details
+            exc_val, self.exception_class, self.operation_description, self.details
         )
 
         if self.reraise:
@@ -392,10 +423,7 @@ class ErrorHandler:
             return False
 
         wrapped_exception = wrap_exception(
-            exc_val,
-            self.exception_class,
-            self.operation_description,
-            self.details
+            exc_val, self.exception_class, self.operation_description, self.details
         )
 
         if self.reraise:

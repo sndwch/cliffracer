@@ -93,20 +93,18 @@ class TestMessagingPatterns:
         class EventProducer(ValidatedNATSService):
             @broadcast(UserEvent)
             async def announce_user_action(self, user_id: str, action: str):
-                return UserEvent(
-                    source_service=self.config.name,
-                    user_id=user_id,
-                    action=action
-                )
+                return UserEvent(source_service=self.config.name, user_id=user_id, action=action)
 
         class EventConsumer(ValidatedNATSService):
             @listener(UserEvent)
             async def on_user_event(self, event: UserEvent):
-                received_events.append({
-                    "user_id": event.user_id,
-                    "action": event.action,
-                    "source": event.source_service
-                })
+                received_events.append(
+                    {
+                        "user_id": event.user_id,
+                        "action": event.action,
+                        "source": event.source_service,
+                    }
+                )
 
         producer = EventProducer(ServiceConfig(name="producer"))
         consumer = EventConsumer(ServiceConfig(name="consumer"))
@@ -151,19 +149,13 @@ class TestMessagingPatterns:
             async def create_user(self, request: CreateUserRequest) -> CreateUserResponse:
                 self.user_count += 1
                 return CreateUserResponse(
-                    user_id=f"user_{self.user_count}",
-                    username=request.username,
-                    success=True
+                    user_id=f"user_{self.user_count}", username=request.username, success=True
                 )
 
         service = UserService(ServiceConfig(name="user_service"))
 
         # Test with valid request
-        request = CreateUserRequest(
-            username="testuser",
-            email="test@example.com",
-            age=25
-        )
+        request = CreateUserRequest(username="testuser", email="test@example.com", age=25)
 
         response = await service.create_user(request)
         assert isinstance(response, CreateUserResponse)
@@ -204,11 +196,7 @@ class TestMessagingPatterns:
         inventory_svc = InventoryService(ServiceConfig(name="inventory"))
 
         # Create event
-        order_event = OrderEvent(
-            source_service="order_service",
-            order_id="ORD123",
-            amount=99.99
-        )
+        order_event = OrderEvent(source_service="order_service", order_id="ORD123", amount=99.99)
 
         # Simulate all services receiving the event
         await notif_svc.on_order(order_event)
@@ -245,7 +233,7 @@ class TestMessagingPatterns:
         error_response = {
             "error": "Division by zero",
             "traceback": "...",
-            "timestamp": "2023-01-01T00:00:00"
+            "timestamp": "2023-01-01T00:00:00",
         }
         mock_response = AsyncMock()
         mock_response.data = json.dumps(error_response).encode()
@@ -324,10 +312,7 @@ class TestMessagingPatterns:
         service = ConcurrentService(ServiceConfig(name="concurrent"))
 
         # Make multiple concurrent calls
-        tasks = [
-            service.concurrent_method(0.05)
-            for _ in range(5)
-        ]
+        tasks = [service.concurrent_method(0.05) for _ in range(5)]
 
         results = await asyncio.gather(*tasks)
 

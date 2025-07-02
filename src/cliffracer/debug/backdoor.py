@@ -34,7 +34,9 @@ class BackdoorServer:
     - Global enable/disable configuration
     """
 
-    def __init__(self, service_instance, port: int = 0, enabled: bool = True, password: str | None = None):
+    def __init__(
+        self, service_instance, port: int = 0, enabled: bool = True, password: str | None = None
+    ):
         """
         Initialize backdoor server.
 
@@ -54,7 +56,7 @@ class BackdoorServer:
         self.failed_auth_attempts: dict[str, int] = {}  # Track failed attempts by IP
 
         # Set up authentication
-        self.password = password or os.environ.get('BACKDOOR_PASSWORD')
+        self.password = password or os.environ.get("BACKDOOR_PASSWORD")
         if not self.password and self.enabled:
             logger.warning("Backdoor enabled without password! Generating random password...")
             self.password = hashlib.sha256(os.urandom(32)).hexdigest()[:16]
@@ -225,7 +227,7 @@ class BackdoorServer:
                     return False
 
                 char = conn_file.read(1)
-                if char == '\n' or char == '\r':
+                if char == "\n" or char == "\r":
                     break
                 password_input += char
 
@@ -238,13 +240,17 @@ class BackdoorServer:
                 return True
             else:
                 # Track failed attempt
-                self.failed_auth_attempts[client_ip] = self.failed_auth_attempts.get(client_ip, 0) + 1
+                self.failed_auth_attempts[client_ip] = (
+                    self.failed_auth_attempts.get(client_ip, 0) + 1
+                )
                 remaining = self.max_auth_attempts - self.failed_auth_attempts[client_ip]
 
                 if remaining > 0:
                     conn_file.write(f"\n❌ Invalid password. {remaining} attempts remaining.\n")
                 else:
-                    conn_file.write(f"\n❌ Too many failed attempts. Locked out for {self.lockout_duration} seconds.\n")
+                    conn_file.write(
+                        f"\n❌ Too many failed attempts. Locked out for {self.lockout_duration} seconds.\n"
+                    )
                     # Set lockout timestamp
                     self.failed_auth_attempts[f"{client_ip}_lockout"] = time.time()
 
@@ -261,8 +267,8 @@ class BackdoorServer:
             return True  # No password set (shouldn't happen with new init)
 
         # Use constant-time comparison to prevent timing attacks
-        password_bytes = password.encode('utf-8')
-        expected_bytes = self.password.encode('utf-8')
+        password_bytes = password.encode("utf-8")
+        expected_bytes = self.password.encode("utf-8")
 
         # Simple constant-time comparison
         if len(password_bytes) != len(expected_bytes):

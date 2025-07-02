@@ -79,11 +79,12 @@ class TestOrderService(FullFeaturedService):
     async def broadcast_order_created(self, order_id: str, customer_id: str, total: float):
         """Broadcast order created event"""
         # For the core broadcast decorator, we need to manually broadcast
-        await self.broadcast_message("order.created", 
-            order_id=order_id, 
-            customer_id=customer_id, 
+        await self.broadcast_message(
+            "order.created",
+            order_id=order_id,
+            customer_id=customer_id,
             total=total,
-            source_service=self.config.name
+            source_service=self.config.name,
         )
 
 
@@ -101,7 +102,7 @@ class TestNotificationService(FullFeaturedService):
         order_id = data.get("order_id")
         customer_id = data.get("customer_id")
         total = data.get("total")
-        
+
         notification = {
             "type": "order_created",
             "order_id": order_id,

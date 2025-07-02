@@ -35,28 +35,36 @@ class LoggingMixin:
         """Wrap key methods with logging decorators"""
         # List of methods to wrap with logging
         methods_to_wrap = [
-            'start', 'stop', 'connect', 'disconnect',
-            '_handle_rpc_request', '_handle_event', '_handle_async_request',
-            'call_rpc', 'call_async', 'publish_event',
+            "start",
+            "stop",
+            "connect",
+            "disconnect",
+            "_handle_rpc_request",
+            "_handle_event",
+            "_handle_async_request",
+            "call_rpc",
+            "call_async",
+            "publish_event",
         ]
 
         for method_name in methods_to_wrap:
             if hasattr(self, method_name):
                 original_method = getattr(self, method_name)
-                if not hasattr(original_method, '_logged'):
+                if not hasattr(original_method, "_logged"):
                     wrapped_method = self._log_method_execution(original_method, method_name)
                     wrapped_method._logged = True
                     setattr(self, method_name, wrapped_method)
 
     def _log_method_execution(self, method, method_name):
         """Decorator to log method execution"""
+
         @functools.wraps(method)
         async def async_wrapper(*args, **kwargs):
             start_time = time.time()
             context = {
-                'method': method_name,
-                'args_count': len(args) - 1,  # Exclude self
-                'kwargs_keys': list(kwargs.keys()),
+                "method": method_name,
+                "args_count": len(args) - 1,  # Exclude self
+                "kwargs_keys": list(kwargs.keys()),
             }
 
             self.logger.debug(f"Starting {method_name}", **context)
@@ -66,22 +74,16 @@ class LoggingMixin:
 
                 execution_time = time.time() - start_time
                 self.logger.info(
-                    f"Completed {method_name}",
-                    execution_time=execution_time,
-                    **context
+                    f"Completed {method_name}", execution_time=execution_time, **context
                 )
 
                 # Record metrics if available
-                if hasattr(self, 'record_metric'):
+                if hasattr(self, "record_metric"):
                     await self.record_metric(
-                        f"method.{method_name}.duration",
-                        execution_time,
-                        {"status": "success"}
+                        f"method.{method_name}.duration", execution_time, {"status": "success"}
                     )
                     await self.record_metric(
-                        f"method.{method_name}.count",
-                        1,
-                        {"status": "success"}
+                        f"method.{method_name}.count", 1, {"status": "success"}
                     )
 
                 return result
@@ -92,20 +94,18 @@ class LoggingMixin:
                     f"Error in {method_name}: {str(e)}",
                     execution_time=execution_time,
                     error_type=type(e).__name__,
-                    **context
+                    **context,
                 )
 
                 # Record error metrics if available
-                if hasattr(self, 'record_metric'):
+                if hasattr(self, "record_metric"):
                     await self.record_metric(
-                        f"method.{method_name}.duration",
-                        execution_time,
-                        {"status": "error"}
+                        f"method.{method_name}.duration", execution_time, {"status": "error"}
                     )
                     await self.record_metric(
                         f"method.{method_name}.count",
                         1,
-                        {"status": "error", "error_type": type(e).__name__}
+                        {"status": "error", "error_type": type(e).__name__},
                     )
 
                 raise
@@ -114,9 +114,9 @@ class LoggingMixin:
         def sync_wrapper(*args, **kwargs):
             start_time = time.time()
             context = {
-                'method': method_name,
-                'args_count': len(args) - 1,  # Exclude self
-                'kwargs_keys': list(kwargs.keys()),
+                "method": method_name,
+                "args_count": len(args) - 1,  # Exclude self
+                "kwargs_keys": list(kwargs.keys()),
             }
 
             self.logger.debug(f"Starting {method_name}", **context)
@@ -126,9 +126,7 @@ class LoggingMixin:
 
                 execution_time = time.time() - start_time
                 self.logger.info(
-                    f"Completed {method_name}",
-                    execution_time=execution_time,
-                    **context
+                    f"Completed {method_name}", execution_time=execution_time, **context
                 )
 
                 return result
@@ -139,7 +137,7 @@ class LoggingMixin:
                     f"Error in {method_name}: {str(e)}",
                     execution_time=execution_time,
                     error_type=type(e).__name__,
-                    **context
+                    **context,
                 )
                 raise
 
@@ -171,11 +169,12 @@ class HTTPLoggingMixin(LoggingMixin):
         super().__init__(*args, **kwargs)
 
         # Add HTTP request logging middleware if FastAPI app exists
-        if hasattr(self, 'app'):
+        if hasattr(self, "app"):
             self._add_http_logging_middleware()
 
     def _add_http_logging_middleware(self):
         """Add HTTP request/response logging middleware"""
+
         @self.app.middleware("http")
         async def log_requests(request, call_next):
             start_time = time.time()
@@ -229,7 +228,9 @@ class WebSocketLoggingMixin(HTTPLoggingMixin):
 
     async def _handle_websocket(self, websocket, handler):
         """Log WebSocket connections"""
-        client_info = f"{websocket.client.host}:{websocket.client.port}" if websocket.client else "unknown"
+        client_info = (
+            f"{websocket.client.host}:{websocket.client.port}" if websocket.client else "unknown"
+        )
 
         self.logger.info(
             "WebSocket connection established",

@@ -17,12 +17,14 @@ def test_core_imports():
         from cliffracer import (
             __version__,
         )
+
         print(f"✅ Core imports successful (version {__version__})")
         return True
     except Exception as e:
         print(f"❌ Core import failed: {e}")
         traceback.print_exc()
         return False
+
 
 def test_service_creation():
     """Test that services can be created"""
@@ -31,10 +33,7 @@ def test_service_creation():
     try:
         from cliffracer import CliffracerService, ServiceConfig
 
-        config = ServiceConfig(
-            name="test_service",
-            nats_url="nats://localhost:4222"
-        )
+        config = ServiceConfig(name="test_service", nats_url="nats://localhost:4222")
         service = CliffracerService(config)
 
         print(f"✅ Service created: {service.config.name}")
@@ -43,6 +42,7 @@ def test_service_creation():
         print(f"❌ Service creation failed: {e}")
         traceback.print_exc()
         return False
+
 
 def test_auth_system():
     """Test that auth system works"""
@@ -80,6 +80,7 @@ def test_auth_system():
         traceback.print_exc()
         return False
 
+
 def test_correlation_system():
     """Test correlation ID system"""
     print("🧪 Testing correlation system...")
@@ -93,6 +94,7 @@ def test_correlation_system():
 
         # Test context management
         from cliffracer import get_correlation_id, set_correlation_id
+
         set_correlation_id(corr_id)
         retrieved_id = get_correlation_id()
 
@@ -107,6 +109,7 @@ def test_correlation_system():
         print(f"❌ Correlation system test failed: {e}")
         traceback.print_exc()
         return False
+
 
 def test_database_models():
     """Test database model system"""
@@ -140,6 +143,7 @@ def test_database_models():
         traceback.print_exc()
         return False
 
+
 def test_validation_system():
     """Test input validation"""
     print("🧪 Testing validation system...")
@@ -169,17 +173,16 @@ def test_validation_system():
         traceback.print_exc()
         return False
 
+
 def test_package_build():
     """Test that package can be built"""
     print("🧪 Testing package build...")
 
     try:
         import subprocess
+
         result = subprocess.run(
-            ["uv", "build"],
-            capture_output=True,
-            text=True,
-            cwd=Path(__file__).parent
+            ["uv", "build"], capture_output=True, text=True, cwd=Path(__file__).parent
         )
 
         if result.returncode == 0:
@@ -201,6 +204,7 @@ def test_package_build():
     except Exception as e:
         print(f"❌ Package build test failed: {e}")
         return False
+
 
 def main():
     """Run all verification tests"""
@@ -242,6 +246,7 @@ def main():
     else:
         print(f"❌ {total - passed} tests failed. Please fix issues before using.")
         return False
+
 
 if __name__ == "__main__":
     success = main()

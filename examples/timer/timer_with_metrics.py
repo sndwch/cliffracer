@@ -23,7 +23,7 @@ class MetricsTimerService(HighPerformanceService):
             config,
             enable_connection_pooling=True,
             enable_batch_processing=True,
-            enable_metrics=True  # Enable PerformanceMetrics
+            enable_metrics=True,  # Enable PerformanceMetrics
         )
 
         self.task_count = 0
@@ -84,7 +84,7 @@ async def run_metrics_demo():
             # Get comprehensive metrics every 5 seconds
             metrics = service.get_performance_metrics()
 
-            print(f"\n📊 Metrics Report #{i+1}:")
+            print(f"\n📊 Metrics Report #{i + 1}:")
             print("-" * 30)
 
             # Timer-specific metrics (automatically collected)

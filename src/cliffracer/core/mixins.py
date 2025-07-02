@@ -64,10 +64,10 @@ class ValidationMixin:
 
             # Convert result to dict if it's a Pydantic model
             if isinstance(result, BaseModel):
-                result_data = result.model_dump(mode='json')
+                result_data = result.model_dump(mode="json")
             else:
                 result_data = result
-            
+
             # Send response
             response = {"result": result_data, "timestamp": datetime.now(UTC).isoformat()}
             await msg.respond(json.dumps(response).encode())
@@ -104,6 +104,7 @@ class HTTPMixin:
 
         # Add correlation middleware
         from ..middleware.correlation import CorrelationMiddleware
+
         self.app.add_middleware(CorrelationMiddleware)
 
         # Add health check endpoint
@@ -125,12 +126,7 @@ class HTTPMixin:
 
         logger.info(f"Starting HTTP server on {self.host}:{self.port}")
 
-        config = uvicorn.Config(
-            app=self.app,
-            host=self.host,
-            port=self.port,
-            log_level="info"
-        )
+        config = uvicorn.Config(app=self.app, host=self.host, port=self.port, log_level="info")
         self._http_server = uvicorn.Server(config)
 
         # Start server in background task
@@ -181,7 +177,8 @@ class WebSocketMixin:
         self._websocket_handlers: dict[str, Callable] = {}
 
         # Add WebSocket endpoint if HTTP mixin is present
-        if hasattr(self, 'app'):
+        if hasattr(self, "app"):
+
             @self.app.websocket("/ws")
             async def websocket_endpoint(websocket: WebSocket):
                 await self._handle_websocket_connection(websocket)
@@ -191,7 +188,8 @@ class WebSocketMixin:
         self._websocket_handlers[path] = handler
 
         # Add dynamic endpoint if HTTP mixin is present
-        if hasattr(self, 'app'):
+        if hasattr(self, "app"):
+
             @self.app.websocket(path)
             async def dynamic_endpoint(websocket: WebSocket):
                 await self._handle_websocket(websocket, handler)
@@ -203,8 +201,8 @@ class WebSocketMixin:
 
         # Extract correlation ID from WebSocket
         correlation_id = None
-        if hasattr(websocket, 'scope'):
-            correlation_id = websocket.scope.get('correlation_id')
+        if hasattr(websocket, "scope"):
+            correlation_id = websocket.scope.get("correlation_id")
         if not correlation_id:
             correlation_id = CorrelationContext.get_or_create_id()
 
@@ -218,16 +216,20 @@ class WebSocketMixin:
                 data = json.loads(message)
 
                 # Extract correlation ID from message if present
-                msg_correlation_id = data.get('correlation_id', correlation_id)
+                msg_correlation_id = data.get("correlation_id", correlation_id)
                 CorrelationContext.set(msg_correlation_id)
 
                 # Echo back with correlation ID
-                await websocket.send_text(json.dumps({
-                    "type": "echo",
-                    "data": data,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "correlation_id": msg_correlation_id
-                }))
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "echo",
+                            "data": data,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                            "correlation_id": msg_correlation_id,
+                        }
+                    )
+                )
 
         except WebSocketDisconnect:
             logger.info(f"WebSocket client disconnected (correlation_id: {correlation_id})")
@@ -276,7 +278,7 @@ class WebSocketMixin:
         """Get WebSocket connection statistics"""
         return {
             "active_connections": len(self._active_connections),
-            "registered_handlers": len(self._websocket_handlers)
+            "registered_handlers": len(self._websocket_handlers),
         }
 
 
@@ -300,20 +302,22 @@ class BroadcastMixin:
         message = {
             "data": kwargs,
             "timestamp": datetime.now(UTC).isoformat(),
-            "source_service": self.config.name
+            "source_service": self.config.name,
         }
 
         # Publish to NATS
         await self.publish_event(subject, **message)
 
         # Broadcast to WebSocket clients if available
-        if hasattr(self, 'broadcast_to_websockets'):
-            await self.broadcast_to_websockets({
-                "type": "broadcast",
-                "subject": subject,
-                "data": kwargs,
-                "timestamp": message["timestamp"]
-            })
+        if hasattr(self, "broadcast_to_websockets"):
+            await self.broadcast_to_websockets(
+                {
+                    "type": "broadcast",
+                    "subject": subject,
+                    "data": kwargs,
+                    "timestamp": message["timestamp"],
+                }
+            )
 
         logger.debug(f"Broadcasted message: {subject}")
 
@@ -323,34 +327,39 @@ class PerformanceMixin:
     Mixin for performance optimization features
     """
 
-    def __init__(self, *args,
-                 enable_connection_pooling: bool = False,
-                 enable_batch_processing: bool = False,
-                 enable_metrics: bool = False,
-                 **kwargs):
+    def __init__(
+        self,
+        *args,
+        enable_connection_pooling: bool = False,
+        enable_batch_processing: bool = False,
+        enable_metrics: bool = False,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
 
         # Initialize performance features if requested
         if enable_connection_pooling:
             from ..performance.connection_pool import OptimizedNATSConnection
+
             self._connection_pool = OptimizedNATSConnection(
-                nats_url=self.config.nats_url,
-                max_connections=kwargs.get('connection_pool_size', 5)
+                nats_url=self.config.nats_url, max_connections=kwargs.get("connection_pool_size", 5)
             )
         else:
             self._connection_pool = None
 
         if enable_batch_processing:
             from ..performance.batch_processor import BatchProcessor
+
             self._batch_processor = BatchProcessor(
-                batch_size=kwargs.get('batch_size', 50),
-                batch_timeout_ms=kwargs.get('batch_timeout_ms', 25)
+                batch_size=kwargs.get("batch_size", 50),
+                batch_timeout_ms=kwargs.get("batch_timeout_ms", 25),
             )
         else:
             self._batch_processor = None
 
         if enable_metrics:
             from ..performance.metrics import PerformanceMetrics
+
             self._metrics = PerformanceMetrics()
         else:
             self._metrics = None

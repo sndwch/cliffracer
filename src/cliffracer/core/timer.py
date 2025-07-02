@@ -25,7 +25,7 @@ class Timer:
         interval: float,
         eager: bool = False,
         max_drift: float = 1.0,
-        error_backoff: float = 5.0
+        error_backoff: float = 5.0,
     ):
         """
         Initialize timer configuration.
@@ -58,7 +58,7 @@ class Timer:
         self.method_name = method.__name__
 
         # Add timer metadata to method
-        if not hasattr(method, '_cliffracer_timers'):
+        if not hasattr(method, "_cliffracer_timers"):
             method._cliffracer_timers = []
         method._cliffracer_timers.append(self)
 
@@ -127,10 +127,7 @@ class Timer:
                 # Wait for next execution or stop signal
                 if sleep_time > 0:
                     try:
-                        await asyncio.wait_for(
-                            self._stop_event.wait(),
-                            timeout=sleep_time
-                        )
+                        await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_time)
                         # Stop event was set
                         break
                     except TimeoutError:
@@ -180,36 +177,31 @@ class Timer:
             self.last_execution_time = execution_time
             self.total_execution_time += execution_time
 
-            logger.debug(
-                f"Timer method {self.method_name} completed in {execution_time:.3f}s"
-            )
+            logger.debug(f"Timer method {self.method_name} completed in {execution_time:.3f}s")
 
             # Record metrics if available
-            if hasattr(self.service_instance, '_metrics') and self.service_instance._metrics:
-                self.service_instance._metrics.increment_counter(f"timer_{self.method_name}_executions")
+            if hasattr(self.service_instance, "_metrics") and self.service_instance._metrics:
+                self.service_instance._metrics.increment_counter(
+                    f"timer_{self.method_name}_executions"
+                )
                 self.service_instance._metrics.record_custom_metric(
-                    f"timer_{self.method_name}_duration_ms",
-                    execution_time * 1000
+                    f"timer_{self.method_name}_duration_ms", execution_time * 1000
                 )
 
         except Exception as e:
             execution_time = time.time() - execution_start
             self.error_count += 1
 
-            logger.error(
-                f"Error executing timer method {self.method_name}: {e}",
-                exc_info=True
-            )
+            logger.error(f"Error executing timer method {self.method_name}: {e}", exc_info=True)
 
             # Record error metrics if available
-            if hasattr(self.service_instance, '_metrics') and self.service_instance._metrics:
+            if hasattr(self.service_instance, "_metrics") and self.service_instance._metrics:
                 self.service_instance._metrics.increment_counter(f"timer_{self.method_name}_errors")
 
     def get_stats(self) -> dict[str, Any]:
         """Get timer execution statistics"""
         avg_execution_time = (
-            self.total_execution_time / self.execution_count
-            if self.execution_count > 0 else 0.0
+            self.total_execution_time / self.execution_count if self.execution_count > 0 else 0.0
         )
 
         return {
@@ -222,7 +214,7 @@ class Timer:
             "last_execution_time": self.last_execution_time,
             "average_execution_time": avg_execution_time,
             "total_execution_time": self.total_execution_time,
-            "error_rate": (self.error_count / max(self.execution_count, 1)) * 100
+            "error_rate": (self.error_count / max(self.execution_count, 1)) * 100,
         }
 
 
@@ -246,6 +238,7 @@ def timer(interval: float, eager: bool = False, **kwargs) -> Callable:
         async def cleanup_cache(self):
             await self.remove_expired_entries()
     """
+
     def decorator(method: Callable) -> Callable:
         timer_instance = Timer(interval=interval, eager=eager, **kwargs)
         return timer_instance(method)

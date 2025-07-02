@@ -55,34 +55,34 @@ class CliffracerService:
         if self._handlers_discovered:
             return
         self._handlers_discovered = True
-        
+
         for name in dir(self):
-            if name.startswith('_'):
+            if name.startswith("_"):
                 continue
 
             method = getattr(self, name)
 
             # Discover RPC handlers
-            if hasattr(method, '_cliffracer_rpc'):
+            if hasattr(method, "_cliffracer_rpc"):
                 self._rpc_handlers[name] = method
                 logger.debug(f"Discovered RPC handler: {name}")
 
             # Discover event handlers
-            if hasattr(method, '_cliffracer_events'):
+            if hasattr(method, "_cliffracer_events"):
                 for pattern in method._cliffracer_events:
                     self._event_handlers[pattern] = method
                     logger.debug(f"Discovered event handler: {pattern}")
 
             # Discover timers
-            if hasattr(method, '_cliffracer_timers'):
+            if hasattr(method, "_cliffracer_timers"):
                 for timer_instance in method._cliffracer_timers:
                     self._timers.append(timer_instance)
                     logger.debug(f"Discovered timer: {timer_instance.method_name}")
 
             # Discover validated RPC handlers
-            if hasattr(method, '_cliffracer_validated_rpc'):
+            if hasattr(method, "_cliffracer_validated_rpc"):
                 schema = method._cliffracer_validated_rpc
-                if hasattr(self, 'register_validated_rpc'):
+                if hasattr(self, "register_validated_rpc"):
                     self.register_validated_rpc(name, method, schema)
                     logger.debug(f"Discovered validated RPC handler: {name}")
                 else:
@@ -91,9 +91,9 @@ class CliffracerService:
                     logger.debug(f"Discovered validated RPC handler (no validation): {name}")
 
             # Discover broadcast handlers
-            if hasattr(method, '_cliffracer_broadcast'):
+            if hasattr(method, "_cliffracer_broadcast"):
                 pattern = method._cliffracer_broadcast
-                if hasattr(self, 'register_broadcast_handler'):
+                if hasattr(self, "register_broadcast_handler"):
                     self.register_broadcast_handler(pattern, method)
                     logger.debug(f"Discovered broadcast handler: {pattern}")
                 else:
@@ -102,13 +102,15 @@ class CliffracerService:
                     logger.debug(f"Discovered broadcast handler (no broadcast): {pattern}")
 
             # Discover WebSocket handlers
-            if hasattr(method, '_cliffracer_websocket'):
+            if hasattr(method, "_cliffracer_websocket"):
                 path = method._cliffracer_websocket
-                if hasattr(self, 'register_websocket_handler'):
+                if hasattr(self, "register_websocket_handler"):
                     self.register_websocket_handler(path, method)
                     logger.debug(f"Discovered WebSocket handler: {path}")
                 else:
-                    logger.warning(f"WebSocket handler {name} found but no WebSocket mixin available")
+                    logger.warning(
+                        f"WebSocket handler {name} found but no WebSocket mixin available"
+                    )
 
     async def connect(self):
         """Connect to NATS server"""
@@ -143,16 +145,16 @@ class CliffracerService:
         """Start the service and all its features"""
         # Ensure handlers are discovered after all mixins are initialized
         self._discover_handlers()
-        
+
         await self.connect()
         self._running = True
 
         # Start performance features if available
-        if hasattr(self, 'start_performance_features'):
+        if hasattr(self, "start_performance_features"):
             await self.start_performance_features()
 
         # Start HTTP server if available
-        if hasattr(self, 'start_http'):
+        if hasattr(self, "start_http"):
             await self.start_http()
 
         # Start timers
@@ -177,11 +179,11 @@ class CliffracerService:
         await self._stop_timers()
 
         # Stop HTTP server if available
-        if hasattr(self, 'stop_http'):
+        if hasattr(self, "stop_http"):
             await self.stop_http()
 
         # Stop performance features if available
-        if hasattr(self, 'stop_performance_features'):
+        if hasattr(self, "stop_performance_features"):
             await self.stop_performance_features()
 
         # Cancel all subscriptions
@@ -214,7 +216,7 @@ class CliffracerService:
     async def _handle_rpc_request(self, msg):
         """Handle incoming RPC requests"""
         return await self._handle_rpc_request_base(msg)
-    
+
     async def _handle_rpc_request_base(self, msg):
         """Base RPC request handling"""
 
@@ -236,9 +238,9 @@ class CliffracerService:
             data = json.loads(msg.data.decode()) if msg.data else {}
 
             # Extract correlation ID from request
-            correlation_id = data.get('correlation_id')
-            if not correlation_id and hasattr(msg, 'headers') and msg.headers:
-                correlation_id = msg.headers.get('correlation_id')
+            correlation_id = data.get("correlation_id")
+            if not correlation_id and hasattr(msg, "headers") and msg.headers:
+                correlation_id = msg.headers.get("correlation_id")
             correlation_id = CorrelationContext.get_or_create_id(correlation_id)
             CorrelationContext.set(correlation_id)
 
@@ -246,12 +248,12 @@ class CliffracerService:
             logger.info(f"RPC request {handler_name} with correlation_id: {correlation_id}")
 
             # Inject correlation ID into handler kwargs
-            data['correlation_id'] = correlation_id
+            data["correlation_id"] = correlation_id
 
             # Call handler - remove correlation_id if handler doesn't accept it
             sig = inspect.signature(handler)
-            if 'correlation_id' not in sig.parameters:
-                data.pop('correlation_id', None)
+            if "correlation_id" not in sig.parameters:
+                data.pop("correlation_id", None)
 
             if inspect.iscoroutinefunction(handler):
                 result = await handler(**data)
@@ -262,18 +264,20 @@ class CliffracerService:
             response = {
                 "result": result,
                 "timestamp": datetime.now(UTC).isoformat(),
-                "correlation_id": correlation_id
+                "correlation_id": correlation_id,
             }
             await msg.respond(json.dumps(response).encode())
 
         except Exception as e:
             correlation_id = CorrelationContext.get()
-            logger.error(f"Error handling RPC request {handler_name} (correlation_id: {correlation_id}): {e}")
+            logger.error(
+                f"Error handling RPC request {handler_name} (correlation_id: {correlation_id}): {e}"
+            )
             error_response = {
                 "error": str(e),
                 "traceback": traceback.format_exc(),
                 "timestamp": datetime.now(UTC).isoformat(),
-                "correlation_id": correlation_id
+                "correlation_id": correlation_id,
             }
             await msg.respond(json.dumps(error_response).encode())
 
@@ -292,19 +296,19 @@ class CliffracerService:
             data = json.loads(msg.data.decode()) if msg.data else {}
 
             # Extract and set correlation ID
-            correlation_id = data.get('correlation_id')
-            if not correlation_id and hasattr(msg, 'headers') and msg.headers:
-                correlation_id = msg.headers.get('correlation_id')
+            correlation_id = data.get("correlation_id")
+            if not correlation_id and hasattr(msg, "headers") and msg.headers:
+                correlation_id = msg.headers.get("correlation_id")
             correlation_id = CorrelationContext.get_or_create_id(correlation_id)
             CorrelationContext.set(correlation_id)
 
             logger.info(f"Async request {handler_name} with correlation_id: {correlation_id}")
-            data['correlation_id'] = correlation_id
+            data["correlation_id"] = correlation_id
 
             # Remove correlation_id if handler doesn't accept it
             sig = inspect.signature(handler)
-            if 'correlation_id' not in sig.parameters:
-                data.pop('correlation_id', None)
+            if "correlation_id" not in sig.parameters:
+                data.pop("correlation_id", None)
 
             if inspect.iscoroutinefunction(handler):
                 await handler(**data)
@@ -313,7 +317,9 @@ class CliffracerService:
 
         except Exception as e:
             correlation_id = CorrelationContext.get()
-            logger.error(f"Error handling async request {handler_name} (correlation_id: {correlation_id}): {e}")
+            logger.error(
+                f"Error handling async request {handler_name} (correlation_id: {correlation_id}): {e}"
+            )
 
     async def _handle_event(self, msg):
         """Handle incoming events"""
@@ -333,21 +339,21 @@ class CliffracerService:
                 data = json.loads(msg.data.decode()) if msg.data else {}
 
                 # Extract and set correlation ID for events
-                correlation_id = data.get('correlation_id')
-                if not correlation_id and hasattr(msg, 'headers') and msg.headers:
-                    correlation_id = msg.headers.get('correlation_id')
+                correlation_id = data.get("correlation_id")
+                if not correlation_id and hasattr(msg, "headers") and msg.headers:
+                    correlation_id = msg.headers.get("correlation_id")
                 correlation_id = CorrelationContext.get_or_create_id(correlation_id)
                 CorrelationContext.set(correlation_id)
 
                 logger.info(f"Event {subject} with correlation_id: {correlation_id}")
-                data['correlation_id'] = correlation_id
+                data["correlation_id"] = correlation_id
 
                 # Check if handler accepts subject parameter
                 sig = inspect.signature(handler)
-                if 'subject' not in sig.parameters:
+                if "subject" not in sig.parameters:
                     # Don't pass subject if handler doesn't accept it
-                    if 'correlation_id' not in sig.parameters:
-                        data.pop('correlation_id', None)
+                    if "correlation_id" not in sig.parameters:
+                        data.pop("correlation_id", None)
 
                     if inspect.iscoroutinefunction(handler):
                         await handler(**data)
@@ -355,8 +361,8 @@ class CliffracerService:
                         handler(**data)
                 else:
                     # Pass subject if handler accepts it
-                    if 'correlation_id' not in sig.parameters:
-                        data.pop('correlation_id', None)
+                    if "correlation_id" not in sig.parameters:
+                        data.pop("correlation_id", None)
 
                     if inspect.iscoroutinefunction(handler):
                         await handler(subject=subject, **data)
@@ -365,7 +371,9 @@ class CliffracerService:
 
             except Exception as e:
                 correlation_id = CorrelationContext.get()
-                logger.error(f"Error handling event {subject} (correlation_id: {correlation_id}): {e}")
+                logger.error(
+                    f"Error handling event {subject} (correlation_id: {correlation_id}): {e}"
+                )
 
     def _subject_matches(self, pattern: str, subject: str) -> bool:
         """Check if subject matches pattern (supports wildcards)"""
@@ -408,7 +416,7 @@ class CliffracerService:
         """Get statistics for all timers"""
         return {
             "timer_count": len(self._timers),
-            "timers": [timer.get_stats() for timer in self._timers]
+            "timers": [timer.get_stats() for timer in self._timers],
         }
 
     # Backdoor server management
@@ -419,10 +427,11 @@ class CliffracerService:
 
         try:
             from ..debug.backdoor import BackdoorServer
+
             self._backdoor_server = BackdoorServer(
                 service_instance=self,
                 port=self.config.backdoor_port,
-                password=self.config.backdoor_password
+                password=self.config.backdoor_password,
             )
             self._backdoor_server.start()
             logger.info(f"Backdoor server started on localhost:{self._backdoor_server.port}")
@@ -457,8 +466,8 @@ class CliffracerService:
             "rpc": len(self._rpc_handlers),
             "events": len(self._event_handlers),
             "timers": len(self._timers),
-            "websockets": len(getattr(self, '_websocket_handlers', {})),
-            "broadcasts": len(getattr(self, '_broadcast_handlers', {}))
+            "websockets": len(getattr(self, "_websocket_handlers", {})),
+            "broadcasts": len(getattr(self, "_broadcast_handlers", {})),
         }
 
     # RPC client methods
@@ -467,10 +476,12 @@ class CliffracerService:
         subject = f"{service}.rpc.{method}"
 
         # Inject correlation ID if not present
-        if 'correlation_id' not in kwargs:
-            kwargs['correlation_id'] = CorrelationContext.get() or CorrelationContext.get_or_create_id()
+        if "correlation_id" not in kwargs:
+            kwargs["correlation_id"] = (
+                CorrelationContext.get() or CorrelationContext.get_or_create_id()
+            )
 
-        correlation_id = kwargs['correlation_id']
+        correlation_id = kwargs["correlation_id"]
         logger.info(f"Calling RPC {service}.{method} with correlation_id: {correlation_id}")
 
         request_data = json.dumps(kwargs).encode()
@@ -488,7 +499,9 @@ class CliffracerService:
             return response_data.get("result")
 
         except TimeoutError as e:
-            logger.error(f"RPC timeout calling {service}.{method} (correlation_id: {correlation_id})")
+            logger.error(
+                f"RPC timeout calling {service}.{method} (correlation_id: {correlation_id})"
+            )
             raise Exception(f"RPC timeout calling {service}.{method}") from e
 
     async def call_async(self, service: str, method: str, **kwargs):
@@ -496,10 +509,14 @@ class CliffracerService:
         subject = f"{service}.async.{method}"
 
         # Inject correlation ID if not present
-        if 'correlation_id' not in kwargs:
-            kwargs['correlation_id'] = CorrelationContext.get() or CorrelationContext.get_or_create_id()
+        if "correlation_id" not in kwargs:
+            kwargs["correlation_id"] = (
+                CorrelationContext.get() or CorrelationContext.get_or_create_id()
+            )
 
-        logger.info(f"Calling async {service}.{method} with correlation_id: {kwargs['correlation_id']}")
+        logger.info(
+            f"Calling async {service}.{method} with correlation_id: {kwargs['correlation_id']}"
+        )
 
         request_data = json.dumps(kwargs).encode()
         await self.nc.publish(subject, request_data)
@@ -507,26 +524,30 @@ class CliffracerService:
     async def call_rpc_no_wait(self, service: str, method: str, **kwargs):
         """
         Call an RPC method without waiting for response (fire-and-forget)
-        
+
         Args:
             service: Target service name
             method: RPC method name
             **kwargs: Method arguments
         """
         subject = f"{service}.rpc.{method}"
-        
+
         # Inject correlation ID if not present
-        if 'correlation_id' not in kwargs:
-            kwargs['correlation_id'] = CorrelationContext.get() or CorrelationContext.get_or_create_id()
-            
+        if "correlation_id" not in kwargs:
+            kwargs["correlation_id"] = (
+                CorrelationContext.get() or CorrelationContext.get_or_create_id()
+            )
+
         request_data = json.dumps(kwargs).encode()
         await self.nc.publish(subject, request_data)
 
     async def publish_event(self, subject: str, **kwargs):
         """Publish an event"""
         # Inject correlation ID if not present
-        if 'correlation_id' not in kwargs:
-            kwargs['correlation_id'] = CorrelationContext.get() or CorrelationContext.get_or_create_id()
+        if "correlation_id" not in kwargs:
+            kwargs["correlation_id"] = (
+                CorrelationContext.get() or CorrelationContext.get_or_create_id()
+            )
 
         logger.info(f"Publishing event {subject} with correlation_id: {kwargs['correlation_id']}")
 
@@ -540,15 +561,15 @@ class CliffracerService:
             "status": "healthy" if self._running else "stopped",
             "timestamp": datetime.now(UTC).isoformat(),
             "nats_connected": self.nc and not self.nc.is_closed,
-            "features": self._get_feature_counts()
+            "features": self._get_feature_counts(),
         }
 
         # Add WebSocket stats if available
-        if hasattr(self, 'get_websocket_stats'):
+        if hasattr(self, "get_websocket_stats"):
             health["websockets"] = self.get_websocket_stats()
 
         # Add performance metrics if available
-        if hasattr(self, 'get_performance_metrics'):
+        if hasattr(self, "get_performance_metrics"):
             try:
                 health["performance"] = self.get_performance_metrics()
             except Exception:
@@ -571,10 +592,10 @@ class CliffracerService:
         }
 
         # Add feature-specific info
-        if hasattr(self, '_websocket_handlers'):
+        if hasattr(self, "_websocket_handlers"):
             info["websocket_handlers"] = list(self._websocket_handlers.keys())
 
-        if hasattr(self, '_broadcast_handlers'):
+        if hasattr(self, "_broadcast_handlers"):
             info["broadcast_patterns"] = list(self._broadcast_handlers.keys())
 
         return info
@@ -583,21 +604,25 @@ class CliffracerService:
 # Pre-configured service classes using mixins
 class NATSService(CliffracerService):
     """Basic NATS service - just core functionality"""
+
     pass
 
 
 class ValidatedNATSService(ValidationMixin, CliffracerService):
     """NATS service with schema validation"""
+
     pass
 
 
 class HTTPNATSService(HTTPMixin, CliffracerService):
     """NATS service with HTTP/REST API"""
+
     pass
 
 
 class WebSocketNATSService(WebSocketMixin, HTTPMixin, CliffracerService):
     """NATS service with WebSocket support (requires HTTP)"""
+
     def __init__(self, config: ServiceConfig, **kwargs):
         # Initialize all parent classes first
         super().__init__(config, **kwargs)
@@ -607,23 +632,21 @@ class WebSocketNATSService(WebSocketMixin, HTTPMixin, CliffracerService):
 
 class BroadcastNATSService(BroadcastMixin, CliffracerService):
     """NATS service with broadcast messaging"""
+
     pass
 
 
 class FullFeaturedService(
-    PerformanceMixin,
-    BroadcastMixin,
-    WebSocketMixin,
-    HTTPMixin,
-    ValidationMixin,
-    CliffracerService
+    PerformanceMixin, BroadcastMixin, WebSocketMixin, HTTPMixin, ValidationMixin, CliffracerService
 ):
     """Service with all features enabled"""
+
     pass
 
 
 class HighPerformanceService(PerformanceMixin, CliffracerService):
     """Service optimized for high performance"""
+
     pass
 
 

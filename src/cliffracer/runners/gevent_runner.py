@@ -51,8 +51,7 @@ class GeventServiceRunner:
     def _create_service_instance(self) -> CliffracerService:
         """Create a new service instance with config"""
         service_config = ServiceConfig(
-            name=f"{self.service_class.__name__}",
-            nats_url=self.config.nats_url
+            name=f"{self.service_class.__name__}", nats_url=self.config.nats_url
         )
         return self.service_class(service_config)
 
@@ -113,7 +112,7 @@ class GeventServiceRunner:
         for service in self.workers:
             try:
                 # Services should implement graceful shutdown
-                if hasattr(service, 'stop'):
+                if hasattr(service, "stop"):
                     service.stop()
             except Exception as e:
                 logger.error(f"Error stopping service: {e}")
@@ -152,7 +151,7 @@ class GeventRPCHandler:
         if handler_name not in self.service._rpc_handlers:
             error_response = {
                 "error": f"Unknown method: {handler_name}",
-                "worker_id": getattr(self.service, 'worker_id', 'unknown')
+                "worker_id": getattr(self.service, "worker_id", "unknown"),
             }
             msg.respond(json.dumps(error_response).encode())
             return
@@ -172,7 +171,7 @@ class GeventRPCHandler:
             # Send response
             response = {
                 "result": result,
-                "worker_id": getattr(self.service, 'worker_id', 'unknown')
+                "worker_id": getattr(self.service, "worker_id", "unknown"),
             }
             msg.respond(json.dumps(response).encode())
 
@@ -180,7 +179,7 @@ class GeventRPCHandler:
             logger.error(f"RPC handler error: {e}")
             error_response = {
                 "error": str(e),
-                "worker_id": getattr(self.service, 'worker_id', 'unknown')
+                "worker_id": getattr(self.service, "worker_id", "unknown"),
             }
             msg.respond(json.dumps(error_response).encode())
 
@@ -206,10 +205,12 @@ class ExampleCPUBoundService(CliffracerService):
     @property
     def rpc(self):
         """RPC decorator that works with gevent"""
+
         def decorator(func):
             # Register handler normally
             self._rpc_handlers[func.__name__] = func
             return func
+
         return decorator
 
     @rpc
@@ -222,7 +223,7 @@ class ExampleCPUBoundService(CliffracerService):
         return {
             "result": result,
             "iterations": iterations,
-            "worker_id": getattr(self, 'worker_id', 'unknown')
+            "worker_id": getattr(self, "worker_id", "unknown"),
         }
 
     @rpc
@@ -234,14 +235,10 @@ class ExampleCPUBoundService(CliffracerService):
         return {
             "status_code": response.status_code,
             "content_length": len(response.content),
-            "worker_id": getattr(self, 'worker_id', 'unknown')
+            "worker_id": getattr(self, "worker_id", "unknown"),
         }
 
 
 if __name__ == "__main__":
     # Example usage
-    run_service_with_gevent(
-        ExampleCPUBoundService,
-        max_workers=5,
-        nats_url="nats://localhost:4222"
-    )
+    run_service_with_gevent(ExampleCPUBoundService, max_workers=5, nats_url="nats://localhost:4222")

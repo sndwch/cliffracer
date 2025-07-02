@@ -6,10 +6,7 @@ from cliffracer import CliffracerService, ServiceConfig, rpc
 
 class ExampleService(CliffracerService):
     def __init__(self):
-        config = ServiceConfig(
-            name="example_service",
-            nats_url="nats://localhost:4222"
-        )
+        config = ServiceConfig(name="example_service", nats_url="nats://localhost:4222")
         super().__init__(config)
 
     @rpc
@@ -19,6 +16,7 @@ class ExampleService(CliffracerService):
     @rpc
     async def add(self, a: int, b: int) -> int:
         return a + b
+
 
 if __name__ == "__main__":
     service = ExampleService()

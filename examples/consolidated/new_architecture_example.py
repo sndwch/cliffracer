@@ -62,10 +62,7 @@ class ComprehensiveService(FullFeaturedService):
     """
 
     def __init__(self):
-        config = ServiceConfig(
-            name="comprehensive_service",
-            nats_url="nats://localhost:4222"
-        )
+        config = ServiceConfig(name="comprehensive_service", nats_url="nats://localhost:4222")
         super().__init__(
             config,
             host="0.0.0.0",
@@ -73,7 +70,7 @@ class ComprehensiveService(FullFeaturedService):
             # Performance features
             enable_connection_pooling=True,
             enable_batch_processing=True,
-            enable_metrics=True
+            enable_metrics=True,
         )
 
         self.users = {}  # Simple in-memory storage
@@ -103,24 +100,16 @@ class ComprehensiveService(FullFeaturedService):
             "username": request.username,
             "email": request.email,
             "full_name": request.full_name,
-            "created_at": datetime.now(UTC).isoformat()
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
         self.users[user_id] = user_data
         self.stats["rpc_calls"] += 1
 
         # Publish user creation event
-        await self.broadcast_message(
-            "user.created",
-            user_id=user_id,
-            username=request.username
-        )
+        await self.broadcast_message("user.created", user_id=user_id, username=request.username)
 
-        return UserResponse(
-            user_id=user_id,
-            username=request.username,
-            status="created"
-        )
+        return UserResponse(user_id=user_id, username=request.username, status="created")
 
     @rpc
     @cache_result(ttl_seconds=30)
@@ -139,7 +128,7 @@ class ComprehensiveService(FullFeaturedService):
             "total_users": len(self.users),
             "service_stats": self.stats,
             "performance_metrics": self.get_performance_metrics(),
-            "timer_stats": self.get_timer_stats()
+            "timer_stats": self.get_timer_stats(),
         }
 
     # === HTTP Endpoints ===
@@ -151,6 +140,7 @@ class ComprehensiveService(FullFeaturedService):
             return await self.get_user(user_id)
         except ValidationError as e:
             from fastapi import HTTPException
+
             raise HTTPException(status_code=404, detail=str(e)) from e
 
     @post("/users")
@@ -160,6 +150,7 @@ class ComprehensiveService(FullFeaturedService):
             return await self.create_user(user_request)
         except Exception as e:
             from fastapi import HTTPException
+
             raise HTTPException(status_code=400, detail=str(e)) from e
 
     # === Event Handlers ===
@@ -176,7 +167,7 @@ class ComprehensiveService(FullFeaturedService):
         alert_message = {
             "type": "system_alert",
             "data": data,
-            "timestamp": datetime.now(UTC).isoformat()
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         # Broadcast to all WebSocket connections
@@ -193,7 +184,7 @@ class ComprehensiveService(FullFeaturedService):
             "status": "healthy",
             "users_count": len(self.users),
             "memory_usage": "normal",
-            "timestamp": datetime.now(UTC).isoformat()
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         # Publish health status
@@ -210,7 +201,7 @@ class ComprehensiveService(FullFeaturedService):
             "total_users": len(self.users),
             "rpc_calls": self.stats["rpc_calls"],
             "events_processed": self.stats["events_sent"],
-            "timestamp": datetime.now(UTC).isoformat()
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         await self.publish_event("metrics.collected", **metrics)
@@ -233,7 +224,7 @@ class ComprehensiveService(FullFeaturedService):
         welcome = {
             "type": "welcome",
             "message": "Connected to Comprehensive Service",
-            "timestamp": datetime.now(UTC).isoformat()
+            "timestamp": datetime.now(UTC).isoformat(),
         }
         await websocket.send_json(welcome)
 
@@ -246,7 +237,7 @@ class ComprehensiveService(FullFeaturedService):
                 response = {
                     "type": "echo",
                     "original": message,
-                    "timestamp": datetime.now(UTC).isoformat()
+                    "timestamp": datetime.now(UTC).isoformat(),
                 }
                 await websocket.send_json(response)
 
@@ -298,8 +289,10 @@ async def main():
 
             # Show some stats periodically
             stats = await service.get_stats()
-            print(f"📊 Current stats: {stats['total_users']} users, "
-                  f"{stats['service_stats']['rpc_calls']} RPC calls")
+            print(
+                f"📊 Current stats: {stats['total_users']} users, "
+                f"{stats['service_stats']['rpc_calls']} RPC calls"
+            )
 
     except KeyboardInterrupt:
         print("\n⏹️  Stopping service...")

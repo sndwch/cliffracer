@@ -8,7 +8,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..core.consolidated_service import HTTPNATSService
 from ..core.service_config import ServiceConfig
-
 from .framework import (
     AuthenticationError,
     Permission,

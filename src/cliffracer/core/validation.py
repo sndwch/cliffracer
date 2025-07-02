@@ -10,11 +10,12 @@ from typing import Any, TypeVar
 from loguru import logger
 from pydantic import BaseModel, Field, validator
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class ValidationError(ValueError):
     """Raised when validation fails"""
+
     pass
 
 
@@ -148,9 +149,7 @@ def validate_limit(limit: int, min_limit: int = None, max_limit: int = None) -> 
     max_limit = max_limit or NumericBounds.MAX_LIMIT
 
     if limit < min_limit or limit > max_limit:
-        raise ValidationError(
-            f"Limit must be between {min_limit} and {max_limit}, got {limit}"
-        )
+        raise ValidationError(f"Limit must be between {min_limit} and {max_limit}, got {limit}")
 
     return limit
 
@@ -203,10 +202,7 @@ def validate_batch_size(batch_size: int) -> int:
 
 
 def validate_string_length(
-    value: str,
-    min_length: int = None,
-    max_length: int = None,
-    field_name: str = "String"
+    value: str, min_length: int = None, max_length: int = None, field_name: str = "String"
 ) -> str:
     """
     Validate string length.
@@ -234,9 +230,7 @@ def validate_string_length(
         )
 
     if max_length is not None and length > max_length:
-        raise ValidationError(
-            f"{field_name} must be at most {max_length} characters, got {length}"
-        )
+        raise ValidationError(f"{field_name} must be at most {max_length} characters, got {length}")
 
     return value
 
@@ -258,11 +252,11 @@ def validate_username(username: str) -> str:
         username,
         min_length=StringLimits.MIN_USERNAME_LENGTH,
         max_length=StringLimits.MAX_USERNAME_LENGTH,
-        field_name="Username"
+        field_name="Username",
     )
 
     # Additional username validation
-    if not username.replace('_', '').replace('-', '').replace('.', '').isalnum():
+    if not username.replace("_", "").replace("-", "").replace(".", "").isalnum():
         raise ValidationError(
             "Username can only contain letters, numbers, underscores, hyphens, and dots"
         )
@@ -287,7 +281,7 @@ def validate_password(password: str) -> str:
         password,
         min_length=StringLimits.MIN_PASSWORD_LENGTH,
         max_length=StringLimits.MAX_PASSWORD_LENGTH,
-        field_name="Password"
+        field_name="Password",
     )
 
 
@@ -313,12 +307,10 @@ def validate_sql_identifier(identifier: str, identifier_type: str = "identifier"
     # Check length
     max_length = StringLimits.MAX_TABLE_NAME_LENGTH
     if len(identifier) > max_length:
-        raise ValidationError(
-            f"SQL {identifier_type} too long: {len(identifier)} > {max_length}"
-        )
+        raise ValidationError(f"SQL {identifier_type} too long: {len(identifier)} > {max_length}")
 
     # Check valid characters (letters, numbers, underscores)
-    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', identifier):
+    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", identifier):
         raise ValidationError(
             f"SQL {identifier_type} '{identifier}' contains invalid characters. "
             "Must start with letter or underscore and contain only letters, numbers, and underscores."
@@ -326,15 +318,29 @@ def validate_sql_identifier(identifier: str, identifier_type: str = "identifier"
 
     # Check against SQL reserved words (basic list)
     reserved_words = {
-        'select', 'insert', 'update', 'delete', 'drop', 'create',
-        'alter', 'table', 'from', 'where', 'and', 'or', 'not',
-        'union', 'join', 'order', 'group', 'having', 'limit'
+        "select",
+        "insert",
+        "update",
+        "delete",
+        "drop",
+        "create",
+        "alter",
+        "table",
+        "from",
+        "where",
+        "and",
+        "or",
+        "not",
+        "union",
+        "join",
+        "order",
+        "group",
+        "having",
+        "limit",
     }
 
     if identifier.lower() in reserved_words:
-        raise ValidationError(
-            f"SQL {identifier_type} '{identifier}' is a reserved word"
-        )
+        raise ValidationError(f"SQL {identifier_type} '{identifier}' is a reserved word")
 
     return identifier
 
@@ -387,6 +393,7 @@ def validate_list_not_empty(value: list, field_name: str = "List") -> list:
 
 # Pydantic models for complex validation
 
+
 class PaginationParams(BaseModel):
     """Validated pagination parameters"""
 
@@ -394,13 +401,9 @@ class PaginationParams(BaseModel):
         default=NumericBounds.DEFAULT_LIMIT,
         ge=NumericBounds.MIN_LIMIT,
         le=NumericBounds.MAX_LIMIT,
-        description="Number of items to return"
+        description="Number of items to return",
     )
-    offset: int = Field(
-        default=0,
-        ge=0,
-        description="Number of items to skip"
-    )
+    offset: int = Field(default=0, ge=0, description="Number of items to skip")
 
 
 class BatchConfig(BaseModel):
@@ -410,19 +413,14 @@ class BatchConfig(BaseModel):
         default=NumericBounds.DEFAULT_BATCH_SIZE,
         ge=NumericBounds.MIN_BATCH_SIZE,
         le=NumericBounds.MAX_BATCH_SIZE,
-        description="Maximum items per batch"
+        description="Maximum items per batch",
     )
-    batch_timeout_ms: int = Field(
-        default=50,
-        ge=1,
-        le=60000,
-        description="Timeout in milliseconds"
-    )
+    batch_timeout_ms: int = Field(default=50, ge=1, le=60000, description="Timeout in milliseconds")
     max_concurrent_batches: int = Field(
         default=NumericBounds.DEFAULT_CONCURRENT,
         ge=NumericBounds.MIN_CONCURRENT,
         le=NumericBounds.MAX_CONCURRENT,
-        description="Maximum concurrent batch processes"
+        description="Maximum concurrent batch processes",
     )
 
 
@@ -431,17 +429,17 @@ class ServerConfig(BaseModel):
 
     host: str = Field(
         default="0.0.0.0",
-        pattern=r'^(\d{1,3}\.){3}\d{1,3}$|^localhost$|^[a-zA-Z0-9.-]+$',
-        description="Server host address"
+        pattern=r"^(\d{1,3}\.){3}\d{1,3}$|^localhost$|^[a-zA-Z0-9.-]+$",
+        description="Server host address",
     )
     port: int = Field(
         default=8000,
         ge=NumericBounds.MIN_PORT,
         le=NumericBounds.MAX_PORT,
-        description="Server port"
+        description="Server port",
     )
 
-    @validator('port')
+    @validator("port")
     def validate_port_not_privileged(cls, v):
         """Warn if using privileged port"""
         if v < 1024:
@@ -467,6 +465,6 @@ def sanitize_for_logging(value: Any, max_length: int = 100) -> str:
         str_value = str_value[:max_length] + "..."
 
     # Remove potential control characters
-    str_value = ''.join(char for char in str_value if char.isprintable() or char.isspace())
+    str_value = "".join(char for char in str_value if char.isprintable() or char.isspace())
 
     return str_value

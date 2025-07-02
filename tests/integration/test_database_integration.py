@@ -111,10 +111,7 @@ class TestDatabaseIntegration:
 
         # Create
         user = User(
-            user_id="test_user_123",
-            email="testuser@example.com",
-            name="Test User",
-            status="active"
+            user_id="test_user_123", email="testuser@example.com", name="Test User", status="active"
         )
         created_user = await user_repo.create(user)
         assert created_user.id == user.id
@@ -127,9 +124,7 @@ class TestDatabaseIntegration:
 
         # Update
         updated_user = await user_repo.update(
-            created_user.id,
-            name="Updated Test User",
-            status="inactive"
+            created_user.id, name="Updated Test User", status="inactive"
         )
         assert updated_user.name == "Updated Test User"
         assert updated_user.status == "inactive"
@@ -158,7 +153,7 @@ class TestDatabaseIntegration:
                 name=f"Product {i}",
                 price=10.99 + i,
                 quantity=100 - (i * 10),
-                description=f"Description for product {i}"
+                description=f"Description for product {i}",
             )
             created = await product_repo.create(product)
             products.append(created)
@@ -166,12 +161,12 @@ class TestDatabaseIntegration:
         # List products
         all_products = await product_repo.list(limit=10)
         assert len(all_products) == 5
-        
+
         # Find by criteria - test with a string field that works reliably
         specific_product = await product_repo.find_by(product_id="PROD_002")
         assert len(specific_product) == 1
         assert specific_product[0].name == "Product 2"
-        
+
         # For float comparisons, the database stores as NUMERIC/Decimal
         # but Python uses float, causing precision issues
         # Let's test with quantity (integer) instead
@@ -197,36 +192,30 @@ class TestDatabaseIntegration:
         product_repo = Repository(Product, db)
 
         # Create test data
-        user = await user_repo.create(User(
-            user_id="order_test_user",
-            email="orderuser@example.com",
-            name="Order Test User"
-        ))
+        user = await user_repo.create(
+            User(user_id="order_test_user", email="orderuser@example.com", name="Order Test User")
+        )
 
-        product = await product_repo.create(Product(
-            product_id="ORDER_PROD_001",
-            name="Test Product",
-            price=29.99,
-            quantity=50
-        ))
+        product = await product_repo.create(
+            Product(product_id="ORDER_PROD_001", name="Test Product", price=29.99, quantity=50)
+        )
 
         # Test transaction - successful case
         async with db.transaction():
             # Create order
-            await order_repo.create(Order(
-                order_id="ORD_001",
-                user_id=user.user_id,
-                total_amount=29.99,
-                status="pending",
-                shipping_address="123 Test St",
-                email=user.email
-            ))
+            await order_repo.create(
+                Order(
+                    order_id="ORD_001",
+                    user_id=user.user_id,
+                    total_amount=29.99,
+                    status="pending",
+                    shipping_address="123 Test St",
+                    email=user.email,
+                )
+            )
 
             # Update product quantity
-            await product_repo.update(
-                product.id,
-                quantity=product.quantity - 1
-            )
+            await product_repo.update(product.id, quantity=product.quantity - 1)
 
         # Verify both operations succeeded
         created_order = await order_repo.find_one(order_id="ORD_001")
@@ -240,20 +229,19 @@ class TestDatabaseIntegration:
         try:
             async with db.transaction():
                 # Create another order
-                await order_repo.create(Order(
-                    order_id="ORD_002",
-                    user_id=user.user_id,
-                    total_amount=29.99,
-                    status="pending",
-                    shipping_address="456 Test Ave",
-                    email=user.email
-                ))
+                await order_repo.create(
+                    Order(
+                        order_id="ORD_002",
+                        user_id=user.user_id,
+                        total_amount=29.99,
+                        status="pending",
+                        shipping_address="456 Test Ave",
+                        email=user.email,
+                    )
+                )
 
                 # This should fail due to negative quantity
-                await db.execute(
-                    "UPDATE products SET quantity = -1 WHERE id = $1",
-                    product.id
-                )
+                await db.execute("UPDATE products SET quantity = -1 WHERE id = $1", product.id)
 
                 # Force an error
                 raise ValueError("Simulated error")
@@ -278,7 +266,7 @@ class TestDatabaseIntegration:
             user = User(
                 user_id=f"concurrent_user_{index}",
                 email=f"concurrent{index}@example.com",
-                name=f"Concurrent User {index}"
+                name=f"Concurrent User {index}",
             )
             return await user_repo.create(user)
 
@@ -311,16 +299,13 @@ class TestDatabaseIntegration:
             user_id="verify_user",
             email="verify@example.com",
             name="Verification User",
-            status="pending"
+            status="pending",
         )
 
         created = await user_repo.create(user)
 
         # Fetch directly from database to verify all columns
-        record = await db.fetchrow(
-            "SELECT * FROM users WHERE id = $1",
-            created.id
-        )
+        record = await db.fetchrow("SELECT * FROM users WHERE id = $1", created.id)
 
         # Verify all columns are populated
         assert record["id"] == created.id
@@ -340,10 +325,7 @@ class TestDatabaseIntegration:
 
         await user_repo.update(created.id, status="active")
 
-        updated_record = await db.fetchrow(
-            "SELECT * FROM users WHERE id = $1",
-            created.id
-        )
+        updated_record = await db.fetchrow("SELECT * FROM users WHERE id = $1", created.id)
 
         assert updated_record["status"] == "active"
         assert updated_record["updated_at"] > record["updated_at"]

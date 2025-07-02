@@ -42,7 +42,7 @@ class PerformanceMetrics:
             "total_connections": 0,
             "active_connections": 0,
             "failed_connections": 0,
-            "reconnections": 0
+            "reconnections": 0,
         }
 
         # Custom metrics
@@ -54,7 +54,7 @@ class PerformanceMetrics:
             "max_latency_ms": 10.0,
             "min_success_rate": 99.0,
             "max_memory_mb": 500.0,
-            "min_throughput_rps": 100.0
+            "min_throughput_rps": 100.0,
         }
 
     def record_latency(self, latency_ms: float, success: bool = True, timeout: bool = False):
@@ -62,12 +62,14 @@ class PerformanceMetrics:
         current_time = time.time()
 
         # Record latency
-        self._latencies.append({
-            "latency_ms": latency_ms,
-            "timestamp": current_time,
-            "success": success,
-            "timeout": timeout
-        })
+        self._latencies.append(
+            {
+                "latency_ms": latency_ms,
+                "timestamp": current_time,
+                "success": success,
+                "timeout": timeout,
+            }
+        )
 
         # Update request counts
         if timeout:
@@ -88,17 +90,11 @@ class PerformanceMetrics:
 
     def record_memory_usage(self, memory_mb: float):
         """Record memory usage sample"""
-        self._memory_samples.append({
-            "memory_mb": memory_mb,
-            "timestamp": time.time()
-        })
+        self._memory_samples.append({"memory_mb": memory_mb, "timestamp": time.time()})
 
     def record_cpu_usage(self, cpu_percent: float):
         """Record CPU usage sample"""
-        self._cpu_samples.append({
-            "cpu_percent": cpu_percent,
-            "timestamp": time.time()
-        })
+        self._cpu_samples.append({"cpu_percent": cpu_percent, "timestamp": time.time()})
 
     def record_connection_event(self, event_type: str):
         """Record connection-related events"""
@@ -111,10 +107,7 @@ class PerformanceMetrics:
 
     def set_gauge(self, name: str, value: float):
         """Set a custom gauge metric"""
-        self._custom_metrics[name] = {
-            "value": value,
-            "timestamp": time.time()
-        }
+        self._custom_metrics[name] = {"value": value, "timestamp": time.time()}
 
     def get_latency_stats(self) -> dict[str, Any]:
         """Get latency statistics"""
@@ -122,7 +115,9 @@ class PerformanceMetrics:
             return {"error": "No latency data available"}
 
         latencies = [metric["latency_ms"] for metric in self._latencies]
-        successful_latencies = [metric["latency_ms"] for metric in self._latencies if metric["success"]]
+        successful_latencies = [
+            metric["latency_ms"] for metric in self._latencies if metric["success"]
+        ]
 
         return {
             "count": len(latencies),
@@ -135,7 +130,10 @@ class PerformanceMetrics:
             "success_count": len(successful_latencies),
             "success_rate_percent": (len(successful_latencies) / len(latencies)) * 100,
             "sub_millisecond_count": len([latency for latency in latencies if latency < 1.0]),
-            "sub_millisecond_percent": (len([latency for latency in latencies if latency < 1.0]) / len(latencies)) * 100
+            "sub_millisecond_percent": (
+                len([latency for latency in latencies if latency < 1.0]) / len(latencies)
+            )
+            * 100,
         }
 
     def get_throughput_stats(self) -> dict[str, Any]:
@@ -159,15 +157,14 @@ class PerformanceMetrics:
             "success_requests": self._request_counts["success"],
             "error_requests": self._request_counts["error"],
             "timeout_requests": self._request_counts["timeout"],
-            "success_rate_percent": (self._request_counts["success"] / total_requests * 100) if total_requests > 0 else 0
+            "success_rate_percent": (self._request_counts["success"] / total_requests * 100)
+            if total_requests > 0
+            else 0,
         }
 
     def get_resource_stats(self) -> dict[str, Any]:
         """Get resource usage statistics"""
-        stats = {
-            "memory": {"error": "No memory data"},
-            "cpu": {"error": "No CPU data"}
-        }
+        stats = {"memory": {"error": "No memory data"}, "cpu": {"error": "No CPU data"}}
 
         if self._memory_samples:
             memory_values = [s["memory_mb"] for s in self._memory_samples]
@@ -175,7 +172,7 @@ class PerformanceMetrics:
                 "current_mb": memory_values[-1],
                 "average_mb": sum(memory_values) / len(memory_values),
                 "max_mb": max(memory_values),
-                "min_mb": min(memory_values)
+                "min_mb": min(memory_values),
             }
 
         if self._cpu_samples:
@@ -184,7 +181,7 @@ class PerformanceMetrics:
                 "current_percent": cpu_values[-1],
                 "average_percent": sum(cpu_values) / len(cpu_values),
                 "max_percent": max(cpu_values),
-                "min_percent": min(cpu_values)
+                "min_percent": min(cpu_values),
             }
 
         return stats
@@ -195,10 +192,7 @@ class PerformanceMetrics:
 
     def get_custom_metrics(self) -> dict[str, Any]:
         """Get custom metrics and counters"""
-        return {
-            "gauges": self._custom_metrics.copy(),
-            "counters": self._counters.copy()
-        }
+        return {"gauges": self._custom_metrics.copy(), "counters": self._counters.copy()}
 
     def check_performance_targets(self) -> dict[str, Any]:
         """Check if performance targets are being met"""
@@ -213,7 +207,7 @@ class PerformanceMetrics:
             checks["latency"] = {
                 "target": self.targets["max_latency_ms"],
                 "actual": latency_stats["p95_ms"],
-                "passing": latency_stats["p95_ms"] <= self.targets["max_latency_ms"]
+                "passing": latency_stats["p95_ms"] <= self.targets["max_latency_ms"],
             }
 
         # Success rate check
@@ -221,14 +215,15 @@ class PerformanceMetrics:
             checks["success_rate"] = {
                 "target": self.targets["min_success_rate"],
                 "actual": latency_stats["success_rate_percent"],
-                "passing": latency_stats["success_rate_percent"] >= self.targets["min_success_rate"]
+                "passing": latency_stats["success_rate_percent"]
+                >= self.targets["min_success_rate"],
             }
 
         # Throughput check
         checks["throughput"] = {
             "target": self.targets["min_throughput_rps"],
             "actual": throughput_stats["average_rps"],
-            "passing": throughput_stats["average_rps"] >= self.targets["min_throughput_rps"]
+            "passing": throughput_stats["average_rps"] >= self.targets["min_throughput_rps"],
         }
 
         # Memory check
@@ -236,7 +231,7 @@ class PerformanceMetrics:
             checks["memory"] = {
                 "target": self.targets["max_memory_mb"],
                 "actual": resource_stats["memory"]["current_mb"],
-                "passing": resource_stats["memory"]["current_mb"] <= self.targets["max_memory_mb"]
+                "passing": resource_stats["memory"]["current_mb"] <= self.targets["max_memory_mb"],
             }
 
         # Overall status
@@ -244,7 +239,7 @@ class PerformanceMetrics:
         checks["overall"] = {
             "passing": all(passing_checks),
             "checks_passed": sum(passing_checks),
-            "total_checks": len(passing_checks)
+            "total_checks": len(passing_checks),
         }
 
         return checks
@@ -259,7 +254,7 @@ class PerformanceMetrics:
             "connections": self.get_connection_stats(),
             "custom": self.get_custom_metrics(),
             "targets": self.check_performance_targets(),
-            "metrics_history_size": len(self._latencies)
+            "metrics_history_size": len(self._latencies),
         }
 
     def reset_metrics(self):
@@ -274,7 +269,7 @@ class PerformanceMetrics:
             "total_connections": 0,
             "active_connections": 0,
             "failed_connections": 0,
-            "reconnections": 0
+            "reconnections": 0,
         }
         self._custom_metrics.clear()
         self._counters.clear()
@@ -286,8 +281,8 @@ class PerformanceMetrics:
         sorted_values = sorted(values)
         n = len(sorted_values)
         if n % 2 == 0:
-            return (sorted_values[n//2 - 1] + sorted_values[n//2]) / 2
-        return sorted_values[n//2]
+            return (sorted_values[n // 2 - 1] + sorted_values[n // 2]) / 2
+        return sorted_values[n // 2]
 
     def _percentile(self, values: list, percentile: float) -> float:
         """Calculate percentile of values"""

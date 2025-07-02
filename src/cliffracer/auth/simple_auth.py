@@ -87,7 +87,7 @@ class SimpleAuthService:
         """Hash password using PBKDF2"""
         # Simple but secure password hashing
         salt = self.config.secret_key.encode()[:16]  # Use part of secret as salt
-        return hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000).hex()
+        return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100000).hex()
 
     def verify_password(self, password: str, password_hash: str) -> bool:
         """Verify password against hash"""
@@ -99,7 +99,7 @@ class SimpleAuthService:
         email: str,
         password: str,
         roles: set[str] | None = None,
-        permissions: set[str] | None = None
+        permissions: set[str] | None = None,
     ) -> AuthUser:
         """Create a new user"""
         from ..core.validation import validate_password, validate_string_length, validate_username
@@ -110,7 +110,7 @@ class SimpleAuthService:
         email = validate_string_length(email, min_length=3, max_length=254, field_name="Email")
 
         # Basic email validation
-        if '@' not in email or '.' not in email.split('@')[1]:
+        if "@" not in email or "." not in email.split("@")[1]:
             raise ValueError("Invalid email format")
 
         if username in self._users:
@@ -122,13 +122,10 @@ class SimpleAuthService:
             username=username,
             email=email,
             roles=roles or set(),
-            permissions=permissions or set()
+            permissions=permissions or set(),
         )
 
-        self._users[username] = {
-            "user": user,
-            "password_hash": self.hash_password(password)
-        }
+        self._users[username] = {"user": user, "password_hash": self.hash_password(password)}
 
         logger.info(f"Created user: {username}")
         return user
@@ -158,7 +155,7 @@ class SimpleAuthService:
             "roles": list(user.roles),
             "permissions": list(user.permissions),
             "exp": expires_at.timestamp(),
-            "iat": datetime.now(UTC).timestamp()
+            "iat": datetime.now(UTC).timestamp(),
         }
 
         token = jwt.encode(payload, self.config.secret_key, algorithm=self.config.algorithm)
@@ -168,11 +165,7 @@ class SimpleAuthService:
     def validate_token(self, token: str) -> AuthContext | None:
         """Validate JWT token and return auth context"""
         try:
-            payload = jwt.decode(
-                token,
-                self.config.secret_key,
-                algorithms=[self.config.algorithm]
-            )
+            payload = jwt.decode(token, self.config.secret_key, algorithms=[self.config.algorithm])
 
             # Reconstruct user from payload
             user = AuthUser(
@@ -180,14 +173,12 @@ class SimpleAuthService:
                 username=payload["username"],
                 email=payload["email"],
                 roles=set(payload.get("roles", [])),
-                permissions=set(payload.get("permissions", []))
+                permissions=set(payload.get("permissions", [])),
             )
 
             # Create auth context
             context = AuthContext(
-                user=user,
-                token=token,
-                expires_at=datetime.fromtimestamp(payload["exp"], UTC)
+                user=user, token=token, expires_at=datetime.fromtimestamp(payload["exp"], UTC)
             )
 
             return context
@@ -264,6 +255,7 @@ def get_current_user() -> AuthUser | None:
 
 def requires_auth(func: Callable) -> Callable:
     """Decorator that requires authentication"""
+
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
         context = get_current_context()
@@ -285,6 +277,7 @@ def requires_auth(func: Callable) -> Callable:
 
 def requires_roles(*roles: str) -> Callable:
     """Decorator that requires specific roles"""
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
@@ -319,6 +312,7 @@ def requires_roles(*roles: str) -> Callable:
 
 def requires_permissions(*permissions: str) -> Callable:
     """Decorator that requires specific permissions"""
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
@@ -353,11 +347,13 @@ def requires_permissions(*permissions: str) -> Callable:
 
 class AuthenticationError(Exception):
     """Raised when authentication fails"""
+
     pass
 
 
 class AuthorizationError(Exception):
     """Raised when authorization fails"""
+
     pass
 
 

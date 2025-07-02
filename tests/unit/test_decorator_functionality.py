@@ -23,6 +23,8 @@ from cliffracer import (
 )
 from cliffracer.core.extended_service import (
     broadcast as extended_broadcast,
+)
+from cliffracer.core.extended_service import (
     listener as extended_listener,
 )
 
@@ -261,11 +263,7 @@ class TestDecoratorFunctionality:
         class BroadcastService(ValidatedNATSService):
             @broadcast(OrderEvent)
             async def create_order_event(self, order_id: str, amount: float):
-                return OrderEvent(
-                    source_service=self.config.name,
-                    order_id=order_id,
-                    amount=amount
-                )
+                return OrderEvent(source_service=self.config.name, order_id=order_id, amount=amount)
 
         service = BroadcastService(ServiceConfig(name="broadcast_test"))
 

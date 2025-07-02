@@ -48,7 +48,7 @@ class TestSagaCoordinator:
         """Test defining a saga"""
         steps = [
             SagaStep("step1", "service1", "action1", "compensate1"),
-            SagaStep("step2", "service2", "action2", "compensate2")
+            SagaStep("step2", "service2", "action2", "compensate2"),
         ]
 
         saga_coordinator.define_saga("test_saga", steps)
@@ -60,9 +60,7 @@ class TestSagaCoordinator:
     async def test_start_saga(self, saga_coordinator, mock_service):
         """Test starting a saga"""
         # Define saga
-        steps = [
-            SagaStep("step1", "service1", "action1", "compensate1")
-        ]
+        steps = [SagaStep("step1", "service1", "action1", "compensate1")]
         saga_coordinator.define_saga("test_saga", steps)
 
         # Start saga
@@ -81,6 +79,7 @@ class TestSagaCoordinator:
 
         # Create context and step
         from cliffracer.patterns.saga import SagaContext
+
         context = SagaContext(saga_type="test", data={"test": "data"})
         step = SagaStep("test_step", "test_service", "test_action")
 
@@ -100,6 +99,7 @@ class TestSagaCoordinator:
 
         # Create context and step with no retries
         from cliffracer.patterns.saga import SagaContext
+
         context = SagaContext(saga_type="test", data={"test": "data"})
         step = SagaStep("test_step", "test_service", "test_action", retry_count=1)
 
@@ -118,6 +118,7 @@ class TestSagaCoordinator:
 
         # Create context with completed steps
         from cliffracer.patterns.saga import SagaContext
+
         context = SagaContext(saga_type="test")
 
         # Add completed steps
@@ -147,6 +148,7 @@ class TestSagaParticipant:
     @pytest.mark.asyncio
     async def test_execute_action(self, mock_service):
         """Test executing saga action"""
+
         class TestParticipant(SagaParticipant):
             def _register_handlers(self):
                 pass
@@ -163,6 +165,7 @@ class TestSagaParticipant:
     @pytest.mark.asyncio
     async def test_execute_compensation(self, mock_service):
         """Test executing compensation"""
+
         class TestParticipant(SagaParticipant):
             def _register_handlers(self):
                 pass
@@ -212,10 +215,7 @@ async def test_saga_context_serialization():
     """Test saga context serialization"""
     from cliffracer.patterns.saga import SagaContext
 
-    context = SagaContext(
-        saga_type="test_saga",
-        data={"key": "value"}
-    )
+    context = SagaContext(saga_type="test_saga", data={"key": "value"})
 
     # Add a step
     step = SagaStep("test", "service", "action", "compensation")

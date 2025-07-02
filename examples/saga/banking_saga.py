@@ -60,18 +60,17 @@ class AccountService(CliffracerService, SagaParticipant):
                     "type": "debit",
                     "amount": amount,
                     "saga_id": saga_id,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
 
                 account["transactions"].append(transaction_id)
 
-                print(f"💸 Debited ${amount:.2f} from {account_id} (Balance: ${account['balance']:.2f})")
+                print(
+                    f"💸 Debited ${amount:.2f} from {account_id} (Balance: ${account['balance']:.2f})"
+                )
 
                 return {
-                    "result": {
-                        "transaction_id": transaction_id,
-                        "new_balance": account["balance"]
-                    }
+                    "result": {"transaction_id": transaction_id, "new_balance": account["balance"]}
                 }
             except Exception as e:
                 return {"error": str(e)}
@@ -99,24 +98,25 @@ class AccountService(CliffracerService, SagaParticipant):
                     "type": "credit",
                     "amount": amount,
                     "saga_id": saga_id,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
 
                 account["transactions"].append(transaction_id)
 
-                print(f"💰 Credited ${amount:.2f} to {account_id} (Balance: ${account['balance']:.2f})")
+                print(
+                    f"💰 Credited ${amount:.2f} to {account_id} (Balance: ${account['balance']:.2f})"
+                )
 
                 return {
-                    "result": {
-                        "transaction_id": transaction_id,
-                        "new_balance": account["balance"]
-                    }
+                    "result": {"transaction_id": transaction_id, "new_balance": account["balance"]}
                 }
             except Exception as e:
                 return {"error": str(e)}
 
         @self.rpc
-        async def reverse_debit(saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict) -> dict:
+        async def reverse_debit(
+            saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict
+        ) -> dict:
             """Reverse a debit transaction (compensation)"""
             try:
                 transaction_id = original_result["transaction_id"]
@@ -140,17 +140,21 @@ class AccountService(CliffracerService, SagaParticipant):
                     "amount": amount,
                     "original_transaction": transaction_id,
                     "saga_id": saga_id,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
 
-                print(f"↩️  Reversed debit of ${amount:.2f} from {account_id} (Balance: ${self.accounts[account_id]['balance']:.2f})")
+                print(
+                    f"↩️  Reversed debit of ${amount:.2f} from {account_id} (Balance: ${self.accounts[account_id]['balance']:.2f})"
+                )
 
                 return {"result": {"status": "reversed", "reversal_id": reversal_id}}
             except Exception as e:
                 return {"error": str(e)}
 
         @self.rpc
-        async def reverse_credit(saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict) -> dict:
+        async def reverse_credit(
+            saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict
+        ) -> dict:
             """Reverse a credit transaction (compensation)"""
             try:
                 transaction_id = original_result["transaction_id"]
@@ -174,10 +178,12 @@ class AccountService(CliffracerService, SagaParticipant):
                     "amount": amount,
                     "original_transaction": transaction_id,
                     "saga_id": saga_id,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": datetime.now().isoformat(),
                 }
 
-                print(f"↩️  Reversed credit of ${amount:.2f} from {account_id} (Balance: ${self.accounts[account_id]['balance']:.2f})")
+                print(
+                    f"↩️  Reversed credit of ${amount:.2f} from {account_id} (Balance: ${self.accounts[account_id]['balance']:.2f})"
+                )
 
                 return {"result": {"status": "reversed", "reversal_id": reversal_id}}
             except Exception as e:
@@ -194,7 +200,7 @@ class AccountService(CliffracerService, SagaParticipant):
                 "account_id": account_id,
                 "holder": account["holder"],
                 "balance": account["balance"],
-                "transactions": len(account["transactions"])
+                "transactions": len(account["transactions"]),
             }
 
 
@@ -215,20 +221,21 @@ class NotificationService(CliffracerService, SagaParticipant):
             try:
                 # Simulate notification
                 print("📧 Sending notifications:")
-                print(f"   To sender: Transfer of ${data['amount']:.2f} sent to {data['to_account']}")
-                print(f"   To recipient: Received ${data['amount']:.2f} from {data['from_account']}")
+                print(
+                    f"   To sender: Transfer of ${data['amount']:.2f} sent to {data['to_account']}"
+                )
+                print(
+                    f"   To recipient: Received ${data['amount']:.2f} from {data['from_account']}"
+                )
 
-                return {
-                    "result": {
-                        "notifications_sent": 2,
-                        "status": "delivered"
-                    }
-                }
+                return {"result": {"notifications_sent": 2, "status": "delivered"}}
             except Exception as e:
                 return {"error": str(e)}
 
         @self.rpc
-        async def notify_reversal(saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict) -> dict:
+        async def notify_reversal(
+            saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict
+        ) -> dict:
             """Send reversal notification (compensation)"""
             try:
                 print("📧 Sending reversal notifications:")
@@ -249,29 +256,32 @@ class BankingService(CliffracerService):
         self.coordinator = SagaCoordinator(self)
 
         # Define money transfer saga
-        self.coordinator.define_saga("money_transfer", [
-            SagaStep(
-                name="debit_source",
-                service="account_service",
-                action="debit_account",
-                compensation="reverse_debit",
-                timeout=10.0
-            ),
-            SagaStep(
-                name="credit_destination",
-                service="account_service",
-                action="credit_account",
-                compensation="reverse_credit",
-                timeout=10.0
-            ),
-            SagaStep(
-                name="send_notifications",
-                service="notification_service",
-                action="notify_transfer",
-                compensation="notify_reversal",
-                timeout=5.0
-            )
-        ])
+        self.coordinator.define_saga(
+            "money_transfer",
+            [
+                SagaStep(
+                    name="debit_source",
+                    service="account_service",
+                    action="debit_account",
+                    compensation="reverse_debit",
+                    timeout=10.0,
+                ),
+                SagaStep(
+                    name="credit_destination",
+                    service="account_service",
+                    action="credit_account",
+                    compensation="reverse_credit",
+                    timeout=10.0,
+                ),
+                SagaStep(
+                    name="send_notifications",
+                    service="notification_service",
+                    action="notify_transfer",
+                    compensation="notify_reversal",
+                    timeout=5.0,
+                ),
+            ],
+        )
 
     @property
     def rpc(self):
@@ -285,11 +295,7 @@ class BankingService(CliffracerService):
 
     @rpc
     async def transfer_money(
-        self,
-        from_account: str,
-        to_account: str,
-        amount: float,
-        description: str = "Transfer"
+        self, from_account: str, to_account: str, amount: float, description: str = "Transfer"
     ) -> dict:
         """Transfer money between accounts"""
         print(f"\n💳 Initiating transfer: ${amount:.2f}")
@@ -298,12 +304,15 @@ class BankingService(CliffracerService):
         print(f"   Description: {description}")
         print("-" * 40)
 
-        result = await self.coordinator._start_saga("money_transfer", {
-            "from_account": from_account,
-            "to_account": to_account,
-            "amount": amount,
-            "description": description
-        })
+        result = await self.coordinator._start_saga(
+            "money_transfer",
+            {
+                "from_account": from_account,
+                "to_account": to_account,
+                "amount": amount,
+                "description": description,
+            },
+        )
 
         return result
 
@@ -336,23 +345,22 @@ async def demonstrate_banking_saga():
         print(f"   {acc_id} ({balance['holder']}): ${balance['balance']:.2f}")
 
     # Example 1: Successful transfer
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("EXAMPLE 1: Successful Transfer")
-    print("="*60)
+    print("=" * 60)
 
     result1 = await banking_service.transfer_money(
         from_account="ACC-001",
         to_account="ACC-002",
         amount=200.00,
-        description="Payment for services"
+        description="Payment for services",
     )
 
     await asyncio.sleep(3)
 
     # Check saga status
     status = await banking_service.rpc_call(
-        "banking_service.get_saga_status",
-        {"saga_id": result1["saga_id"]}
+        "banking_service.get_saga_status", {"saga_id": result1["saga_id"]}
     )
 
     if status.get("state") == "COMPLETED":
@@ -365,23 +373,22 @@ async def demonstrate_banking_saga():
         print(f"   {acc_id} ({balance['holder']}): ${balance['balance']:.2f}")
 
     # Example 2: Failed transfer (insufficient funds)
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("EXAMPLE 2: Failed Transfer (Insufficient Funds)")
-    print("="*60)
+    print("=" * 60)
 
     result2 = await banking_service.transfer_money(
         from_account="ACC-002",
         to_account="ACC-003",
         amount=1000.00,  # More than available balance
-        description="Large transfer"
+        description="Large transfer",
     )
 
     await asyncio.sleep(3)
 
     # Check saga status
     status = await banking_service.rpc_call(
-        "banking_service.get_saga_status",
-        {"saga_id": result2["saga_id"]}
+        "banking_service.get_saga_status", {"saga_id": result2["saga_id"]}
     )
 
     if status.get("state") == "FAILED":
@@ -389,9 +396,9 @@ async def demonstrate_banking_saga():
         print("   No money was moved")
 
     # Example 3: Transfer with simulated failure
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("EXAMPLE 3: Transfer with Credit Failure")
-    print("="*60)
+    print("=" * 60)
 
     # Temporarily remove destination account to simulate failure
     acc_backup = account_service.accounts.pop("ACC-003", None)
@@ -400,7 +407,7 @@ async def demonstrate_banking_saga():
         from_account="ACC-001",
         to_account="ACC-003",  # This account is temporarily missing
         amount=100.00,
-        description="Transfer to missing account"
+        description="Transfer to missing account",
     )
 
     await asyncio.sleep(3)
@@ -411,8 +418,7 @@ async def demonstrate_banking_saga():
 
     # Check saga status
     status = await banking_service.rpc_call(
-        "banking_service.get_saga_status",
-        {"saga_id": result3["saga_id"]}
+        "banking_service.get_saga_status", {"saga_id": result3["saga_id"]}
     )
 
     if status.get("state") == "COMPENSATED":

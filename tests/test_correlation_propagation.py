@@ -80,10 +80,7 @@ class TestCorrelationContext:
 
     def test_extract_from_headers(self):
         """Test extracting correlation ID from headers"""
-        headers = {
-            "X-Correlation-ID": "test_123",
-            "Content-Type": "application/json"
-        }
+        headers = {"X-Correlation-ID": "test_123", "Content-Type": "application/json"}
         cid = CorrelationContext.extract_from_headers(headers)
         assert cid == "test_123"
 
@@ -141,6 +138,7 @@ class TestCorrelationDecorator:
 
     def test_sync_decorator(self):
         """Test decorator with sync function"""
+
         @with_correlation_id
         def test_handler(data, correlation_id=None):
             return {"data": data, "correlation_id": correlation_id}
@@ -180,10 +178,7 @@ class TestServiceCorrelation:
         # Create a mock message
         mock_msg = MagicMock()
         mock_msg.subject = "test_service.rpc.test_method"
-        mock_msg.data = json.dumps({
-            "data": "hello",
-            "correlation_id": "test_corr_123"
-        }).encode()
+        mock_msg.data = json.dumps({"data": "hello", "correlation_id": "test_corr_123"}).encode()
         mock_msg.respond = AsyncMock()
 
         # Handle the RPC request
@@ -255,10 +250,9 @@ class TestServiceCorrelation:
         # Create a mock event message
         mock_msg = MagicMock()
         mock_msg.subject = "test.event"
-        mock_msg.data = json.dumps({
-            "event_data": "test",
-            "correlation_id": "event_corr_456"
-        }).encode()
+        mock_msg.data = json.dumps(
+            {"event_data": "test", "correlation_id": "event_corr_456"}
+        ).encode()
 
         # Handle the event
         await service._handle_event(mock_msg)
@@ -343,6 +337,7 @@ class TestHTTPCorrelation:
 
         # Add correlation middleware
         from cliffracer.middleware.correlation import CorrelationMiddleware
+
         app.add_middleware(CorrelationMiddleware)
 
         client = TestClient(app)
@@ -407,10 +402,7 @@ async def test_end_to_end_correlation():
         async def call_service2(self, correlation_id: str = None):
             # Call service2
             result = await self.call_rpc("service2", "process", data="test")
-            return {
-                "service1_correlation_id": correlation_id,
-                "service2_result": result
-            }
+            return {"service1_correlation_id": correlation_id, "service2_result": result}
 
     class Service2(CliffracerService):
         def __init__(self):
@@ -418,10 +410,7 @@ async def test_end_to_end_correlation():
 
         @rpc
         async def process(self, data: str, correlation_id: str = None):
-            return {
-                "processed": data,
-                "service2_correlation_id": correlation_id
-            }
+            return {"processed": data, "service2_correlation_id": correlation_id}
 
     service1 = Service1()
     service2 = Service2()
@@ -438,9 +427,9 @@ async def test_end_to_end_correlation():
             response = {
                 "result": {
                     "processed": request_data["data"],
-                    "service2_correlation_id": request_data["correlation_id"]
+                    "service2_correlation_id": request_data["correlation_id"],
                 },
-                "correlation_id": request_data["correlation_id"]
+                "correlation_id": request_data["correlation_id"],
             }
             mock_response = MagicMock()
             mock_response.data = json.dumps(response).encode()
@@ -464,7 +453,10 @@ async def test_end_to_end_correlation():
     response_data = json.loads(mock_msg.respond.call_args[0][0].decode())
     assert response_data["correlation_id"] == initial_correlation_id
     assert response_data["result"]["service1_correlation_id"] == initial_correlation_id
-    assert response_data["result"]["service2_result"]["service2_correlation_id"] == initial_correlation_id
+    assert (
+        response_data["result"]["service2_result"]["service2_correlation_id"]
+        == initial_correlation_id
+    )
 
 
 if __name__ == "__main__":

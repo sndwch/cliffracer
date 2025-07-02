@@ -13,9 +13,7 @@ from ..core.correlation import CorrelationContext
 
 
 def setup_correlation_logging(
-    service_name: str,
-    log_level: str = "INFO",
-    log_format: str | None = None
+    service_name: str, log_level: str = "INFO", log_format: str | None = None
 ):
     """
     Configure loguru to include correlation IDs in all log messages.
@@ -47,11 +45,7 @@ def setup_correlation_logging(
 
     # Add console handler with correlation ID
     logger.add(
-        sys.stdout,
-        format=log_format,
-        level=log_level,
-        filter=correlation_filter,
-        colorize=True
+        sys.stdout, format=log_format, level=log_level, filter=correlation_filter, colorize=True
     )
 
     # Add file handler with correlation ID (JSON format for structured logging)
@@ -63,7 +57,7 @@ def setup_correlation_logging(
         rotation="10 MB",
         retention="7 days",
         compression="zip",
-        serialize=False  # Keep as text for now, can switch to JSON
+        serialize=False,  # Keep as text for now, can switch to JSON
     )
 
     # Add structured JSON logs for log aggregation systems
@@ -74,7 +68,7 @@ def setup_correlation_logging(
         rotation="10 MB",
         retention="7 days",
         compression="zip",
-        serialize=True  # JSON format
+        serialize=True,  # JSON format
     )
 
     logger.info(f"Correlation-aware logging configured for service: {service_name}")
@@ -102,8 +96,8 @@ class CorrelationLoggerMixin:
         super().__init__(*args, **kwargs)
 
         # Setup correlation logging for the service
-        service_name = getattr(self.config, 'name', 'unknown_service')
-        log_level = getattr(self.config, 'log_level', 'INFO')
+        service_name = getattr(self.config, "name", "unknown_service")
+        log_level = getattr(self.config, "log_level", "INFO")
 
         setup_correlation_logging(service_name, log_level)
 
@@ -138,7 +132,7 @@ class CorrelationLoggerMixin:
         correlation_id = CorrelationContext.get()
 
         # Add correlation ID to context
-        context['correlation_id'] = correlation_id
+        context["correlation_id"] = correlation_id
 
         # Log with appropriate level
         log_func = getattr(self.logger, level.lower(), self.logger.info)

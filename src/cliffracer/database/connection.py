@@ -103,7 +103,7 @@ class DatabaseConnection:
             await self.connect()
 
         # Check if we're in a transaction (pool is actually a connection)
-        if hasattr(self.pool, 'transaction'):
+        if hasattr(self.pool, "transaction"):
             # We're already in a transaction, use the connection directly
             return await self.pool.execute(query, *args, timeout=timeout)
         else:
@@ -127,7 +127,7 @@ class DatabaseConnection:
             await self.connect()
 
         # Check if we're in a transaction (pool is actually a connection)
-        if hasattr(self.pool, 'transaction'):
+        if hasattr(self.pool, "transaction"):
             # We're already in a transaction, use the connection directly
             return await self.pool.fetch(query, *args, timeout=timeout)
         else:
@@ -135,7 +135,9 @@ class DatabaseConnection:
             async with self.pool.acquire() as conn:
                 return await conn.fetch(query, *args, timeout=timeout)
 
-    async def fetchrow(self, query: str, *args, timeout: float | None = None) -> asyncpg.Record | None:
+    async def fetchrow(
+        self, query: str, *args, timeout: float | None = None
+    ) -> asyncpg.Record | None:
         """
         Execute a query and fetch a single row.
 
@@ -151,7 +153,7 @@ class DatabaseConnection:
             await self.connect()
 
         # Check if we're in a transaction (pool is actually a connection)
-        if hasattr(self.pool, 'transaction'):
+        if hasattr(self.pool, "transaction"):
             # We're already in a transaction, use the connection directly
             return await self.pool.fetchrow(query, *args, timeout=timeout)
         else:
@@ -176,7 +178,7 @@ class DatabaseConnection:
             await self.connect()
 
         # Check if we're in a transaction (pool is actually a connection)
-        if hasattr(self.pool, 'transaction'):
+        if hasattr(self.pool, "transaction"):
             # We're already in a transaction, use the connection directly
             return await self.pool.fetchval(query, *args, column=column, timeout=timeout)
         else:

@@ -102,7 +102,7 @@ class DatabaseModel(BaseModel):
                 continue
 
             # Get field type (compatible with Pydantic v2)
-            field_type = getattr(field_info, 'annotation', getattr(field_info, 'type_', str))
+            field_type = getattr(field_info, "annotation", getattr(field_info, "type_", str))
 
             # Handle Optional types
             is_nullable = False
@@ -128,7 +128,7 @@ class DatabaseModel(BaseModel):
 
         # Build CREATE TABLE statement
         create_sql = f"""CREATE TABLE IF NOT EXISTS {cls.__tablename__} (
-    {',\n    '.join(columns)}
+    {",\n    ".join(columns)}
 );
 
 -- Create updated_at trigger

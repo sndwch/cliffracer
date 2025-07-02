@@ -23,10 +23,7 @@ class HealthMonitorService(NATSService):
     """
 
     def __init__(self):
-        config = ServiceConfig(
-            name="health_monitor_service",
-            nats_url="nats://localhost:4222"
-        )
+        config = ServiceConfig(name="health_monitor_service", nats_url="nats://localhost:4222")
         super().__init__(config)
 
         # Service state
@@ -58,7 +55,7 @@ class HealthMonitorService(NATSService):
                 "status": "healthy",
                 "last_check": datetime.now(UTC).isoformat(),
                 "check_count": self.health_check_count,
-                "database_connections": self.database_connections
+                "database_connections": self.database_connections,
             }
 
             print(f"✅ Health check #{self.health_check_count} completed - Status: healthy")
@@ -68,7 +65,7 @@ class HealthMonitorService(NATSService):
                 "status": "unhealthy",
                 "last_check": datetime.now(UTC).isoformat(),
                 "error": str(e),
-                "check_count": self.health_check_count
+                "check_count": self.health_check_count,
             }
             print(f"❌ Health check #{self.health_check_count} failed: {e}")
 
@@ -87,7 +84,7 @@ class HealthMonitorService(NATSService):
             "memory_usage": 128.5,  # MB
             "active_connections": self.database_connections,
             "cache_size": len(self.metrics_cache),
-            "collection_count": self.metrics_collected
+            "collection_count": self.metrics_collected,
         }
 
         # Cache metrics with timestamp key
@@ -98,9 +95,7 @@ class HealthMonitorService(NATSService):
 
         # Publish metrics to other services
         await self.publish_event(
-            "metrics.collected",
-            service_name=self.config.name,
-            metrics=current_metrics
+            "metrics.collected", service_name=self.config.name, metrics=current_metrics
         )
 
     @timer(interval=300)  # Every 5 minutes
@@ -143,16 +138,14 @@ class HealthMonitorService(NATSService):
                 "sync_id": self.sync_count,
                 "timestamp": datetime.now(UTC).isoformat(),
                 "records_synced": 42,  # Simulated
-                "status": "success"
+                "status": "success",
             }
 
             print(f"🔄 Data sync #{self.sync_count} completed: {sync_result}")
 
             # Notify other services about sync completion
             await self.publish_event(
-                "data.synced",
-                service_name=self.config.name,
-                result=sync_result
+                "data.synced", service_name=self.config.name, result=sync_result
             )
 
         except Exception as e:
@@ -165,7 +158,9 @@ class HealthMonitorService(NATSService):
         Note: This is a sync method (no async/await)
         """
         # Simulate connection management
-        self.database_connections = max(0, self.database_connections + (-1 if time.time() % 20 < 10 else 1))
+        self.database_connections = max(
+            0, self.database_connections + (-1 if time.time() % 20 < 10 else 1)
+        )
         print(f"💓 Heartbeat - Active connections: {self.database_connections}")
 
     # Helper Methods
@@ -198,7 +193,7 @@ class HealthMonitorService(NATSService):
             "cached_metrics_count": len(self.metrics_cache),
             "cleanup_operations": self.cleanup_count,
             "sync_operations": self.sync_count,
-            "health_checks": self.health_check_count
+            "health_checks": self.health_check_count,
         }
 
     @rpc
@@ -210,9 +205,7 @@ class HealthMonitorService(NATSService):
     async def get_recent_metrics(self, limit: int = 5):
         """Get most recent metrics"""
         sorted_metrics = sorted(
-            self.metrics_cache.items(),
-            key=lambda x: x[1]["timestamp"],
-            reverse=True
+            self.metrics_cache.items(), key=lambda x: x[1]["timestamp"], reverse=True
         )
         return dict(sorted_metrics[:limit])
 
@@ -245,10 +238,14 @@ class TimerClientExample:
             metrics = await self.service.call_rpc("health_monitor_service", "get_metrics_summary")
             print(f"Metrics Summary: {metrics}")
 
-            timer_stats = await self.service.call_rpc("health_monitor_service", "get_timer_statistics")
+            timer_stats = await self.service.call_rpc(
+                "health_monitor_service", "get_timer_statistics"
+            )
             print(f"Timer Statistics: {timer_stats}")
 
-            recent_metrics = await self.service.call_rpc("health_monitor_service", "get_recent_metrics", limit=3)
+            recent_metrics = await self.service.call_rpc(
+                "health_monitor_service", "get_recent_metrics", limit=3
+            )
             print(f"Recent Metrics: {recent_metrics}")
 
         finally:

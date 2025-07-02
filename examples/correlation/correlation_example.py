@@ -68,22 +68,16 @@ class OrderService(HTTPNATSService):
             product_id=order.product_id,
             quantity=order.quantity,
             customer_id=order.customer_id,
-            correlation_id=correlation_id
+            correlation_id=correlation_id,
         )
 
         return OrderResponse(
-            order_id=result["order_id"],
-            status=result["status"],
-            correlation_id=correlation_id
+            order_id=result["order_id"], status=result["status"], correlation_id=correlation_id
         )
 
     @rpc
     async def create_order(
-        self,
-        product_id: str,
-        quantity: int,
-        customer_id: str,
-        correlation_id: str = None
+        self, product_id: str, quantity: int, customer_id: str, correlation_id: str = None
     ):
         """Create a new order and coordinate with other services"""
         logger.info(f"Creating order for product {product_id}, customer {customer_id}")
@@ -94,10 +88,7 @@ class OrderService(HTTPNATSService):
             # Check inventory (maintains correlation ID automatically)
             logger.info("Checking inventory...")
             inventory_result = await self.call_rpc(
-                "inventory_service",
-                "check_availability",
-                product_id=product_id,
-                quantity=quantity
+                "inventory_service", "check_availability", product_id=product_id, quantity=quantity
             )
 
             if not inventory_result["available"]:
@@ -105,7 +96,7 @@ class OrderService(HTTPNATSService):
                 return {
                     "order_id": order_id,
                     "status": "insufficient_inventory",
-                    "correlation_id": correlation_id
+                    "correlation_id": correlation_id,
                 }
 
             # Calculate price
@@ -115,7 +106,7 @@ class OrderService(HTTPNATSService):
                 "calculate_price",
                 product_id=product_id,
                 quantity=quantity,
-                customer_id=customer_id
+                customer_id=customer_id,
             )
 
             total_price = price_result["total_price"]
@@ -127,7 +118,7 @@ class OrderService(HTTPNATSService):
                 "process_payment",
                 order_id=order_id,
                 amount=total_price,
-                customer_id=customer_id
+                customer_id=customer_id,
             )
 
             if not payment_result["success"]:
@@ -135,7 +126,7 @@ class OrderService(HTTPNATSService):
                 return {
                     "order_id": order_id,
                     "status": "payment_failed",
-                    "correlation_id": correlation_id
+                    "correlation_id": correlation_id,
                 }
 
             # Reserve inventory
@@ -145,7 +136,7 @@ class OrderService(HTTPNATSService):
                 "reserve_inventory",
                 product_id=product_id,
                 quantity=quantity,
-                order_id=order_id
+                order_id=order_id,
             )
 
             # Store order
@@ -157,7 +148,7 @@ class OrderService(HTTPNATSService):
                 "total_price": total_price,
                 "status": "confirmed",
                 "created_at": datetime.now(UTC).isoformat(),
-                "correlation_id": correlation_id
+                "correlation_id": correlation_id,
             }
 
             # Publish order confirmed event
@@ -165,7 +156,7 @@ class OrderService(HTTPNATSService):
                 "orders.confirmed",
                 order_id=order_id,
                 customer_id=customer_id,
-                total_price=total_price
+                total_price=total_price,
             )
 
             logger.info(f"Order {order_id} created successfully")
@@ -174,7 +165,7 @@ class OrderService(HTTPNATSService):
                 "order_id": order_id,
                 "status": "confirmed",
                 "total_price": total_price,
-                "correlation_id": correlation_id
+                "correlation_id": correlation_id,
             }
 
         except Exception as e:
@@ -183,7 +174,7 @@ class OrderService(HTTPNATSService):
                 "order_id": order_id,
                 "status": "error",
                 "error": str(e),
-                "correlation_id": correlation_id
+                "correlation_id": correlation_id,
             }
 
     @get("/orders/{order_id}")
@@ -217,19 +208,13 @@ class InventoryService(HTTPNATSService):
         self.reservations = {}
 
     @rpc
-    async def check_availability(
-        self,
-        product_id: str,
-        quantity: int,
-        correlation_id: str = None
-    ):
+    async def check_availability(self, product_id: str, quantity: int, correlation_id: str = None):
         """Check if product is available"""
         logger.info(f"Checking availability for {product_id}, quantity: {quantity}")
 
         available_quantity = self.inventory.get(product_id, 0)
         reserved_quantity = sum(
-            r["quantity"] for r in self.reservations.values()
-            if r["product_id"] == product_id
+            r["quantity"] for r in self.reservations.values() if r["product_id"] == product_id
         )
 
         actual_available = available_quantity - reserved_quantity
@@ -241,16 +226,12 @@ class InventoryService(HTTPNATSService):
             "product_id": product_id,
             "available": is_available,
             "available_quantity": actual_available,
-            "requested_quantity": quantity
+            "requested_quantity": quantity,
         }
 
     @rpc
     async def reserve_inventory(
-        self,
-        product_id: str,
-        quantity: int,
-        order_id: str,
-        correlation_id: str = None
+        self, product_id: str, quantity: int, order_id: str, correlation_id: str = None
     ):
         """Reserve inventory for an order"""
         logger.info(f"Reserving {quantity} units of {product_id} for order {order_id}")
@@ -259,15 +240,12 @@ class InventoryService(HTTPNATSService):
             "product_id": product_id,
             "quantity": quantity,
             "order_id": order_id,
-            "reserved_at": datetime.now(UTC).isoformat()
+            "reserved_at": datetime.now(UTC).isoformat(),
         }
 
         # Publish inventory event
         await self.publish_event(
-            "inventory.reserved",
-            product_id=product_id,
-            quantity=quantity,
-            order_id=order_id
+            "inventory.reserved", product_id=product_id, quantity=quantity, order_id=order_id
         )
 
         return {"status": "reserved", "order_id": order_id}
@@ -294,14 +272,12 @@ class PricingService(HTTPNATSService):
 
     @rpc
     async def calculate_price(
-        self,
-        product_id: str,
-        quantity: int,
-        customer_id: str,
-        correlation_id: str = None
+        self, product_id: str, quantity: int, customer_id: str, correlation_id: str = None
     ):
         """Calculate total price with discounts"""
-        logger.info(f"Calculating price for {product_id}, quantity: {quantity}, customer: {customer_id}")
+        logger.info(
+            f"Calculating price for {product_id}, quantity: {quantity}, customer: {customer_id}"
+        )
 
         base_price = self.prices.get(product_id, 0)
         subtotal = base_price * quantity
@@ -324,7 +300,7 @@ class PricingService(HTTPNATSService):
             "subtotal": subtotal,
             "discount_rate": discount_rate,
             "discount_amount": discount_amount,
-            "total_price": total_price
+            "total_price": total_price,
         }
 
 
@@ -340,11 +316,7 @@ class PaymentService(HTTPNATSService):
 
     @rpc
     async def process_payment(
-        self,
-        order_id: str,
-        amount: float,
-        customer_id: str,
-        correlation_id: str = None
+        self, order_id: str, amount: float, customer_id: str, correlation_id: str = None
     ):
         """Process payment for an order"""
         logger.info(f"Processing payment of ${amount:.2f} for order {order_id}")
@@ -361,7 +333,7 @@ class PaymentService(HTTPNATSService):
             "customer_id": customer_id,
             "status": "completed" if success else "failed",
             "processed_at": datetime.now(UTC).isoformat(),
-            "correlation_id": correlation_id
+            "correlation_id": correlation_id,
         }
 
         # Publish payment event
@@ -369,7 +341,7 @@ class PaymentService(HTTPNATSService):
             f"payments.{'completed' if success else 'failed'}",
             payment_id=payment_id,
             order_id=order_id,
-            amount=amount
+            amount=amount,
         )
 
         if success:
@@ -377,11 +349,7 @@ class PaymentService(HTTPNATSService):
         else:
             logger.error(f"Payment {payment_id} failed")
 
-        return {
-            "success": success,
-            "payment_id": payment_id,
-            "order_id": order_id
-        }
+        return {"success": success, "payment_id": payment_id, "order_id": order_id}
 
 
 async def main():
@@ -431,7 +399,9 @@ curl -X POST http://localhost:8081/orders \\
 
         print("\n🔍 Watch the logs to see correlation IDs flow through services!")
         print("💡 Each log entry shows: timestamp | level | service | correlation_id | message")
-        print("\n✨ Notice how the same correlation ID appears across all services for a single request")
+        print(
+            "\n✨ Notice how the same correlation ID appears across all services for a single request"
+        )
 
         print("\n🎯 Service is running! Press Ctrl+C to stop...")
 

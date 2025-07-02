@@ -37,13 +37,16 @@ class TestDatabaseConnection:
 
     def test_dsn_from_environment(self):
         """Test DSN construction from environment variables"""
-        with patch.dict(os.environ, {
-            "DB_HOST": "env_host",
-            "DB_PORT": "5433",
-            "DB_USER": "env_user",
-            "DB_PASSWORD": "env_pass",
-            "DB_NAME": "env_db",
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "DB_HOST": "env_host",
+                "DB_PORT": "5433",
+                "DB_USER": "env_user",
+                "DB_PASSWORD": "env_pass",
+                "DB_NAME": "env_db",
+            },
+        ):
             db = DatabaseConnection()
             expected_dsn = "postgresql://env_user:env_pass@env_host:5433/env_db"
             assert db.dsn == expected_dsn
@@ -54,7 +57,11 @@ class TestDatabaseConnection:
         db = DatabaseConnection(**db_config)
 
         mock_pool = AsyncMock()
-        with patch("cliffracer.database.connection.asyncpg.create_pool", new_callable=AsyncMock, return_value=mock_pool) as mock_create:
+        with patch(
+            "cliffracer.database.connection.asyncpg.create_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ) as mock_create:
             await db.connect()
 
             # Verify pool was created with correct parameters
@@ -91,7 +98,11 @@ class TestDatabaseConnection:
         mock_pool.acquire.return_value = mock_acquire_ctx
         mock_conn.execute.return_value = "INSERT 0 1"
 
-        with patch("cliffracer.database.connection.asyncpg.create_pool", new_callable=AsyncMock, return_value=mock_pool):
+        with patch(
+            "cliffracer.database.connection.asyncpg.create_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
             result = await db.execute("INSERT INTO test VALUES ($1)", "value")
 
             assert result == "INSERT 0 1"
@@ -175,7 +186,11 @@ class TestDatabaseConnection:
         mock_pool.acquire.return_value = mock_acquire_ctx
 
         # Test healthy connection
-        with patch("cliffracer.database.connection.asyncpg.create_pool", new_callable=AsyncMock, return_value=mock_pool):
+        with patch(
+            "cliffracer.database.connection.asyncpg.create_pool",
+            new_callable=AsyncMock,
+            return_value=mock_pool,
+        ):
             mock_conn.fetchval.return_value = 1
             db.pool = mock_pool
 
@@ -366,9 +381,7 @@ class TestRepository:
         mock_db.fetchrow.return_value = mock_record
 
         updated_user = await user_repo.update(
-            user_id,
-            email="newemail@example.com",
-            name="Updated User"
+            user_id, email="newemail@example.com", name="Updated User"
         )
 
         assert updated_user is not None

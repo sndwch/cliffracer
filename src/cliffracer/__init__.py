@@ -133,7 +133,6 @@ from cliffracer.runners.orchestrator import ServiceOrchestrator, ServiceRunner
 __all__ = [
     # Version
     "__version__",
-
     # Core Service Classes - Consolidated Architecture
     "CliffracerService",
     "NATSService",
@@ -146,11 +145,9 @@ __all__ = [
     # Legacy aliases
     "BaseNATSService",
     "ExtendedNATSService",
-
     # Configuration
     "ServiceConfig",
     "Timer",
-
     # Decorators - All in one place
     "rpc",
     "async_rpc",
@@ -168,13 +165,11 @@ __all__ = [
     "compose_decorators",
     "robust_rpc",
     "scheduled_task",
-
     # Message Types
     "Message",
     "RPCRequest",
     "RPCResponse",
     "BroadcastMessage",
-
     # Exception Hierarchy
     "CliffracerError",
     "ServiceError",
@@ -191,34 +186,28 @@ __all__ = [
     "AuthenticationError",
     "AuthorizationError",
     "ErrorHandler",
-
     # Database
     "DatabaseConnection",
     "DatabaseModel",
     "Repository",
     "SecureRepository",
     "get_db_connection",
-
     # Performance
     "BatchProcessor",
     "OptimizedNATSConnection",
     "PerformanceMetrics",
-
     # Logging
     "LoggingConfig",
     "get_service_logger",
     "LoggingMixin",
     "HTTPLoggingMixin",
     "WebSocketLoggingMixin",
-
     # Debug
     "BackdoorServer",
     "BackdoorClient",
-
     # Runners
     "ServiceRunner",
     "ServiceOrchestrator",
-
     # Correlation ID support
     "CorrelationContext",
     "get_correlation_id",
@@ -231,7 +220,6 @@ __all__ = [
     "setup_correlation_logging",
     "get_correlation_logger",
     "CorrelationLoggerMixin",
-
     # Auth exports
     "AuthConfig",
     "AuthUser",

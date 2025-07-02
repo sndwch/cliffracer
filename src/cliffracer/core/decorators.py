@@ -44,10 +44,12 @@ def validated_rpc(schema: type[BaseModel]) -> Callable:
         async def create_user(self, request: UserCreateRequest):
             return {"user_id": f"user_{request.username}"}
     """
+
     def decorator(func: Callable) -> Callable:
         func._cliffracer_rpc = True
         func._cliffracer_validated_rpc = schema
         return func
+
     return decorator
 
 
@@ -63,11 +65,13 @@ def listener(pattern: str) -> Callable:
         async def handle_user_event(self, subject: str, **data):
             print(f"User event: {subject}")
     """
+
     def decorator(func: Callable) -> Callable:
-        if not hasattr(func, '_cliffracer_events'):
+        if not hasattr(func, "_cliffracer_events"):
             func._cliffracer_events = []
         func._cliffracer_events.append(pattern)
         return func
+
     return decorator
 
 
@@ -83,9 +87,11 @@ def broadcast(pattern: str) -> Callable:
         async def handle_alert(self, **data):
             await self.broadcast_to_websockets(data)
     """
+
     def decorator(func: Callable) -> Callable:
         func._cliffracer_broadcast = pattern
         return func
+
     return decorator
 
 
@@ -103,9 +109,11 @@ def websocket_handler(path: str = "/ws") -> Callable:
                 data = await websocket.receive_text()
                 await websocket.send_text(f"Echo: {data}")
     """
+
     def decorator(func: Callable) -> Callable:
         func._cliffracer_websocket = path
         return func
+
     return decorator
 
 
@@ -127,10 +135,13 @@ def timer(interval: float, eager: bool = False, **kwargs) -> Callable:
         async def cleanup_cache(self):
             await self.remove_expired_entries()
     """
+
     def decorator(func: Callable) -> Callable:
         from .timer import Timer
+
         timer_instance = Timer(interval=interval, eager=eager, **kwargs)
         return timer_instance(func)
+
     return decorator
 
 
@@ -143,13 +154,11 @@ def http_endpoint(method: str, path: str, **kwargs) -> Callable:
         path: URL path
         **kwargs: Additional FastAPI decorator arguments
     """
+
     def decorator(func: Callable) -> Callable:
-        func._cliffracer_http_endpoint = {
-            "method": method.upper(),
-            "path": path,
-            "kwargs": kwargs
-        }
+        func._cliffracer_http_endpoint = {"method": method.upper(), "path": path, "kwargs": kwargs}
         return func
+
     return decorator
 
 
@@ -174,9 +183,7 @@ def delete(path: str, **kwargs) -> Callable:
 
 
 def monitor_performance(
-    track_latency: bool = True,
-    track_errors: bool = True,
-    custom_metrics: list[str] | None = None
+    track_latency: bool = True, track_errors: bool = True, custom_metrics: list[str] | None = None
 ) -> Callable:
     """
     Decorator to monitor method performance.
@@ -186,13 +193,15 @@ def monitor_performance(
         track_errors: Whether to track error rates
         custom_metrics: List of custom metric names to collect
     """
+
     def decorator(func: Callable) -> Callable:
         async def async_wrapper(self, *args, **kwargs):
-            if not hasattr(self, '_metrics') or not self._metrics:
+            if not hasattr(self, "_metrics") or not self._metrics:
                 # No metrics available, just execute
                 return await func(self, *args, **kwargs)
 
             import time
+
             start_time = time.perf_counter()
             success = False
 
@@ -214,10 +223,11 @@ def monitor_performance(
                 self._metrics.increment_counter(f"{func.__name__}_calls")
 
         def sync_wrapper(self, *args, **kwargs):
-            if not hasattr(self, '_metrics') or not self._metrics:
+            if not hasattr(self, "_metrics") or not self._metrics:
                 return func(self, *args, **kwargs)
 
             import time
+
             start_time = time.perf_counter()
 
             try:
@@ -246,7 +256,7 @@ def monitor_performance(
 def retry(
     max_attempts: int = 3,
     backoff_delay: float = 1.0,
-    exceptions: tuple[type[Exception], ...] = (Exception,)
+    exceptions: tuple[type[Exception], ...] = (Exception,),
 ) -> Callable:
     """
     Decorator to retry failed method calls.
@@ -256,6 +266,7 @@ def retry(
         backoff_delay: Delay between retries (in seconds)
         exceptions: Tuple of exception types to retry on
     """
+
     def decorator(func: Callable) -> Callable:
         async def async_wrapper(self, *args, **kwargs):
             import asyncio
@@ -312,6 +323,7 @@ def cache_result(ttl_seconds: int = 60) -> Callable:
     Args:
         ttl_seconds: Time to live for cached results
     """
+
     def decorator(func: Callable) -> Callable:
         cache = {}
 
@@ -378,18 +390,18 @@ def compose_decorators(*decorators) -> Callable:
         async def robust_task(self):
             await self.do_something()
     """
+
     def decorator(func: Callable) -> Callable:
         for dec in reversed(decorators):
             func = dec(func)
         return func
+
     return decorator
 
 
 # Convenience decorator combinations
 def robust_rpc(
-    schema: type[BaseModel] | None = None,
-    max_attempts: int = 3,
-    monitor: bool = True
+    schema: type[BaseModel] | None = None, max_attempts: int = 3, monitor: bool = True
 ) -> Callable:
     """
     Decorator that combines RPC, validation, retry, and monitoring.
@@ -415,10 +427,7 @@ def robust_rpc(
 
 
 def scheduled_task(
-    interval: float,
-    eager: bool = False,
-    monitor: bool = True,
-    max_attempts: int = 2
+    interval: float, eager: bool = False, monitor: bool = True, max_attempts: int = 2
 ) -> Callable:
     """
     Decorator for robust scheduled tasks.
@@ -427,7 +436,7 @@ def scheduled_task(
     """
     decorators = [
         timer(interval=interval, eager=eager),
-        retry(max_attempts=max_attempts, exceptions=(Exception,))
+        retry(max_attempts=max_attempts, exceptions=(Exception,)),
     ]
 
     if monitor:

@@ -23,7 +23,9 @@ class ClientGenerator:
         from .core.validation import validate_string_length, validate_timeout
 
         # Validate inputs
-        service_name = validate_string_length(service_name, min_length=1, max_length=63, field_name="Service name")
+        service_name = validate_string_length(
+            service_name, min_length=1, max_length=63, field_name="Service name"
+        )
         timeout = validate_timeout(timeout, min_ms=100, max_ms=30000)
 
         try:

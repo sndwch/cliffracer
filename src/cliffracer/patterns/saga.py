@@ -21,6 +21,7 @@ from ..core.correlation import CorrelationContext
 
 class SagaState(Enum):
     """States for a saga execution"""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPENSATING = "compensating"
@@ -31,6 +32,7 @@ class SagaState(Enum):
 
 class StepState(Enum):
     """States for individual saga steps"""
+
     PENDING = "pending"
     EXECUTING = "executing"
     COMPLETED = "completed"
@@ -42,6 +44,7 @@ class StepState(Enum):
 @dataclass
 class SagaStep:
     """Represents a single step in a saga"""
+
     name: str
     service: str
     action: str
@@ -62,6 +65,7 @@ class SagaStep:
 @dataclass
 class SagaContext:
     """Context for saga execution"""
+
     saga_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     correlation_id: str = field(default_factory=lambda: CorrelationContext.get_or_create_id())
     saga_type: str = ""
@@ -94,10 +98,10 @@ class SagaContext:
                     "state": step.state.value,
                     "result": step.result,
                     "error": step.error,
-                    "attempts": step.attempts
+                    "attempts": step.attempts,
                 }
                 for step in self.steps
-            ]
+            ],
         }
 
 
@@ -144,6 +148,7 @@ class SagaCoordinator:
 
     def _register_handlers(self):
         """Register coordinator RPC handlers"""
+
         @self.service.rpc
         async def start_saga(saga_type: str, data: dict[str, Any]) -> dict[str, Any]:
             """Start a new saga"""
@@ -171,7 +176,7 @@ class SagaCoordinator:
         context = SagaContext(
             saga_type=saga_type,
             steps=[SagaStep(**step.__dict__) for step in self.saga_definitions[saga_type]],
-            data=data
+            data=data,
         )
 
         self.active_sagas[context.saga_id] = context
@@ -182,7 +187,7 @@ class SagaCoordinator:
         return {
             "saga_id": context.saga_id,
             "correlation_id": context.correlation_id,
-            "status": "started"
+            "status": "started",
         }
 
     async def _execute_saga(self, context: SagaContext):
@@ -210,10 +215,7 @@ class SagaCoordinator:
             logger.info(f"Saga completed successfully: {context.saga_id}")
 
             # Emit completion event
-            await self.service.publish(
-                f"saga.{context.saga_type}.completed",
-                context.to_dict()
-            )
+            await self.service.publish(f"saga.{context.saga_type}.completed", context.to_dict())
 
         except Exception as e:
             logger.error(f"Saga execution error: {e}")
@@ -237,9 +239,9 @@ class SagaCoordinator:
                         "saga_id": context.saga_id,
                         "correlation_id": context.correlation_id,
                         "step": step.name,
-                        "data": context.data
+                        "data": context.data,
                     },
-                    timeout=step.timeout
+                    timeout=step.timeout,
                 )
 
                 # Check response
@@ -285,10 +287,7 @@ class SagaCoordinator:
         context.completed_at = datetime.now(UTC)
 
         # Emit compensation event
-        await self.service.publish(
-            f"saga.{context.saga_type}.compensated",
-            context.to_dict()
-        )
+        await self.service.publish(f"saga.{context.saga_type}.compensated", context.to_dict())
 
     async def _compensate_step(self, context: SagaContext, step: SagaStep):
         """Compensate a single step"""
@@ -303,9 +302,9 @@ class SagaCoordinator:
                     "correlation_id": context.correlation_id,
                     "step": step.name,
                     "data": context.data,
-                    "original_result": step.result
+                    "original_result": step.result,
                 },
-                timeout=step.timeout
+                timeout=step.timeout,
             )
 
             step.state = StepState.COMPENSATED
@@ -326,6 +325,7 @@ class ChoreographySaga:
 
     def on_event(self, event_pattern: str):
         """Decorator to handle saga events"""
+
         def decorator(func):
             # Subscribe to event
             self.subscriptions.add(event_pattern)
@@ -347,8 +347,8 @@ class ChoreographySaga:
                             {
                                 "saga_id": data["saga_id"],
                                 "correlation_id": data["correlation_id"],
-                                "result": result
-                            }
+                                "result": result,
+                            },
                         )
 
                     return result
@@ -363,20 +363,23 @@ class ChoreographySaga:
                             {
                                 "saga_id": data["saga_id"],
                                 "correlation_id": data["correlation_id"],
-                                "error": str(e)
-                            }
+                                "error": str(e),
+                            },
                         )
 
                     raise
 
             return wrapper
+
         return decorator
 
     def emits(self, success_event: str, failure_event: str | None = None):
         """Specify events to emit on success/failure"""
+
         def decorator(func):
             func._success_event = success_event
             if failure_event:
                 func._failure_event = failure_event
             return func
+
         return decorator

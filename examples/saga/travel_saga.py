@@ -44,23 +44,21 @@ class FlightService(CliffracerService, SagaParticipant):
                     "to": data["to_city"],
                     "date": data["travel_date"],
                     "price": 350.00,
-                    "status": "confirmed"
+                    "status": "confirmed",
                 }
 
                 print(f"✈️  Flight booked: {booking_id}")
 
                 return {
-                    "result": {
-                        "booking_id": booking_id,
-                        "price": 350.00,
-                        "flight_number": "AA123"
-                    }
+                    "result": {"booking_id": booking_id, "price": 350.00, "flight_number": "AA123"}
                 }
             except Exception as e:
                 return {"error": str(e)}
 
         @self.rpc
-        async def cancel_flight(saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict) -> dict:
+        async def cancel_flight(
+            saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict
+        ) -> dict:
             """Cancel flight booking (compensation)"""
             try:
                 booking_id = original_result["booking_id"]
@@ -106,23 +104,19 @@ class HotelService(CliffracerService, SagaParticipant):
                     "check_in": data["travel_date"],
                     "check_out": data.get("return_date", data["travel_date"]),
                     "price": 120.00,
-                    "status": "confirmed"
+                    "status": "confirmed",
                 }
 
                 print(f"🏨 Hotel booked: {booking_id}")
 
-                return {
-                    "result": {
-                        "booking_id": booking_id,
-                        "price": 120.00,
-                        "room_number": "405"
-                    }
-                }
+                return {"result": {"booking_id": booking_id, "price": 120.00, "room_number": "405"}}
             except Exception as e:
                 return {"error": str(e)}
 
         @self.rpc
-        async def cancel_hotel(saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict) -> dict:
+        async def cancel_hotel(
+            saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict
+        ) -> dict:
             """Cancel hotel booking (compensation)"""
             try:
                 booking_id = original_result["booking_id"]
@@ -165,7 +159,7 @@ class CarRentalService(CliffracerService, SagaParticipant):
                     "pickup_date": data["travel_date"],
                     "return_date": data.get("return_date", data["travel_date"]),
                     "price": 45.00,
-                    "status": "confirmed"
+                    "status": "confirmed",
                 }
 
                 print(f"🚗 Car booked: {booking_id}")
@@ -174,14 +168,16 @@ class CarRentalService(CliffracerService, SagaParticipant):
                     "result": {
                         "booking_id": booking_id,
                         "price": 45.00,
-                        "car_model": "Toyota Corolla"
+                        "car_model": "Toyota Corolla",
                     }
                 }
             except Exception as e:
                 return {"error": str(e)}
 
         @self.rpc
-        async def cancel_car(saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict) -> dict:
+        async def cancel_car(
+            saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict
+        ) -> dict:
             """Cancel car rental (compensation)"""
             try:
                 booking_id = original_result["booking_id"]
@@ -204,32 +200,35 @@ class TravelBookingService(CliffracerService):
         self.coordinator = SagaCoordinator(self)
 
         # Define the travel booking saga
-        self.coordinator.define_saga("travel_booking", [
-            SagaStep(
-                name="book_flight",
-                service="flight_service",
-                action="book_flight",
-                compensation="cancel_flight",
-                timeout=10.0,
-                retry_count=2
-            ),
-            SagaStep(
-                name="book_hotel",
-                service="hotel_service",
-                action="book_hotel",
-                compensation="cancel_hotel",
-                timeout=10.0,
-                retry_count=2
-            ),
-            SagaStep(
-                name="book_car",
-                service="car_rental_service",
-                action="book_car",
-                compensation="cancel_car",
-                timeout=10.0,
-                retry_count=1  # Less critical, fewer retries
-            )
-        ])
+        self.coordinator.define_saga(
+            "travel_booking",
+            [
+                SagaStep(
+                    name="book_flight",
+                    service="flight_service",
+                    action="book_flight",
+                    compensation="cancel_flight",
+                    timeout=10.0,
+                    retry_count=2,
+                ),
+                SagaStep(
+                    name="book_hotel",
+                    service="hotel_service",
+                    action="book_hotel",
+                    compensation="cancel_hotel",
+                    timeout=10.0,
+                    retry_count=2,
+                ),
+                SagaStep(
+                    name="book_car",
+                    service="car_rental_service",
+                    action="book_car",
+                    compensation="cancel_car",
+                    timeout=10.0,
+                    retry_count=1,  # Less critical, fewer retries
+                ),
+            ],
+        )
 
     @property
     def rpc(self):
@@ -249,7 +248,7 @@ class TravelBookingService(CliffracerService):
         to_city: str,
         travel_date: str,
         return_date: str = None,
-        car_type: str = "Economy"
+        car_type: str = "Economy",
     ) -> dict:
         """Book complete travel package"""
         print(f"\n🌍 Starting travel booking for {passenger_name}")
@@ -257,14 +256,17 @@ class TravelBookingService(CliffracerService):
         print(f"   Dates: {travel_date} - {return_date or 'One way'}")
         print("-" * 50)
 
-        result = await self.coordinator._start_saga("travel_booking", {
-            "passenger_name": passenger_name,
-            "from_city": from_city,
-            "to_city": to_city,
-            "travel_date": travel_date,
-            "return_date": return_date,
-            "car_type": car_type
-        })
+        result = await self.coordinator._start_saga(
+            "travel_booking",
+            {
+                "passenger_name": passenger_name,
+                "from_city": from_city,
+                "to_city": to_city,
+                "travel_date": travel_date,
+                "return_date": return_date,
+                "car_type": car_type,
+            },
+        )
 
         return result
 
@@ -272,12 +274,7 @@ class TravelBookingService(CliffracerService):
 async def demonstrate_saga():
     """Demonstrate the travel booking saga"""
     # Start all services
-    services = [
-        FlightService(),
-        HotelService(),
-        CarRentalService(),
-        TravelBookingService()
-    ]
+    services = [FlightService(), HotelService(), CarRentalService(), TravelBookingService()]
 
     # Run services
     tasks = []
@@ -292,9 +289,9 @@ async def demonstrate_saga():
     booking_service = services[-1]
 
     # Example 1: Successful booking
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("EXAMPLE 1: Attempting travel booking (may succeed or fail)")
-    print("="*60)
+    print("=" * 60)
 
     result1 = await booking_service.book_travel(
         passenger_name="John Doe",
@@ -302,7 +299,7 @@ async def demonstrate_saga():
         to_city="San Francisco",
         travel_date="2024-03-15",
         return_date="2024-03-20",
-        car_type="SUV"
+        car_type="SUV",
     )
 
     print(f"\nBooking result: {result1}")
@@ -312,8 +309,7 @@ async def demonstrate_saga():
 
     if "saga_id" in result1:
         status = await booking_service.rpc_call(
-            "travel_booking_service.get_saga_status",
-            {"saga_id": result1["saga_id"]}
+            "travel_booking_service.get_saga_status", {"saga_id": result1["saga_id"]}
         )
         print(f"\nFinal saga status: {status.get('state', 'Unknown')}")
 
@@ -325,9 +321,9 @@ async def demonstrate_saga():
             print("   All services were booked")
 
     # Example 2: Another booking attempt
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("EXAMPLE 2: Another travel booking attempt")
-    print("="*60)
+    print("=" * 60)
 
     result2 = await booking_service.book_travel(
         passenger_name="Jane Smith",
@@ -335,15 +331,14 @@ async def demonstrate_saga():
         to_city="Chicago",
         travel_date="2024-04-10",
         return_date="2024-04-15",
-        car_type="Economy"
+        car_type="Economy",
     )
 
     await asyncio.sleep(5)
 
     if "saga_id" in result2:
         status = await booking_service.rpc_call(
-            "travel_booking_service.get_saga_status",
-            {"saga_id": result2["saga_id"]}
+            "travel_booking_service.get_saga_status", {"saga_id": result2["saga_id"]}
         )
         print(f"\nFinal saga status: {status.get('state', 'Unknown')}")
 

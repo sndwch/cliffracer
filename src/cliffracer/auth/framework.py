@@ -86,6 +86,7 @@ class TokenService:
     def create_user(self, username: str, email: str, password: str) -> User:
         """Create a new user"""
         from .simple_auth import get_auth_service
+
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
@@ -99,12 +100,13 @@ class TokenService:
             username=auth_user.username,
             email=auth_user.email,
             roles=[],  # Could map roles if needed
-            permissions=[]  # Could map permissions if needed
+            permissions=[],  # Could map permissions if needed
         )
 
     def authenticate(self, username: str, password: str) -> AuthToken | None:
         """Authenticate a user and return a token"""
         from .simple_auth import get_auth_service
+
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
@@ -123,12 +125,13 @@ class TokenService:
             token=token,
             user_id=context.user.user_id,
             expires_at=context.expires_at,
-            scopes=[]  # Could add scopes if needed
+            scopes=[],  # Could add scopes if needed
         )
 
     def validate_token(self, token: str) -> AuthToken | None:
         """Validate a token and return token info"""
         from .simple_auth import get_auth_service
+
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
@@ -139,15 +142,13 @@ class TokenService:
             return None
 
         return AuthToken(
-            token=token,
-            user_id=context.user.user_id,
-            expires_at=context.expires_at,
-            scopes=[]
+            token=token, user_id=context.user.user_id, expires_at=context.expires_at, scopes=[]
         )
 
     def revoke_token(self, token: str) -> None:
         """Revoke a token"""
         from .simple_auth import get_auth_service
+
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")

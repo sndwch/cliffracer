@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cliffracer import BaseNATSService, ServiceConfig, ValidatedNATSService, rpc, listener
+from cliffracer import BaseNATSService, ServiceConfig, ValidatedNATSService, listener, rpc
 
 
 class TestNatsService:

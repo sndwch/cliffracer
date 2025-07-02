@@ -21,5 +21,5 @@ __all__ = [
     "SagaContext",
     "SagaState",
     "StepState",
-    "ChoreographySaga"
+    "ChoreographySaga",
 ]

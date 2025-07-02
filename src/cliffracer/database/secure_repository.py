@@ -47,11 +47,11 @@ class SecureRepository[T: DatabaseModel]:
         "api_keys",
         "health_checks",
         "deployments",
-        "features"
+        "features",
     }
 
     # Pattern for valid SQL identifiers
-    VALID_IDENTIFIER_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+    VALID_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
     # Maximum identifier length (PostgreSQL limit)
     MAX_IDENTIFIER_LENGTH = 63
@@ -92,7 +92,9 @@ class SecureRepository[T: DatabaseModel]:
             raise ValueError("Table name cannot be empty")
 
         if len(table_name) > self.MAX_IDENTIFIER_LENGTH:
-            raise ValueError(f"Table name too long: {len(table_name)} > {self.MAX_IDENTIFIER_LENGTH}")
+            raise ValueError(
+                f"Table name too long: {len(table_name)} > {self.MAX_IDENTIFIER_LENGTH}"
+            )
 
         if table_name not in self.ALLOWED_TABLES:
             raise ValueError(
@@ -117,7 +119,9 @@ class SecureRepository[T: DatabaseModel]:
             raise ValueError("Field name cannot be empty")
 
         if len(field_name) > self.MAX_IDENTIFIER_LENGTH:
-            raise ValueError(f"Field name too long: {len(field_name)} > {self.MAX_IDENTIFIER_LENGTH}")
+            raise ValueError(
+                f"Field name too long: {len(field_name)} > {self.MAX_IDENTIFIER_LENGTH}"
+            )
 
         if not self.VALID_IDENTIFIER_PATTERN.match(field_name):
             raise ValueError(f"Field name '{field_name}' contains invalid characters")
@@ -136,10 +140,18 @@ class SecureRepository[T: DatabaseModel]:
             self._valid_fields.update(self.model_class.__annotations__.keys())
 
         # Add common database fields
-        self._valid_fields.update({
-            "id", "created_at", "updated_at", "deleted_at",
-            "created_by", "updated_by", "version", "is_active"
-        })
+        self._valid_fields.update(
+            {
+                "id",
+                "created_at",
+                "updated_at",
+                "deleted_at",
+                "created_by",
+                "updated_by",
+                "version",
+                "is_active",
+            }
+        )
 
         # Add any fields from the model's __fields__ if using Pydantic
         if hasattr(self.model_class, "__fields__"):
@@ -158,8 +170,19 @@ class SecureRepository[T: DatabaseModel]:
         if isinstance(value, str):
             # Check for common SQL injection patterns
             suspicious_patterns = [
-                "';", '";', '--', '/*', '*/', 'xp_', 'sp_',
-                'UNION', 'SELECT', 'DROP', 'INSERT', 'UPDATE', 'DELETE'
+                "';",
+                '";',
+                "--",
+                "/*",
+                "*/",
+                "xp_",
+                "sp_",
+                "UNION",
+                "SELECT",
+                "DROP",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
             ]
 
             value_upper = value.upper()
@@ -184,12 +207,12 @@ class SecureRepository[T: DatabaseModel]:
         # Build INSERT query with validated fields
         columns = list(data.keys())
         values = [data[col] for col in columns]
-        placeholders = [f"${i+1}" for i in range(len(columns))]
+        placeholders = [f"${i + 1}" for i in range(len(columns))]
 
         # Use parameterized query (safe from injection)
         query = f"""
-            INSERT INTO {self.table_name} ({', '.join(columns)})
-            VALUES ({', '.join(placeholders)})
+            INSERT INTO {self.table_name} ({", ".join(columns)})
+            VALUES ({", ".join(placeholders)})
             RETURNING *
         """
 
@@ -230,7 +253,7 @@ class SecureRepository[T: DatabaseModel]:
 
         query = f"""
             SELECT * FROM {self.table_name}
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             ORDER BY created_at DESC
         """
 
@@ -244,6 +267,7 @@ class SecureRepository[T: DatabaseModel]:
 
         # Add updated_at timestamp
         from datetime import UTC, datetime
+
         updates["updated_at"] = datetime.now(UTC)
 
         # Validate all field names
@@ -265,7 +289,7 @@ class SecureRepository[T: DatabaseModel]:
 
         query = f"""
             UPDATE {self.table_name}
-            SET {', '.join(set_clauses)}
+            SET {", ".join(set_clauses)}
             WHERE id = ${len(values)}
             RETURNING *
         """
@@ -327,7 +351,7 @@ class SecureRepository[T: DatabaseModel]:
 
         query = f"""
             SELECT COUNT(*) FROM {self.table_name}
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
         """
 
         return await self.db.fetchval(query, *values)
@@ -379,7 +403,7 @@ def make_repository_secure():
     repository.Repository = SecureRepository
 
     # Update the module's __all__ if it exists
-    if hasattr(repository, '__all__') and 'Repository' in repository.__all__:
-        repository.__all__.append('SecureRepository')
+    if hasattr(repository, "__all__") and "Repository" in repository.__all__:
+        repository.__all__.append("SecureRepository")
 
     logger.info("Replaced Repository with SecureRepository globally")

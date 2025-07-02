@@ -28,10 +28,8 @@ class MyBusinessService(CliffracerService, HTTPMixin):
 
     def __init__(self):
         from cliffracer import ServiceConfig
-        config = ServiceConfig(
-            name="my_business_service",
-            nats_url="nats://localhost:4222"
-        )
+
+        config = ServiceConfig(name="my_business_service", nats_url="nats://localhost:4222")
         super().__init__(config)
         self._http_port = 8080
 
@@ -63,10 +61,7 @@ class MyBusinessService(CliffracerService, HTTPMixin):
         else:
             products = await self.products.list(limit=50)
 
-        return {
-            "products": [p.model_dump() for p in products],
-            "count": len(products)
-        }
+        return {"products": [p.model_dump() for p in products], "count": len(products)}
 
     @event("order.created")
     async def on_order_created(self, order_data: dict):
@@ -85,10 +80,8 @@ class HealthService(CliffracerService):
 
     def __init__(self):
         from cliffracer import ServiceConfig
-        config = ServiceConfig(
-            name="health_service",
-            nats_url="nats://localhost:4222"
-        )
+
+        config = ServiceConfig(name="health_service", nats_url="nats://localhost:4222")
         super().__init__(config)
 
     @rpc
@@ -103,10 +96,7 @@ class HealthService(CliffracerService):
             "status": "healthy",
             "service": self.name,
             "uptime": "unknown",  # You could track this
-            "dependencies": {
-                "nats": "connected",
-                "database": "connected"
-            }
+            "dependencies": {"nats": "connected", "database": "connected"},
         }
 
 

@@ -181,11 +181,11 @@ class BaseNATSService:
     async def _discover_timers(self):
         """Discover and register timer-decorated methods"""
         for name in dir(self):
-            if name.startswith('_'):
+            if name.startswith("_"):
                 continue
 
             method = getattr(self, name)
-            if hasattr(method, '_cliffracer_timers'):
+            if hasattr(method, "_cliffracer_timers"):
                 for timer_instance in method._cliffracer_timers:
                     self._timers.append(timer_instance)
                     logger.debug(f"Discovered timer: {timer_instance.method_name}")
@@ -204,7 +204,7 @@ class BaseNATSService:
         """Get statistics for all timers"""
         return {
             "timer_count": len(self._timers),
-            "timers": [timer.get_stats() for timer in self._timers]
+            "timers": [timer.get_stats() for timer in self._timers],
         }
 
     async def start(self):

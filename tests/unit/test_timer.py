@@ -52,7 +52,7 @@ class TestTimerDecorator:
         def test_method():
             pass
 
-        assert hasattr(test_method, '_cliffracer_timers')
+        assert hasattr(test_method, "_cliffracer_timers")
         assert len(test_method._cliffracer_timers) == 1
 
         timer_instance = test_method._cliffracer_timers[0]
@@ -116,6 +116,7 @@ class TestTimerClass:
     @pytest.mark.asyncio
     async def test_timer_start_stop(self, timer_instance):
         """Test timer start and stop functionality"""
+
         # Mock service instance
         class MockService:
             def test_method(self):

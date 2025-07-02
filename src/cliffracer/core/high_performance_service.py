@@ -33,7 +33,7 @@ class HighPerformanceService(BaseNATSService):
         enable_metrics: bool = True,
         connection_pool_size: int = 5,
         batch_size: int = 50,
-        batch_timeout_ms: int = 25
+        batch_timeout_ms: int = 25,
     ):
         """
         Initialize high-performance service.
@@ -56,16 +56,14 @@ class HighPerformanceService(BaseNATSService):
         # Initialize optimized components
         if enable_connection_pooling:
             self._connection_pool = OptimizedNATSConnection(
-                nats_url=config.nats_url,
-                max_connections=connection_pool_size
+                nats_url=config.nats_url, max_connections=connection_pool_size
             )
         else:
             self._connection_pool = None
 
         if enable_batch_processing:
             self._batch_processor = BatchProcessor(
-                batch_size=batch_size,
-                batch_timeout_ms=batch_timeout_ms
+                batch_size=batch_size, batch_timeout_ms=batch_timeout_ms
             )
         else:
             self._batch_processor = None
@@ -118,12 +116,7 @@ class HighPerformanceService(BaseNATSService):
         logger.info(f"High-performance service {self.config.name} stopped")
 
     async def call_rpc_optimized(
-        self,
-        service: str,
-        method: str,
-        timeout: float = 5.0,
-        use_cache: bool = False,
-        **kwargs
+        self, service: str, method: str, timeout: float = 5.0, use_cache: bool = False, **kwargs
     ) -> Any:
         """
         Optimized RPC call with caching and metrics.
@@ -160,7 +153,9 @@ class HighPerformanceService(BaseNATSService):
             if self._connection_pool:
                 subject = f"{service}.rpc.{method}"
                 payload = self._serialize_payload(kwargs)
-                response_data = await self._connection_pool.request(subject, payload, timeout=timeout)
+                response_data = await self._connection_pool.request(
+                    subject, payload, timeout=timeout
+                )
                 response = self._deserialize_response(response_data)
             else:
                 # Fall back to standard RPC
@@ -168,10 +163,7 @@ class HighPerformanceService(BaseNATSService):
 
             # Cache successful response
             if use_cache:
-                self._response_cache[cache_key] = {
-                    "response": response,
-                    "timestamp": time.time()
-                }
+                self._response_cache[cache_key] = {"response": response, "timestamp": time.time()}
                 if self._metrics:
                     self._metrics.increment_counter("cache_sets")
 
@@ -190,12 +182,7 @@ class HighPerformanceService(BaseNATSService):
                 latency_ms = (end_time - start_time) * 1000
                 self._metrics.record_latency(latency_ms, success, timeout_occurred)
 
-    async def batch_process(
-        self,
-        batch_key: str,
-        item: Any,
-        processor_func: callable
-    ) -> Any:
+    async def batch_process(self, batch_key: str, item: Any, processor_func: callable) -> Any:
         """
         Process item using batch processor.
 
@@ -230,7 +217,7 @@ class HighPerformanceService(BaseNATSService):
         # Add cache metrics
         metrics["response_cache"] = {
             "size": len(self._response_cache),
-            "timeout_seconds": self._cache_timeout
+            "timeout_seconds": self._cache_timeout,
         }
 
         return metrics
@@ -274,13 +261,15 @@ class HighPerformanceService(BaseNATSService):
     def _serialize_payload(self, data: Any) -> bytes:
         """Serialize payload for NATS transmission"""
         import json
+
         return json.dumps(data).encode()
 
     def _deserialize_response(self, response_msg) -> Any:
         """Deserialize NATS response"""
         import json
+
         # Handle both Msg objects and bytes
-        if hasattr(response_msg, 'data'):
+        if hasattr(response_msg, "data"):
             data = response_msg.data
         else:
             data = response_msg
@@ -290,7 +279,8 @@ class HighPerformanceService(BaseNATSService):
         """Clean up expired cache entries"""
         current_time = time.time()
         expired_keys = [
-            key for key, entry in self._response_cache.items()
+            key
+            for key, entry in self._response_cache.items()
             if current_time - entry["timestamp"] > self._cache_timeout
         ]
 

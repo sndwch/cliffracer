@@ -100,7 +100,9 @@ class MessageClient(ABC):
 
     @abstractmethod
     async def subscribe(
-        self, config: SubscriptionConfig, callback: Callable[[Any], Any]  # Message object when implemented
+        self,
+        config: SubscriptionConfig,
+        callback: Callable[[Any], Any],  # Message object when implemented
     ) -> str:
         """Subscribe to messages"""
         pass
