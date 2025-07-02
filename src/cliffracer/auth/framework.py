@@ -5,6 +5,7 @@ This module provides compatibility interfaces that delegate to the working Simpl
 For new development, use SimpleAuthService directly from cliffracer.auth.simple_auth.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -88,10 +89,10 @@ class TokenService:
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
-        
+
         # Create user in simple auth service
         auth_user = auth_service.create_user(username, email, password)
-        
+
         # Convert to framework User
         return User(
             user_id=auth_user.user_id,
@@ -107,17 +108,17 @@ class TokenService:
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
-        
+
         # Authenticate with simple auth service
         token = auth_service.authenticate(username, password)
         if not token:
             return None
-        
+
         # Validate token to get expiry info
         context = auth_service.validate_token(token)
         if not context:
             return None
-        
+
         return AuthToken(
             token=token,
             user_id=context.user.user_id,
@@ -131,12 +132,12 @@ class TokenService:
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
-        
+
         # Validate with simple auth service
         context = auth_service.validate_token(token)
         if not context or not context.user:
             return None
-        
+
         return AuthToken(
             token=token,
             user_id=context.user.user_id,
@@ -150,7 +151,7 @@ class TokenService:
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
-        
+
         # Revoke with simple auth service
         auth_service.revoke_token(token)
 

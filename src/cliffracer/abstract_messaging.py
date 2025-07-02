@@ -42,7 +42,7 @@ class MessageConfig:
 @dataclass
 class Message:
     """Message representation for the messaging interface"""
-    
+
     subject: str
     data: bytes
     headers: dict[str, str] | None = None

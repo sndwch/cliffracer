@@ -102,8 +102,14 @@ class DatabaseConnection:
         if not self.pool:
             await self.connect()
 
-        async with self.pool.acquire() as conn:
-            return await conn.execute(query, *args, timeout=timeout)
+        # Check if we're in a transaction (pool is actually a connection)
+        if hasattr(self.pool, 'transaction'):
+            # We're already in a transaction, use the connection directly
+            return await self.pool.execute(query, *args, timeout=timeout)
+        else:
+            # Normal case, acquire from pool
+            async with self.pool.acquire() as conn:
+                return await conn.execute(query, *args, timeout=timeout)
 
     async def fetch(self, query: str, *args, timeout: float | None = None) -> list[asyncpg.Record]:
         """
@@ -120,8 +126,14 @@ class DatabaseConnection:
         if not self.pool:
             await self.connect()
 
-        async with self.pool.acquire() as conn:
-            return await conn.fetch(query, *args, timeout=timeout)
+        # Check if we're in a transaction (pool is actually a connection)
+        if hasattr(self.pool, 'transaction'):
+            # We're already in a transaction, use the connection directly
+            return await self.pool.fetch(query, *args, timeout=timeout)
+        else:
+            # Normal case, acquire from pool
+            async with self.pool.acquire() as conn:
+                return await conn.fetch(query, *args, timeout=timeout)
 
     async def fetchrow(self, query: str, *args, timeout: float | None = None) -> asyncpg.Record | None:
         """
@@ -138,8 +150,14 @@ class DatabaseConnection:
         if not self.pool:
             await self.connect()
 
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow(query, *args, timeout=timeout)
+        # Check if we're in a transaction (pool is actually a connection)
+        if hasattr(self.pool, 'transaction'):
+            # We're already in a transaction, use the connection directly
+            return await self.pool.fetchrow(query, *args, timeout=timeout)
+        else:
+            # Normal case, acquire from pool
+            async with self.pool.acquire() as conn:
+                return await conn.fetchrow(query, *args, timeout=timeout)
 
     async def fetchval(self, query: str, *args, column: int = 0, timeout: float | None = None):
         """
@@ -157,8 +175,14 @@ class DatabaseConnection:
         if not self.pool:
             await self.connect()
 
-        async with self.pool.acquire() as conn:
-            return await conn.fetchval(query, *args, column=column, timeout=timeout)
+        # Check if we're in a transaction (pool is actually a connection)
+        if hasattr(self.pool, 'transaction'):
+            # We're already in a transaction, use the connection directly
+            return await self.pool.fetchval(query, *args, column=column, timeout=timeout)
+        else:
+            # Normal case, acquire from pool
+            async with self.pool.acquire() as conn:
+                return await conn.fetchval(query, *args, column=column, timeout=timeout)
 
     @asynccontextmanager
     async def transaction(self):

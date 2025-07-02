@@ -183,7 +183,7 @@ class BaseNATSService:
         for name in dir(self):
             if name.startswith('_'):
                 continue
-                
+
             method = getattr(self, name)
             if hasattr(method, '_cliffracer_timers'):
                 for timer_instance in method._cliffracer_timers:

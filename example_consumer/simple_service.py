@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Simple example service using Cliffracer"""
 
-from cliffracer import CliffracerService, ServiceConfig
+from cliffracer import CliffracerService, ServiceConfig, rpc
+
 
 class ExampleService(CliffracerService):
     def __init__(self):
@@ -11,11 +12,11 @@ class ExampleService(CliffracerService):
         )
         super().__init__(config)
 
-    @self.rpc
+    @rpc
     async def hello(self, name: str = "World") -> str:
         return f"Hello, {name}!"
 
-    @self.rpc  
+    @rpc
     async def add(self, a: int, b: int) -> int:
         return a + b
 

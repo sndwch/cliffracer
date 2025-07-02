@@ -6,21 +6,19 @@ using both orchestration and choreography patterns.
 """
 
 import asyncio
-from typing import Dict, Any
+
+from pydantic import Field
 
 from cliffracer import CliffracerService, ServiceConfig
-from cliffracer.patterns.saga import (
-    SagaCoordinator, SagaParticipant, SagaStep, ChoreographySaga
-)
-from cliffracer.database.models import DatabaseModel
 from cliffracer.database import Repository
-from pydantic import Field
+from cliffracer.database.models import DatabaseModel
+from cliffracer.patterns.saga import ChoreographySaga, SagaCoordinator, SagaParticipant, SagaStep
 
 
 # Domain Models
 class Order(DatabaseModel):
     __tablename__ = "orders"
-    
+
     order_id: str = Field(..., description="Order ID")
     customer_id: str = Field(..., description="Customer ID")
     items: list[dict] = Field(..., description="Order items")
@@ -32,7 +30,7 @@ class Order(DatabaseModel):
 
 class Payment(DatabaseModel):
     __tablename__ = "payments"
-    
+
     payment_id: str = Field(..., description="Payment ID")
     order_id: str = Field(..., description="Order ID")
     amount: float = Field(..., description="Payment amount")
@@ -42,7 +40,7 @@ class Payment(DatabaseModel):
 
 class Inventory(DatabaseModel):
     __tablename__ = "inventory"
-    
+
     product_id: str = Field(..., description="Product ID")
     quantity: int = Field(..., description="Available quantity")
     reserved: int = Field(default=0, description="Reserved quantity")
@@ -52,17 +50,17 @@ class Inventory(DatabaseModel):
 
 class OrderService(CliffracerService, SagaParticipant):
     """Order management service"""
-    
+
     def __init__(self):
         config = ServiceConfig(name="order_service")
         CliffracerService.__init__(self, config)
         SagaParticipant.__init__(self, self)
-        
+
         self.orders = Repository(Order)
-    
+
     def _register_handlers(self):
         """Register saga action handlers"""
-        
+
         @self.rpc
         async def create_order(saga_id: str, correlation_id: str, step: str, data: dict) -> dict:
             """Create a new order"""
@@ -74,9 +72,9 @@ class OrderService(CliffracerService, SagaParticipant):
                     total_amount=data["total_amount"],
                     status="created"
                 )
-                
+
                 created_order = await self.orders.create(order)
-                
+
                 return {
                     "result": {
                         "order_id": created_order.order_id,
@@ -85,35 +83,35 @@ class OrderService(CliffracerService, SagaParticipant):
                 }
             except Exception as e:
                 return {"error": str(e)}
-        
+
         @self.rpc
         async def cancel_order(saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict) -> dict:
             """Cancel an order (compensation)"""
             try:
                 order_id = original_result["order_id"]
                 order = await self.orders.get_by_field("order_id", order_id)
-                
+
                 if order:
                     order.status = "cancelled"
                     await self.orders.update(order.id, order)
-                
+
                 return {"result": {"status": "cancelled"}}
             except Exception as e:
                 return {"error": str(e)}
-        
+
         @self.rpc
         async def confirm_order(saga_id: str, correlation_id: str, step: str, data: dict) -> dict:
             """Confirm order completion"""
             try:
                 order_id = data["create_order_result"]["order_id"]
                 order = await self.orders.get_by_field("order_id", order_id)
-                
+
                 if order:
                     order.status = "confirmed"
                     order.payment_id = data["process_payment_result"]["payment_id"]
                     order.shipment_id = data["create_shipment_result"]["shipment_id"]
                     await self.orders.update(order.id, order)
-                
+
                 return {"result": {"status": "confirmed"}}
             except Exception as e:
                 return {"error": str(e)}
@@ -121,17 +119,17 @@ class OrderService(CliffracerService, SagaParticipant):
 
 class PaymentService(CliffracerService, SagaParticipant):
     """Payment processing service"""
-    
+
     def __init__(self):
         config = ServiceConfig(name="payment_service")
         CliffracerService.__init__(self, config)
         SagaParticipant.__init__(self, self)
-        
+
         self.payments = Repository(Payment)
-    
+
     def _register_handlers(self):
         """Register saga action handlers"""
-        
+
         @self.rpc
         async def process_payment(saga_id: str, correlation_id: str, step: str, data: dict) -> dict:
             """Process payment"""
@@ -143,12 +141,12 @@ class PaymentService(CliffracerService, SagaParticipant):
                     status="completed",
                     method=data.get("payment_method", "credit_card")
                 )
-                
+
                 created_payment = await self.payments.create(payment)
-                
+
                 # Simulate payment processing
                 await asyncio.sleep(0.5)
-                
+
                 return {
                     "result": {
                         "payment_id": created_payment.payment_id,
@@ -157,18 +155,18 @@ class PaymentService(CliffracerService, SagaParticipant):
                 }
             except Exception as e:
                 return {"error": str(e)}
-        
+
         @self.rpc
         async def refund_payment(saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict) -> dict:
             """Refund payment (compensation)"""
             try:
                 payment_id = original_result["payment_id"]
                 payment = await self.payments.get_by_field("payment_id", payment_id)
-                
+
                 if payment:
                     payment.status = "refunded"
                     await self.payments.update(payment.id, payment)
-                
+
                 return {"result": {"status": "refunded"}}
             except Exception as e:
                 return {"error": str(e)}
@@ -176,39 +174,39 @@ class PaymentService(CliffracerService, SagaParticipant):
 
 class InventoryService(CliffracerService, SagaParticipant):
     """Inventory management service"""
-    
+
     def __init__(self):
         config = ServiceConfig(name="inventory_service")
         CliffracerService.__init__(self, config)
         SagaParticipant.__init__(self, self)
-        
+
         self.inventory = Repository(Inventory)
-    
+
     def _register_handlers(self):
         """Register saga action handlers"""
-        
+
         @self.rpc
         async def reserve_inventory(saga_id: str, correlation_id: str, step: str, data: dict) -> dict:
             """Reserve inventory items"""
             try:
                 reserved_items = []
-                
+
                 for item in data["items"]:
                     product = await self.inventory.get_by_field("product_id", item["product_id"])
-                    
+
                     if not product or product.quantity < item["quantity"]:
                         return {"error": f"Insufficient inventory for {item['product_id']}"}
-                    
+
                     # Reserve inventory
                     product.quantity -= item["quantity"]
                     product.reserved += item["quantity"]
                     await self.inventory.update(product.id, product)
-                    
+
                     reserved_items.append({
                         "product_id": item["product_id"],
                         "quantity": item["quantity"]
                     })
-                
+
                 return {
                     "result": {
                         "reserved_items": reserved_items,
@@ -217,19 +215,19 @@ class InventoryService(CliffracerService, SagaParticipant):
                 }
             except Exception as e:
                 return {"error": str(e)}
-        
+
         @self.rpc
         async def release_inventory(saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict) -> dict:
             """Release reserved inventory (compensation)"""
             try:
                 for item in original_result.get("reserved_items", []):
                     product = await self.inventory.get_by_field("product_id", item["product_id"])
-                    
+
                     if product:
                         product.quantity += item["quantity"]
                         product.reserved -= item["quantity"]
                         await self.inventory.update(product.id, product)
-                
+
                 return {"result": {"status": "released"}}
             except Exception as e:
                 return {"error": str(e)}
@@ -237,22 +235,22 @@ class InventoryService(CliffracerService, SagaParticipant):
 
 class ShippingService(CliffracerService, SagaParticipant):
     """Shipping service"""
-    
+
     def __init__(self):
         config = ServiceConfig(name="shipping_service")
         CliffracerService.__init__(self, config)
         SagaParticipant.__init__(self, self)
-    
+
     def _register_handlers(self):
         """Register saga action handlers"""
-        
+
         @self.rpc
         async def create_shipment(saga_id: str, correlation_id: str, step: str, data: dict) -> dict:
             """Create shipment"""
             try:
                 # Simulate shipment creation
                 shipment_id = f"SHIP-{saga_id[:8]}"
-                
+
                 return {
                     "result": {
                         "shipment_id": shipment_id,
@@ -262,7 +260,7 @@ class ShippingService(CliffracerService, SagaParticipant):
                 }
             except Exception as e:
                 return {"error": str(e)}
-        
+
         @self.rpc
         async def cancel_shipment(saga_id: str, correlation_id: str, step: str, data: dict, original_result: dict) -> dict:
             """Cancel shipment (compensation)"""
@@ -275,13 +273,13 @@ class ShippingService(CliffracerService, SagaParticipant):
 
 class OrderSagaOrchestrator(CliffracerService):
     """Order saga orchestrator service"""
-    
+
     def __init__(self):
         config = ServiceConfig(name="order_saga_orchestrator")
         super().__init__(config)
-        
+
         self.coordinator = SagaCoordinator(self)
-        
+
         # Define the order processing saga
         self.coordinator.define_saga("order_processing", [
             SagaStep(
@@ -320,17 +318,17 @@ class OrderSagaOrchestrator(CliffracerService):
                 timeout=10.0
             )
         ])
-    
+
     @property
     def rpc(self):
         """RPC decorator"""
         return self._rpc_decorator
-    
+
     def _rpc_decorator(self, func):
         """Register RPC handler"""
         self._rpc_handlers[func.__name__] = func
         return func
-    
+
     @rpc
     async def place_order(self, customer_id: str, items: list, total_amount: float, payment_method: str = "credit_card") -> dict:
         """Place a new order using saga pattern"""
@@ -340,7 +338,7 @@ class OrderSagaOrchestrator(CliffracerService):
             "total_amount": total_amount,
             "payment_method": payment_method
         })
-        
+
         return result
 
 
@@ -348,24 +346,29 @@ class OrderSagaOrchestrator(CliffracerService):
 
 class OrderChoreographyService(CliffracerService):
     """Order service using choreography pattern"""
-    
+
     def __init__(self):
         config = ServiceConfig(name="order_choreography_service")
         super().__init__(config)
-        
+
         self.saga = ChoreographySaga(self)
         self.orders = Repository(Order)
-    
+
+        # Register saga event handlers
+        self.saga.on_event("payment.completed")(self.saga.emits("order.payment_confirmed", "order.payment_failed")(self.handle_payment_completed))
+        self.saga.on_event("shipment.created")(self.handle_shipment_created)
+        self.saga.on_event("inventory.insufficient")(self.handle_inventory_insufficient)
+
     @property
     def rpc(self):
         """RPC decorator"""
         return self._rpc_decorator
-    
+
     def _rpc_decorator(self, func):
         """Register RPC handler"""
         self._rpc_handlers[func.__name__] = func
         return func
-    
+
     @rpc
     async def place_order(self, customer_id: str, items: list, total_amount: float) -> dict:
         """Initiate order placement"""
@@ -377,9 +380,9 @@ class OrderChoreographyService(CliffracerService):
             total_amount=total_amount,
             status="pending"
         )
-        
+
         created_order = await self.orders.create(order)
-        
+
         # Start the saga by emitting the first event
         await self.publish("order.created", {
             "saga_id": self.saga.saga_id,
@@ -388,15 +391,13 @@ class OrderChoreographyService(CliffracerService):
             "items": items,
             "total_amount": total_amount
         })
-        
+
         return {
             "order_id": created_order.order_id,
             "saga_id": self.saga.saga_id,
             "status": "processing"
         }
-    
-    @saga.on_event("payment.completed")
-    @saga.emits("order.payment_confirmed", "order.payment_failed")
+
     async def handle_payment_completed(self, data: dict) -> dict:
         """Handle payment completion"""
         order = await self.orders.get_by_field("order_id", data["order_id"])
@@ -404,10 +405,9 @@ class OrderChoreographyService(CliffracerService):
             order.payment_id = data["payment_id"]
             order.status = "paid"
             await self.orders.update(order.id, order)
-        
+
         return {"order_id": data["order_id"], "status": "paid"}
-    
-    @saga.on_event("shipment.created")
+
     async def handle_shipment_created(self, data: dict) -> dict:
         """Handle shipment creation"""
         order = await self.orders.get_by_field("order_id", data["order_id"])
@@ -415,31 +415,30 @@ class OrderChoreographyService(CliffracerService):
             order.shipment_id = data["shipment_id"]
             order.status = "shipped"
             await self.orders.update(order.id, order)
-            
+
             # Emit final completion event
             await self.publish("order.completed", {
                 "saga_id": data["saga_id"],
                 "order_id": data["order_id"],
                 "status": "completed"
             })
-        
+
         return {"order_id": data["order_id"], "status": "shipped"}
-    
-    @saga.on_event("inventory.insufficient")
+
     async def handle_inventory_insufficient(self, data: dict) -> dict:
         """Handle inventory shortage"""
         order = await self.orders.get_by_field("order_id", data["order_id"])
         if order:
             order.status = "cancelled"
             await self.orders.update(order.id, order)
-            
+
             # Emit cancellation event
             await self.publish("order.cancelled", {
                 "saga_id": data["saga_id"],
                 "order_id": data["order_id"],
                 "reason": "insufficient_inventory"
             })
-        
+
         return {"order_id": data["order_id"], "status": "cancelled"}
 
 
@@ -454,13 +453,13 @@ async def run_orchestrated_saga():
         ShippingService(),
         OrderSagaOrchestrator()
     ]
-    
+
     # Run services
     tasks = [asyncio.create_task(service.run()) for service in services]
-    
+
     # Wait a bit for services to start
     await asyncio.sleep(2)
-    
+
     # Place an order
     orchestrator = services[-1]
     result = await orchestrator.place_order(
@@ -472,9 +471,9 @@ async def run_orchestrated_saga():
         total_amount=109.97,
         payment_method="credit_card"
     )
-    
+
     print(f"Order placed: {result}")
-    
+
     # Keep running
     await asyncio.gather(*tasks)
 

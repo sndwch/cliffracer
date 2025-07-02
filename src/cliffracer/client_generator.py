@@ -20,12 +20,12 @@ class ClientGenerator:
         self, service_name: str, timeout: float = 5.0
     ) -> dict[str, Any] | None:
         """Discover service info by calling get_service_info"""
-        from .core.validation import validate_timeout, validate_string_length
-        
+        from .core.validation import validate_string_length, validate_timeout
+
         # Validate inputs
         service_name = validate_string_length(service_name, min_length=1, max_length=63, field_name="Service name")
         timeout = validate_timeout(timeout, min_ms=100, max_ms=30000)
-        
+
         try:
             subject = f"{service_name}.rpc.get_service_info"
             response = await self.nc.request(subject, b"{}", timeout=timeout)

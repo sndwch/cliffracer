@@ -5,17 +5,17 @@ This module provides a comprehensive exception hierarchy for consistent
 error handling throughout the framework.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 class CliffracerError(Exception):
     """Base exception for all Cliffracer errors"""
-    
-    def __init__(self, message: str, details: Optional[dict[str, Any]] = None):
+
+    def __init__(self, message: str, details: dict[str, Any] | None = None):
         super().__init__(message)
         self.message = message
         self.details = details or {}
-    
+
     def __str__(self) -> str:
         if self.details:
             return f"{self.message} - Details: {self.details}"
@@ -102,44 +102,44 @@ class RPCValidationError(RPCError, ValidationError):
 # HTTP-specific errors
 class HTTPError(ServiceError):
     """Base HTTP error"""
-    
-    def __init__(self, message: str, status_code: int = 500, details: Optional[dict[str, Any]] = None):
+
+    def __init__(self, message: str, status_code: int = 500, details: dict[str, Any] | None = None):
         super().__init__(message, details)
         self.status_code = status_code
 
 
 class HTTPNotFoundError(HTTPError):
     """HTTP 404 Not Found"""
-    
-    def __init__(self, message: str = "Not Found", details: Optional[dict[str, Any]] = None):
+
+    def __init__(self, message: str = "Not Found", details: dict[str, Any] | None = None):
         super().__init__(message, 404, details)
 
 
 class HTTPBadRequestError(HTTPError):
     """HTTP 400 Bad Request"""
-    
-    def __init__(self, message: str = "Bad Request", details: Optional[dict[str, Any]] = None):
+
+    def __init__(self, message: str = "Bad Request", details: dict[str, Any] | None = None):
         super().__init__(message, 400, details)
 
 
 class HTTPUnauthorizedError(HTTPError, AuthenticationError):
     """HTTP 401 Unauthorized"""
-    
-    def __init__(self, message: str = "Unauthorized", details: Optional[dict[str, Any]] = None):
+
+    def __init__(self, message: str = "Unauthorized", details: dict[str, Any] | None = None):
         super().__init__(message, 401, details)
 
 
 class HTTPForbiddenError(HTTPError, AuthorizationError):
     """HTTP 403 Forbidden"""
-    
-    def __init__(self, message: str = "Forbidden", details: Optional[dict[str, Any]] = None):
+
+    def __init__(self, message: str = "Forbidden", details: dict[str, Any] | None = None):
         super().__init__(message, 403, details)
 
 
 class HTTPInternalServerError(HTTPError):
     """HTTP 500 Internal Server Error"""
-    
-    def __init__(self, message: str = "Internal Server Error", details: Optional[dict[str, Any]] = None):
+
+    def __init__(self, message: str = "Internal Server Error", details: dict[str, Any] | None = None):
         super().__init__(message, 500, details)
 
 
@@ -237,18 +237,18 @@ class AlertingError(MonitoringError):
 def wrap_exception(
     original_exception: Exception,
     new_exception_class: type[CliffracerError],
-    message: Optional[str] = None,
-    details: Optional[dict[str, Any]] = None
+    message: str | None = None,
+    details: dict[str, Any] | None = None
 ) -> CliffracerError:
     """
     Wrap an external exception in a Cliffracer exception.
-    
+
     Args:
         original_exception: The original exception to wrap
         new_exception_class: The Cliffracer exception class to use
         message: Optional custom message (uses original message if not provided)
         details: Additional details to include
-    
+
     Returns:
         New Cliffracer exception with original exception details
     """
@@ -259,7 +259,7 @@ def wrap_exception(
         "message": str(original_exception),
         "args": original_exception.args
     }
-    
+
     wrapped = new_exception_class(error_message, error_details)
     wrapped.__cause__ = original_exception
     return wrapped
@@ -267,8 +267,9 @@ def wrap_exception(
 
 def handle_nats_error(exception: Exception) -> CliffracerError:
     """Convert NATS-related exceptions to Cliffracer exceptions"""
-    from nats.errors import TimeoutError as NATSTimeoutError, Error as NATSError
-    
+    from nats.errors import Error as NATSError
+    from nats.errors import TimeoutError as NATSTimeoutError
+
     if isinstance(exception, NATSTimeoutError):
         return wrap_exception(exception, RPCTimeoutError, "NATS operation timed out")
     elif isinstance(exception, NATSError):
@@ -280,7 +281,7 @@ def handle_nats_error(exception: Exception) -> CliffracerError:
 def handle_validation_error(exception: Exception) -> CliffracerError:
     """Convert validation exceptions to Cliffracer exceptions"""
     from pydantic import ValidationError as PydanticValidationError
-    
+
     if isinstance(exception, PydanticValidationError):
         details = {"validation_errors": exception.errors()}
         return ValidationError("Request validation failed", details)
@@ -291,7 +292,7 @@ def handle_validation_error(exception: Exception) -> CliffracerError:
 def handle_database_error(exception: Exception) -> CliffracerError:
     """Convert database exceptions to Cliffracer exceptions"""
     import asyncpg
-    
+
     if isinstance(exception, asyncpg.PostgresError):
         details = {
             "sqlstate": getattr(exception, 'sqlstate', None),
@@ -308,29 +309,29 @@ def handle_database_error(exception: Exception) -> CliffracerError:
 def create_error_response(exception: CliffracerError) -> dict[str, Any]:
     """
     Create a standardized error response dictionary.
-    
+
     Args:
         exception: The Cliffracer exception to convert
-        
+
     Returns:
         Dictionary suitable for JSON serialization
     """
     from datetime import UTC, datetime
-    
+
     response = {
         "error": True,
         "error_type": type(exception).__name__,
         "message": exception.message,
         "timestamp": datetime.now(UTC).isoformat()
     }
-    
+
     if exception.details:
         response["details"] = exception.details
-    
+
     # Add HTTP status code if available
     if hasattr(exception, 'status_code'):
         response["status_code"] = exception.status_code
-    
+
     return response
 
 
@@ -338,66 +339,66 @@ def create_error_response(exception: CliffracerError) -> dict[str, Any]:
 class ErrorHandler:
     """
     Context manager for consistent error handling in services.
-    
+
     Example:
         async with ErrorHandler("RPC call failed"):
             result = await some_operation()
     """
-    
+
     def __init__(
         self,
         operation_description: str,
         exception_class: type[CliffracerError] = ServiceError,
-        details: Optional[dict[str, Any]] = None,
+        details: dict[str, Any] | None = None,
         reraise: bool = True
     ):
         self.operation_description = operation_description
         self.exception_class = exception_class
         self.details = details or {}
         self.reraise = reraise
-    
+
     async def __aenter__(self):
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
             return False
-        
+
         # Don't handle Cliffracer exceptions (already properly typed)
         if isinstance(exc_val, CliffracerError):
             return False
-        
+
         # Wrap external exceptions
         wrapped_exception = wrap_exception(
-            exc_val, 
-            self.exception_class, 
+            exc_val,
+            self.exception_class,
             self.operation_description,
             self.details
         )
-        
+
         if self.reraise:
             raise wrapped_exception from exc_val
-        
+
         return True  # Suppress the exception
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
             return False
-        
+
         if isinstance(exc_val, CliffracerError):
             return False
-        
+
         wrapped_exception = wrap_exception(
-            exc_val, 
-            self.exception_class, 
+            exc_val,
+            self.exception_class,
             self.operation_description,
             self.details
         )
-        
+
         if self.reraise:
             raise wrapped_exception from exc_val
-        
+
         return True

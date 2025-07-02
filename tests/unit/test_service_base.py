@@ -7,8 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cliffracer import BaseNATSService, ServiceConfig, ValidatedNATSService, rpc
-from cliffracer.core.base_service import event_handler
+from cliffracer import BaseNATSService, ServiceConfig, ValidatedNATSService, rpc, listener
 
 
 class TestNatsService:
@@ -82,7 +81,8 @@ class TestExtendedService:
     def test_extended_service_initialization(self, service, service_config):
         """Test extended service initialization"""
         assert service.config == service_config
-        assert hasattr(service, "_broadcast_methods")
+        assert hasattr(service, "_validated_rpc_handlers")
+        assert isinstance(service._validated_rpc_handlers, dict)
 
     @pytest.mark.asyncio
     async def test_schema_validation_mixin_methods(self, service):
@@ -96,9 +96,9 @@ class TestExtendedService:
         mock_response.data = json.dumps({"result": "test"}).encode()
         service.nc.request = AsyncMock(return_value=mock_response)
 
-        # Test call_rpc_validated would work (needs actual implementation)
-        # This tests the interface exists
-        assert hasattr(service, "call_rpc_validated")
+        # Test that the service has validation capabilities
+        assert hasattr(service, "register_validated_rpc")
+        assert hasattr(service, "_validated_rpc_handlers")
 
 
 class TestServiceWithDecorators:
@@ -114,7 +114,7 @@ class TestServiceWithDecorators:
             self.call_log.append(f"rpc: {param1}, {param2}")
             return {"result": f"{param1}_{param2}"}
 
-        @event_handler("test.events.*")
+        @listener("test.events.*")
         async def test_event_handler(self, subject: str, **kwargs):
             self.call_log.append(f"event: {subject}, {kwargs}")
 
@@ -132,12 +132,12 @@ class TestServiceWithDecorators:
         assert "test_rpc_method" in service._rpc_handlers
         # Compare the function objects, not bound methods
         assert service._rpc_handlers["test_rpc_method"].__name__ == "test_rpc_method"
-        assert hasattr(service._rpc_handlers["test_rpc_method"], "_is_rpc")
+        assert hasattr(service._rpc_handlers["test_rpc_method"], "_cliffracer_rpc")
 
         # Check event handler registration
         assert "test.events.*" in service._event_handlers
         assert service._event_handlers["test.events.*"].__name__ == "test_event_handler"
-        assert hasattr(service._event_handlers["test.events.*"], "_is_event_handler")
+        assert hasattr(service._event_handlers["test.events.*"], "_cliffracer_events")
 
     @pytest.mark.asyncio
     async def test_rpc_call_execution(self, service):

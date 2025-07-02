@@ -7,7 +7,6 @@ instead of in-memory storage.
 """
 
 import asyncio
-from typing import Optional
 
 from cliffracer import (
     Message,
@@ -43,15 +42,15 @@ class GetUserRequest(RPCRequest):
 
 class GetUserResponse(RPCResponse):
     """Response with user data"""
-    user: Optional[dict]
+    user: dict | None
 
 
 class UpdateUserRequest(RPCRequest):
     """Request to update user"""
     user_id: str
-    name: Optional[str] = None
-    email: Optional[str] = None
-    status: Optional[str] = None
+    name: str | None = None
+    email: str | None = None
+    status: str | None = None
 
 
 class UpdateUserResponse(RPCResponse):
@@ -76,7 +75,7 @@ class UserUpdatedMessage(Message):
 class UserServiceWithDB(ValidatedNATSService):
     """
     User service with database persistence.
-    
+
     This service demonstrates:
     - Database connection management
     - Repository pattern usage
@@ -84,34 +83,34 @@ class UserServiceWithDB(ValidatedNATSService):
     - Proper error handling
     - Event broadcasting
     """
-    
+
     def __init__(self):
         config = ServiceConfig(
             name="user_service_db",
             description="User service with PostgreSQL storage"
         )
         super().__init__(config)
-        
+
         # Initialize database connection and repository
         self.db = DatabaseConnection()
         self.user_repo = Repository(User, self.db)
-        
+
     async def on_startup(self):
         """Initialize database connection on startup"""
         await super().on_startup()
         await self.db.connect()
         self.logger.info("Database connection established")
-    
+
     async def on_shutdown(self):
         """Clean up database connection on shutdown"""
         await self.db.disconnect()
         await super().on_shutdown()
-    
+
     @validated_rpc(CreateUserRequest, CreateUserResponse)
     async def create_user(self, request: CreateUserRequest) -> CreateUserResponse:
         """
         Create a new user in the database.
-        
+
         Validates uniqueness and broadcasts creation event.
         """
         try:
@@ -122,7 +121,7 @@ class UserServiceWithDB(ValidatedNATSService):
                     success=False,
                     error=f"User {request.user_id} already exists"
                 )
-            
+
             # Check email uniqueness
             email_exists = await self.user_repo.exists(email=request.email)
             if email_exists:
@@ -130,7 +129,7 @@ class UserServiceWithDB(ValidatedNATSService):
                     success=False,
                     error=f"Email {request.email} is already registered"
                 )
-            
+
             # Create user
             user = User(
                 user_id=request.user_id,
@@ -138,36 +137,36 @@ class UserServiceWithDB(ValidatedNATSService):
                 name=request.name,
                 status="active"
             )
-            
+
             created_user = await self.user_repo.create(user)
-            
+
             # Broadcast user created event
             await self.announce_user_created(
                 created_user.user_id,
                 created_user.email,
                 created_user.name
             )
-            
+
             self.logger.info(f"Created user {created_user.user_id}")
-            
+
             return CreateUserResponse(
                 success=True,
                 user=created_user.model_dump()
             )
-            
+
         except Exception as e:
             self.logger.error(f"Error creating user: {e}")
             return CreateUserResponse(
                 success=False,
                 error=str(e)
             )
-    
+
     @validated_rpc(GetUserRequest, GetUserResponse)
     async def get_user(self, request: GetUserRequest) -> GetUserResponse:
         """Get user by ID from database"""
         try:
             user = await self.user_repo.find_one(user_id=request.user_id)
-            
+
             if user:
                 return GetUserResponse(
                     success=True,
@@ -178,7 +177,7 @@ class UserServiceWithDB(ValidatedNATSService):
                     success=True,
                     user=None
                 )
-                
+
         except Exception as e:
             self.logger.error(f"Error getting user: {e}")
             return GetUserResponse(
@@ -186,7 +185,7 @@ class UserServiceWithDB(ValidatedNATSService):
                 error=str(e),
                 user=None
             )
-    
+
     @validated_rpc(UpdateUserRequest, UpdateUserResponse)
     async def update_user(self, request: UpdateUserRequest) -> UpdateUserResponse:
         """Update user in database"""
@@ -198,7 +197,7 @@ class UserServiceWithDB(ValidatedNATSService):
                     success=False,
                     error=f"User {request.user_id} not found"
                 )
-            
+
             # Prepare updates
             updates = {}
             if request.name is not None:
@@ -214,33 +213,33 @@ class UserServiceWithDB(ValidatedNATSService):
                 updates["email"] = request.email
             if request.status is not None:
                 updates["status"] = request.status
-            
+
             if not updates:
                 return UpdateUserResponse(
                     success=True,
                     user=user.model_dump()
                 )
-            
+
             # Update user
             updated_user = await self.user_repo.update(user.id, **updates)
-            
+
             # Broadcast update event
             await self.announce_user_updated(user.user_id, updates)
-            
+
             self.logger.info(f"Updated user {user.user_id}: {updates}")
-            
+
             return UpdateUserResponse(
                 success=True,
                 user=updated_user.model_dump()
             )
-            
+
         except Exception as e:
             self.logger.error(f"Error updating user: {e}")
             return UpdateUserResponse(
                 success=False,
                 error=str(e)
             )
-    
+
     @broadcast(UserCreatedMessage)
     async def announce_user_created(self, user_id: str, email: str, name: str):
         """Broadcast user creation event"""
@@ -249,7 +248,7 @@ class UserServiceWithDB(ValidatedNATSService):
             email=email,
             name=name
         )
-    
+
     @broadcast(UserUpdatedMessage)
     async def announce_user_updated(self, user_id: str, changes: dict):
         """Broadcast user update event"""
@@ -257,48 +256,48 @@ class UserServiceWithDB(ValidatedNATSService):
             user_id=user_id,
             changes=changes
         )
-    
+
     @listener(UserCreatedMessage)
     async def on_user_created_elsewhere(self, message: UserCreatedMessage):
         """
         Handle user creation from other services.
-        
+
         This could be used to maintain a local cache or trigger
         additional processing.
         """
         self.logger.info(
             f"User created in another service: {message.user_id}"
         )
-    
+
     # Additional database operations
-    
+
     async def list_users(self, limit: int = 100, offset: int = 0) -> list[dict]:
         """List users with pagination"""
         users = await self.user_repo.list(limit=limit, offset=offset)
         return [user.model_dump() for user in users]
-    
-    async def search_users(self, email: Optional[str] = None, status: Optional[str] = None) -> list[dict]:
+
+    async def search_users(self, email: str | None = None, status: str | None = None) -> list[dict]:
         """Search users by criteria"""
         criteria = {}
         if email:
             criteria["email"] = email
         if status:
             criteria["status"] = status
-            
+
         users = await self.user_repo.find_by(**criteria)
         return [user.model_dump() for user in users]
-    
+
     async def delete_user(self, user_id: str) -> bool:
         """Soft delete a user (set status to deleted)"""
         user = await self.user_repo.find_one(user_id=user_id)
         if not user:
             return False
-            
+
         await self.user_repo.update(user.id, status="deleted")
         self.logger.info(f"Soft deleted user {user_id}")
         return True
-    
-    async def get_user_count(self, status: Optional[str] = None) -> int:
+
+    async def get_user_count(self, status: str | None = None) -> int:
         """Get count of users, optionally filtered by status"""
         if status:
             return await self.user_repo.count(status=status)
@@ -312,15 +311,15 @@ async def main():
     print("Make sure PostgreSQL is running!")
     print("Database: postgresql://cliffracer:cliffracer123@localhost:5432/cliffracer")
     print("=" * 50)
-    
+
     service = UserServiceWithDB()
     await service.start()
-    
+
     print("\nService is running. Available RPC methods:")
     print("- create_user")
     print("- get_user")
     print("- update_user")
-    
+
     # Keep service running
     try:
         await asyncio.Event().wait()
@@ -330,4 +329,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main()
+    asyncio.run(main())

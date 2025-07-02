@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from cliffracer.core.service_config import ServiceConfig
 
@@ -34,7 +34,7 @@ class BackdoorServer:
     - Global enable/disable configuration
     """
 
-    def __init__(self, service_instance, port: int = 0, enabled: bool = True, password: Optional[str] = None):
+    def __init__(self, service_instance, port: int = 0, enabled: bool = True, password: str | None = None):
         """
         Initialize backdoor server.
 
@@ -52,14 +52,14 @@ class BackdoorServer:
         self.running = False
         self.connections: dict[str, Any] = {}
         self.failed_auth_attempts: dict[str, int] = {}  # Track failed attempts by IP
-        
+
         # Set up authentication
         self.password = password or os.environ.get('BACKDOOR_PASSWORD')
         if not self.password and self.enabled:
             logger.warning("Backdoor enabled without password! Generating random password...")
             self.password = hashlib.sha256(os.urandom(32)).hexdigest()[:16]
             logger.info(f"Generated backdoor password: {self.password}")
-        
+
         # Security settings
         self.max_auth_attempts = 3
         self.auth_timeout = 30  # seconds
@@ -166,10 +166,10 @@ class BackdoorServer:
                 conn.sendall(b"Too many failed attempts. Try again later.\n")
                 conn.close()
                 return
-            
+
             # Convert socket to file-like objects
             conn_file = conn.makefile("rw")
-            
+
             # Authenticate user
             if not self._authenticate(conn_file, client_ip):
                 conn.close()
@@ -206,16 +206,16 @@ class BackdoorServer:
                 logger.info(f"🔧 Backdoor connection {connection_id} closed")
             except Exception:
                 pass
-    
+
     def _authenticate(self, conn_file, client_ip: str) -> bool:
         """Authenticate backdoor connection."""
         conn_file.write("🔐 Backdoor Authentication Required\n")
         conn_file.write("Password: ")
         conn_file.flush()
-        
+
         # Set timeout for auth
         start_time = time.time()
-        
+
         try:
             # Read password with timeout
             password_input = ""
@@ -223,12 +223,12 @@ class BackdoorServer:
                 if time.time() - start_time > self.auth_timeout:
                     conn_file.write("\nAuthentication timeout.\n")
                     return False
-                
+
                 char = conn_file.read(1)
                 if char == '\n' or char == '\r':
                     break
                 password_input += char
-            
+
             # Verify password
             if self._verify_password(password_input.strip()):
                 conn_file.write("\n✅ Authentication successful!\n\n")
@@ -240,40 +240,40 @@ class BackdoorServer:
                 # Track failed attempt
                 self.failed_auth_attempts[client_ip] = self.failed_auth_attempts.get(client_ip, 0) + 1
                 remaining = self.max_auth_attempts - self.failed_auth_attempts[client_ip]
-                
+
                 if remaining > 0:
                     conn_file.write(f"\n❌ Invalid password. {remaining} attempts remaining.\n")
                 else:
                     conn_file.write(f"\n❌ Too many failed attempts. Locked out for {self.lockout_duration} seconds.\n")
                     # Set lockout timestamp
                     self.failed_auth_attempts[f"{client_ip}_lockout"] = time.time()
-                
+
                 logger.warning(f"Failed backdoor auth from {client_ip}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Auth error: {e}")
             return False
-    
+
     def _verify_password(self, password: str) -> bool:
         """Verify password using constant-time comparison."""
         if not self.password:
             return True  # No password set (shouldn't happen with new init)
-        
+
         # Use constant-time comparison to prevent timing attacks
         password_bytes = password.encode('utf-8')
         expected_bytes = self.password.encode('utf-8')
-        
+
         # Simple constant-time comparison
         if len(password_bytes) != len(expected_bytes):
             return False
-        
+
         result = 0
-        for a, b in zip(password_bytes, expected_bytes):
+        for a, b in zip(password_bytes, expected_bytes, strict=False):
             result |= a ^ b
-        
+
         return result == 0
-    
+
     def _is_locked_out(self, client_ip: str) -> bool:
         """Check if IP is locked out from too many failed attempts."""
         lockout_key = f"{client_ip}_lockout"
