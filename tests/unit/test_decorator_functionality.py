@@ -190,6 +190,9 @@ class TestDecoratorFunctionality:
                 self.events.append(message)
 
         service = TestDecoratedService(ServiceConfig(name="test_decorated"))
+        
+        # Discover handlers
+        service._discover_handlers()
 
         # Verify RPC handlers were registered
         assert "rpc_method" in service._rpc_handlers

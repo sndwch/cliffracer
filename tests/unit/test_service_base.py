@@ -124,7 +124,9 @@ class TestServiceWithDecorators:
 
     @pytest.fixture
     def service(self, service_config):
-        return self.TestService(service_config)
+        svc = self.TestService(service_config)
+        svc._discover_handlers()
+        return svc
 
     def test_decorated_methods_registration(self, service):
         """Test that decorated methods are properly registered"""
