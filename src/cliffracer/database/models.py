@@ -87,23 +87,23 @@ class DatabaseModel(BaseModel):
             dict: "JSONB",
             list: "JSONB",
         }
-        
+
         columns = []
-        
+
         # Always include base columns
         columns.append("id UUID PRIMARY KEY DEFAULT gen_random_uuid()")
         columns.append("created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP")
         columns.append("updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP")
-        
+
         # Add columns from model fields
         for field_name, field_info in cls.__fields__.items():
             # Skip base fields we already added
             if field_name in ["id", "created_at", "updated_at"]:
                 continue
-            
+
             # Get field type (compatible with Pydantic v2)
-            field_type = getattr(field_info, 'annotation', getattr(field_info, 'type_', str))
-            
+            field_type = getattr(field_info, "annotation", getattr(field_info, "type_", str))
+
             # Handle Optional types
             is_nullable = False
             if hasattr(field_type, "__origin__") and field_type.__origin__ is Union:
@@ -113,22 +113,22 @@ class DatabaseModel(BaseModel):
                     is_nullable = True
                     # Get the non-None type
                     field_type = next(arg for arg in args if arg is not type(None))
-            
+
             # Map to SQL type
             sql_type = type_mapping.get(field_type, "TEXT")
-            
+
             # Build column definition
             column_def = f"{field_name} {sql_type}"
-            
+
             # Add NOT NULL if not nullable and no default
             if not is_nullable and field_info.default is None:
                 column_def += " NOT NULL"
-            
+
             columns.append(column_def)
-        
+
         # Build CREATE TABLE statement
         create_sql = f"""CREATE TABLE IF NOT EXISTS {cls.__tablename__} (
-    {',\n    '.join(columns)}
+    {",\n    ".join(columns)}
 );
 
 -- Create updated_at trigger
@@ -143,7 +143,7 @@ $$ language 'plpgsql';
 CREATE TRIGGER update_{cls.__tablename__}_updated_at BEFORE UPDATE
     ON {cls.__tablename__} FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 """
-        
+
         return create_sql
 
 

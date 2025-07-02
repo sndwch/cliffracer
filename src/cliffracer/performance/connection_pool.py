@@ -24,7 +24,7 @@ class OptimizedNATSConnection:
         ping_interval: int = 120,
         max_outstanding_pings: int = 3,
         reconnect_time_wait: int = 1,
-        max_reconnect_attempts: int = 10
+        max_reconnect_attempts: int = 10,
     ):
         """
         Initialize optimized NATS connection pool.
@@ -50,7 +50,9 @@ class OptimizedNATSConnection:
 
     async def connect(self) -> None:
         """Create optimized connection pool"""
-        logger.info(f"Creating optimized NATS connection pool with {self.max_connections} connections")
+        logger.info(
+            f"Creating optimized NATS connection pool with {self.max_connections} connections"
+        )
 
         for i in range(self.max_connections):
             try:
@@ -64,10 +66,10 @@ class OptimizedNATSConnection:
                     drain_timeout=30,  # Longer drain timeout
                 )
                 self._connections.append(conn)
-                logger.debug(f"Created optimized connection {i+1}/{self.max_connections}")
+                logger.debug(f"Created optimized connection {i + 1}/{self.max_connections}")
 
             except Exception as e:
-                logger.error(f"Failed to create connection {i+1}: {e}")
+                logger.error(f"Failed to create connection {i + 1}: {e}")
                 raise
 
         logger.info(f"Optimized connection pool ready with {len(self._connections)} connections")
@@ -107,9 +109,9 @@ class OptimizedNATSConnection:
         for i, conn in enumerate(self._connections):
             try:
                 await conn.close()
-                logger.debug(f"Closed connection {i+1}")
+                logger.debug(f"Closed connection {i + 1}")
             except Exception as e:
-                logger.warning(f"Error closing connection {i+1}: {e}")
+                logger.warning(f"Error closing connection {i + 1}: {e}")
 
         self._connections.clear()
         logger.info("Optimized connection pool closed")
@@ -128,5 +130,7 @@ class OptimizedNATSConnection:
             "active_connections": active_connections,
             "max_connections": self.max_connections,
             "current_index": self._current_index,
-            "utilization_percent": (active_connections / self.max_connections) * 100 if self.max_connections > 0 else 0
+            "utilization_percent": (active_connections / self.max_connections) * 100
+            if self.max_connections > 0
+            else 0,
         }

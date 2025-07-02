@@ -54,11 +54,11 @@ class Repository[T: DatabaseModel]:
         # Build INSERT query
         columns = list(data.keys())
         values = [data[col] for col in columns]
-        placeholders = [f"${i+1}" for i in range(len(columns))]
+        placeholders = [f"${i + 1}" for i in range(len(columns))]
 
         query = f"""
-            INSERT INTO {self.table_name} ({', '.join(columns)})
-            VALUES ({', '.join(placeholders)})
+            INSERT INTO {self.table_name} ({", ".join(columns)})
+            VALUES ({", ".join(placeholders)})
             RETURNING *
         """
 
@@ -106,7 +106,7 @@ class Repository[T: DatabaseModel]:
 
         query = f"""
             SELECT * FROM {self.table_name}
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
             ORDER BY created_at DESC
         """
 
@@ -142,6 +142,7 @@ class Repository[T: DatabaseModel]:
 
         # Add updated_at timestamp
         from datetime import UTC, datetime
+
         updates["updated_at"] = datetime.now(UTC)
 
         # Build UPDATE query
@@ -155,7 +156,7 @@ class Repository[T: DatabaseModel]:
 
         query = f"""
             UPDATE {self.table_name}
-            SET {', '.join(set_clauses)}
+            SET {", ".join(set_clauses)}
             WHERE id = ${len(values)}
             RETURNING *
         """
@@ -228,7 +229,7 @@ class Repository[T: DatabaseModel]:
 
         query = f"""
             SELECT COUNT(*) FROM {self.table_name}
-            WHERE {' AND '.join(conditions)}
+            WHERE {" AND ".join(conditions)}
         """
 
         return await self.db.fetchval(query, *values)

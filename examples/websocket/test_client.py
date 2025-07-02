@@ -107,7 +107,9 @@ async def send_test_notifications():
 
             result = json.loads(response.data.decode())
             print(f"✅ Sent! Notification ID: {result['result']['notification_id']}")
-            print(f"   WebSocket clients notified: {result['result']['websocket_clients_notified']}")
+            print(
+                f"   WebSocket clients notified: {result['result']['websocket_clients_notified']}"
+            )
 
         except Exception as e:
             print(f"❌ Error sending notification: {e}")

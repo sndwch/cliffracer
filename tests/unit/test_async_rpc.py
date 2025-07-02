@@ -42,18 +42,18 @@ class TestAsyncRPC:
 
     def test_rpc_decorator(self, service):
         """Test that @rpc decorator sets correct attributes"""
-        assert hasattr(service.sync_method, "_is_rpc")
-        assert service.sync_method._is_rpc is True
-        assert service.sync_method._rpc_name == "sync_method"
-        assert not hasattr(service.sync_method, "_is_async_rpc")
+        assert hasattr(service.sync_method, "_cliffracer_rpc")
+        assert service.sync_method._cliffracer_rpc is True
+        assert service.sync_method.__name__ == "sync_method"
+        assert not hasattr(service.sync_method, "_cliffracer_async_rpc")
 
     def test_async_rpc_decorator(self, service):
         """Test that @async_rpc decorator sets correct attributes"""
-        assert hasattr(service.async_method, "_is_rpc")
-        assert service.async_method._is_rpc is True
-        assert service.async_method._rpc_name == "async_method"
-        assert hasattr(service.async_method, "_is_async_rpc")
-        assert service.async_method._is_async_rpc is True
+        assert hasattr(service.async_method, "_cliffracer_rpc")
+        assert service.async_method._cliffracer_rpc is True
+        assert service.async_method.__name__ == "async_method"
+        assert hasattr(service.async_method, "_cliffracer_async_rpc")
+        assert service.async_method._cliffracer_async_rpc is True
 
     @pytest.mark.asyncio
     async def test_call_rpc_sync(self, service):
@@ -72,7 +72,9 @@ class TestAsyncRPC:
         call_args = service.nc.request.call_args
 
         assert call_args[0][0] == "target_service.rpc.test_method"  # subject
-        assert json.loads(call_args[0][1].decode()) == {"data": "test"}  # payload
+        payload = json.loads(call_args[0][1].decode())
+        assert payload["data"] == "test"
+        assert "correlation_id" in payload  # correlation_id is now included
         assert call_args[1]["timeout"] == service.config.request_timeout
 
         # Verify result
@@ -92,7 +94,9 @@ class TestAsyncRPC:
         call_args = service.nc.publish.call_args
 
         assert call_args[0][0] == "target_service.async.test_method"  # subject
-        assert json.loads(call_args[0][1].decode()) == {"data": "test"}  # payload
+        payload = json.loads(call_args[0][1].decode())
+        assert payload["data"] == "test"
+        assert "correlation_id" in payload  # correlation_id is now included
 
     @pytest.mark.asyncio
     async def test_call_rpc_no_wait(self, service):
@@ -108,7 +112,9 @@ class TestAsyncRPC:
         call_args = service.nc.publish.call_args
 
         assert call_args[0][0] == "target_service.rpc.test_method"  # subject
-        assert json.loads(call_args[0][1].decode()) == {"data": "test"}  # payload
+        payload = json.loads(call_args[0][1].decode())
+        assert payload["data"] == "test"
+        assert "correlation_id" in payload  # correlation_id is now included
 
     @pytest.mark.asyncio
     async def test_handle_rpc_request_sync(self, service, test_helper):

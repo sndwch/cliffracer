@@ -6,8 +6,8 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from cliffracer import HTTPNATSService, ServiceConfig
-
+from ..core.consolidated_service import HTTPNATSService
+from ..core.service_config import ServiceConfig
 from .framework import (
     AuthenticationError,
     Permission,

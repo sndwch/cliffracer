@@ -135,7 +135,6 @@ class SchemaValidationMixin:
         """Expected to be implemented by base class"""
         ...
 
-
     async def _handle_rpc_request(self, msg):
         """Enhanced RPC handler with schema validation"""
         subject = msg.subject
@@ -382,6 +381,7 @@ def websocket_handler(path: str) -> Callable:
         async def handle_websocket(self, websocket):
             await websocket.send_json({"message": "Hello"})
     """
+
     def decorator(func: Callable) -> Callable:
         func._is_websocket_handler = True
         func._websocket_path = path
@@ -457,7 +457,4 @@ class WebSocketNATSService(HTTPNATSService):
     @listener(BroadcastMessage, subject="broadcast.*")
     async def relay_broadcasts_to_websockets(self, message: BroadcastMessage):
         """Automatically relay NATS broadcasts to WebSocket clients"""
-        await self.broadcast_to_websockets({
-            "type": "broadcast",
-            "data": message.model_dump()
-        })
+        await self.broadcast_to_websockets({"type": "broadcast", "data": message.model_dump()})

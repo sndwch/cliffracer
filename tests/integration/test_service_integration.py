@@ -9,6 +9,7 @@ from pydantic import Field
 
 from cliffracer import (
     BroadcastMessage,
+    FullFeaturedService,
     RPCRequest,
     RPCResponse,
     ServiceConfig,
@@ -45,15 +46,15 @@ class OrderCreatedBroadcast(BroadcastMessage):
 
 
 # Test services
-class TestOrderService(ValidatedNATSService):
+class TestOrderService(FullFeaturedService):
     """Test order service"""
 
-    def __init__(self, config: ServiceConfig):
-        super().__init__(config)
+    def __init__(self, config: ServiceConfig, **kwargs):
+        super().__init__(config, **kwargs)
         self.orders = {}
         self.order_counter = 0
 
-    @validated_rpc(CreateOrderRequest, CreateOrderResponse)
+    @validated_rpc(CreateOrderRequest)
     async def create_order(self, request: CreateOrderRequest) -> CreateOrderResponse:
         """Create a new order"""
         self.order_counter += 1
@@ -74,30 +75,40 @@ class TestOrderService(ValidatedNATSService):
 
         return CreateOrderResponse(order_id=order_id, status="created")
 
-    @broadcast(OrderCreatedBroadcast)
+    @broadcast("order.created")
     async def broadcast_order_created(self, order_id: str, customer_id: str, total: float):
         """Broadcast order created event"""
-        return OrderCreatedBroadcast(
-            order_id=order_id, customer_id=customer_id, total=total, source_service=self.config.name
+        # For the core broadcast decorator, we need to manually broadcast
+        await self.broadcast_message(
+            "order.created",
+            order_id=order_id,
+            customer_id=customer_id,
+            total=total,
+            source_service=self.config.name,
         )
 
 
-class TestNotificationService(ValidatedNATSService):
+class TestNotificationService(FullFeaturedService):
     """Test notification service"""
 
-    def __init__(self, config: ServiceConfig):
-        super().__init__(config)
+    def __init__(self, config: ServiceConfig, **kwargs):
+        super().__init__(config, **kwargs)
         self.notifications = []
 
-    @listener(OrderCreatedBroadcast)
-    async def on_order_created(self, message: OrderCreatedBroadcast):
+    @listener("order.created")
+    async def on_order_created(self, data: dict, **kwargs):
         """Handle order created events"""
+        # Extract the nested data from the broadcast message
+        order_id = data.get("order_id")
+        customer_id = data.get("customer_id")
+        total = data.get("total")
+
         notification = {
             "type": "order_created",
-            "order_id": message.order_id,
-            "customer_id": message.customer_id,
-            "total": message.total,
-            "message": f"Order {message.order_id} created for customer {message.customer_id}",
+            "order_id": order_id,
+            "customer_id": customer_id,
+            "total": total,
+            "message": f"Order {order_id} created for customer {customer_id}",
         }
 
         self.notifications.append(notification)
@@ -117,8 +128,8 @@ class TestIntegrationServices:
         order_config = ServiceConfig(name="test_order_service", auto_restart=False)
         notification_config = ServiceConfig(name="test_notification_service", auto_restart=False)
 
-        order_service = TestOrderService(order_config)
-        notification_service = TestNotificationService(notification_config)
+        order_service = TestOrderService(order_config, port=8001)
+        notification_service = TestNotificationService(notification_config, port=8002)
 
         try:
             # Start services
@@ -161,8 +172,8 @@ class TestIntegrationServices:
         order_config = ServiceConfig(name="test_order_service_2", auto_restart=False)
         notification_config = ServiceConfig(name="test_notification_service_2", auto_restart=False)
 
-        order_service = TestOrderService(order_config)
-        notification_service = TestNotificationService(notification_config)
+        order_service = TestOrderService(order_config, port=8001)
+        notification_service = TestNotificationService(notification_config, port=8002)
 
         try:
             # Start services
@@ -250,8 +261,8 @@ class TestIntegrationServices:
             ServiceConfig(name="test_client_multi", auto_restart=False),
         ]
 
-        order_service = TestOrderService(configs[0])
-        notification_service = TestNotificationService(configs[1])
+        order_service = TestOrderService(configs[0], port=8003)
+        notification_service = TestNotificationService(configs[1], port=8004)
         client_service = ValidatedNATSService(configs[2])
 
         services = [order_service, notification_service, client_service]

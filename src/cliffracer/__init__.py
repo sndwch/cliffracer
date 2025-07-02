@@ -11,17 +11,42 @@ A comprehensive, production-ready microservices framework that provides:
 __version__ = "1.0.0"
 
 # Core exports - Consolidated Service Architecture
+# Auth exports - New simple auth system
+from cliffracer.auth.simple_auth import (
+    AuthConfig,
+    AuthContext,
+    AuthenticationError,
+    AuthMiddleware,
+    AuthorizationError,
+    AuthUser,
+    SimpleAuthService,
+    get_current_context,
+    get_current_user,
+    requires_auth,
+    requires_permissions,
+    requires_roles,
+    set_auth_service,
+)
 from cliffracer.core.consolidated_service import (
     BaseNATSService,  # Legacy alias
     BroadcastNATSService,
     CliffracerService,
     ExtendedNATSService,  # Legacy alias
     FullFeaturedService,
-    HTTPNATSService,
     HighPerformanceService,
+    HTTPNATSService,
     NATSService,
     ValidatedNATSService,
     WebSocketNATSService,
+)
+
+# Correlation ID support
+from cliffracer.core.correlation import (
+    CorrelationContext,
+    create_correlation_id,
+    get_correlation_id,
+    set_correlation_id,
+    with_correlation_id,
 )
 
 # Decorator exports - All decorators in one place
@@ -44,25 +69,15 @@ from cliffracer.core.decorators import (
     websocket_handler,
 )
 
-# Message types from consolidated service
-from cliffracer.core.extended_service import (
-    BroadcastMessage,
-    Message,
-    RPCRequest,
-    RPCResponse,
-)
-
 # Exception hierarchy
 from cliffracer.core.exceptions import (
-    AuthenticationError,
-    AuthorizationError,
     CliffracerError,
     ConfigurationError,
     ConnectionError,
     DatabaseError,
     ErrorHandler,
-    HTTPError,
     HandlerError,
+    HTTPError,
     PerformanceError,
     RPCError,
     ServiceError,
@@ -71,30 +86,19 @@ from cliffracer.core.exceptions import (
     WebSocketError,
 )
 
-# Timer class
-from cliffracer.core.timer import Timer
+# Message types from consolidated service
+from cliffracer.core.extended_service import (
+    BroadcastMessage,
+    Message,
+    RPCRequest,
+    RPCResponse,
+)
 
 # Configuration
 from cliffracer.core.service_config import ServiceConfig
 
-# Correlation ID support
-from cliffracer.core.correlation import (
-    CorrelationContext,
-    get_correlation_id,
-    set_correlation_id,
-    create_correlation_id,
-    with_correlation_id,
-)
-from cliffracer.middleware.correlation import (
-    CorrelationMiddleware,
-    WebSocketCorrelationMiddleware,
-    correlation_id_dependency,
-)
-from cliffracer.logging.correlation_logging import (
-    setup_correlation_logging,
-    get_correlation_logger,
-    CorrelationLoggerMixin,
-)
+# Timer class
+from cliffracer.core.timer import Timer
 
 # Database exports
 from cliffracer.database import DatabaseConnection, DatabaseModel, Repository, get_db_connection
@@ -111,35 +115,27 @@ from cliffracer.logging import (
     WebSocketLoggingMixin,
     get_service_logger,
 )
+from cliffracer.logging.correlation_logging import (
+    CorrelationLoggerMixin,
+    get_correlation_logger,
+    setup_correlation_logging,
+)
+from cliffracer.middleware.correlation import (
+    CorrelationMiddleware,
+    WebSocketCorrelationMiddleware,
+    correlation_id_dependency,
+)
 from cliffracer.performance import BatchProcessor, OptimizedNATSConnection, PerformanceMetrics
 
 # Runner exports
 from cliffracer.runners.orchestrator import ServiceOrchestrator, ServiceRunner
 
-# Auth exports - New simple auth system
-from cliffracer.auth.simple_auth import (
-    AuthConfig,
-    AuthUser,
-    AuthContext,
-    SimpleAuthService,
-    AuthenticationError,
-    AuthorizationError,
-    requires_auth,
-    requires_roles,
-    requires_permissions,
-    get_current_user,
-    get_current_context,
-    set_auth_service,
-    AuthMiddleware,
-)
-
 __all__ = [
     # Version
     "__version__",
-    
     # Core Service Classes - Consolidated Architecture
     "CliffracerService",
-    "NATSService", 
+    "NATSService",
     "ValidatedNATSService",
     "HTTPNATSService",
     "WebSocketNATSService",
@@ -149,14 +145,12 @@ __all__ = [
     # Legacy aliases
     "BaseNATSService",
     "ExtendedNATSService",
-    
     # Configuration
     "ServiceConfig",
     "Timer",
-    
     # Decorators - All in one place
     "rpc",
-    "async_rpc", 
+    "async_rpc",
     "validated_rpc",
     "broadcast",
     "listener",
@@ -171,13 +165,11 @@ __all__ = [
     "compose_decorators",
     "robust_rpc",
     "scheduled_task",
-    
     # Message Types
     "Message",
-    "RPCRequest", 
+    "RPCRequest",
     "RPCResponse",
     "BroadcastMessage",
-    
     # Exception Hierarchy
     "CliffracerError",
     "ServiceError",
@@ -194,38 +186,32 @@ __all__ = [
     "AuthenticationError",
     "AuthorizationError",
     "ErrorHandler",
-    
     # Database
     "DatabaseConnection",
-    "DatabaseModel", 
+    "DatabaseModel",
     "Repository",
     "SecureRepository",
     "get_db_connection",
-    
     # Performance
     "BatchProcessor",
     "OptimizedNATSConnection",
     "PerformanceMetrics",
-    
     # Logging
     "LoggingConfig",
     "get_service_logger",
     "LoggingMixin",
-    "HTTPLoggingMixin", 
+    "HTTPLoggingMixin",
     "WebSocketLoggingMixin",
-    
     # Debug
     "BackdoorServer",
     "BackdoorClient",
-    
     # Runners
     "ServiceRunner",
     "ServiceOrchestrator",
-    
     # Correlation ID support
     "CorrelationContext",
     "get_correlation_id",
-    "set_correlation_id", 
+    "set_correlation_id",
     "create_correlation_id",
     "with_correlation_id",
     "CorrelationMiddleware",
@@ -234,7 +220,6 @@ __all__ = [
     "setup_correlation_logging",
     "get_correlation_logger",
     "CorrelationLoggerMixin",
-    
     # Auth exports
     "AuthConfig",
     "AuthUser",

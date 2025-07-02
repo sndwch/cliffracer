@@ -60,26 +60,32 @@ class NotificationService(WebSocketNATSService):
         to receive real-time notifications.
         """
         # Send welcome message
-        await websocket.send_json({
-            "type": "connection",
-            "message": "Connected to notification service",
-            "timestamp": datetime.now(UTC).isoformat(),
-        })
+        await websocket.send_json(
+            {
+                "type": "connection",
+                "message": "Connected to notification service",
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
 
         # Keep connection alive and handle incoming messages
         try:
             async for message in websocket.iter_json():
                 # Echo back any received messages (for ping/pong)
                 if message.get("type") == "ping":
-                    await websocket.send_json({
-                        "type": "pong",
-                        "timestamp": datetime.now(UTC).isoformat(),
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "pong",
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
         except Exception as e:
             self.logger.error(f"WebSocket error: {e}")
 
     @validated_rpc(dict, dict)
-    async def send_notification(self, user_id: str, title: str, message: str, notification_type: str = "info") -> dict:
+    async def send_notification(
+        self, user_id: str, title: str, message: str, notification_type: str = "info"
+    ) -> dict:
         """Send a notification via RPC"""
         self.notification_count += 1
         notification_id = f"notif_{self.notification_count}"
@@ -96,10 +102,12 @@ class NotificationService(WebSocketNATSService):
         )
 
         # Broadcast to all WebSocket clients
-        await self.broadcast_to_websockets({
-            "type": "notification",
-            "data": notification.model_dump(mode="json"),
-        })
+        await self.broadcast_to_websockets(
+            {
+                "type": "notification",
+                "data": notification.model_dump(mode="json"),
+            }
+        )
 
         # Also broadcast via NATS for other services
         await self.broadcast_notification(notification)

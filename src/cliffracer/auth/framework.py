@@ -5,6 +5,7 @@ This module provides compatibility interfaces that delegate to the working Simpl
 For new development, use SimpleAuthService directly from cliffracer.auth.simple_auth.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -85,72 +86,73 @@ class TokenService:
     def create_user(self, username: str, email: str, password: str) -> User:
         """Create a new user"""
         from .simple_auth import get_auth_service
+
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
-        
+
         # Create user in simple auth service
         auth_user = auth_service.create_user(username, email, password)
-        
+
         # Convert to framework User
         return User(
             user_id=auth_user.user_id,
             username=auth_user.username,
             email=auth_user.email,
             roles=[],  # Could map roles if needed
-            permissions=[]  # Could map permissions if needed
+            permissions=[],  # Could map permissions if needed
         )
 
     def authenticate(self, username: str, password: str) -> AuthToken | None:
         """Authenticate a user and return a token"""
         from .simple_auth import get_auth_service
+
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
-        
+
         # Authenticate with simple auth service
         token = auth_service.authenticate(username, password)
         if not token:
             return None
-        
+
         # Validate token to get expiry info
         context = auth_service.validate_token(token)
         if not context:
             return None
-        
+
         return AuthToken(
             token=token,
             user_id=context.user.user_id,
             expires_at=context.expires_at,
-            scopes=[]  # Could add scopes if needed
+            scopes=[],  # Could add scopes if needed
         )
 
     def validate_token(self, token: str) -> AuthToken | None:
         """Validate a token and return token info"""
         from .simple_auth import get_auth_service
+
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
-        
+
         # Validate with simple auth service
         context = auth_service.validate_token(token)
         if not context or not context.user:
             return None
-        
+
         return AuthToken(
-            token=token,
-            user_id=context.user.user_id,
-            expires_at=context.expires_at,
-            scopes=[]
+            token=token, user_id=context.user.user_id, expires_at=context.expires_at, scopes=[]
         )
 
     def revoke_token(self, token: str) -> None:
         """Revoke a token"""
         from .simple_auth import get_auth_service
+
         auth_service = get_auth_service()
         if not auth_service:
             raise RuntimeError("SimpleAuthService not initialized. Call set_auth_service() first.")
-        
+
         # Revoke with simple auth service
         auth_service.revoke_token(token)
 
