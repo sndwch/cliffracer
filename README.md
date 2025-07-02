@@ -224,8 +224,11 @@ service.run()
 ### Guides
 - [Installation Guide](INSTALL.md) - Detailed installation instructions
 - [Quick Start](docs/getting-started/quickstart.md) - Get up and running
+- [HTTP/REST Guide](docs/http-guide.md) - Building REST APIs
+- [WebSocket Guide](docs/websocket-guide.md) - Real-time communication
+- [API Reference](docs/api-reference.md) - Classes and methods reference
 - [Known Limitations](KNOWN_LIMITATIONS.md) - What's not implemented
-- [Examples Overview](examples/README.md) - Working vs broken examples
+- [Security Checklist](SECURITY_CHECKLIST.md) - Pre-deployment security
 
 ## 🧪 Testing
 
