@@ -209,22 +209,23 @@ service.run()
 ## 📖 Documentation
 
 ### Architecture Guides
-- [Service Architecture](docs/architecture/services.md)
-- [Database Integration](docs/architecture/database.md)
-- [Security Model](docs/architecture/security.md)
+- [Architecture Overview](docs/ARCHITECTURE.md) - System design and patterns
+- [Saga Pattern](docs/patterns/saga.md) - Distributed transaction management
+- [Debugging Guide](docs/debugging/backdoor.md) - Live service debugging
 
 ### Examples
-- [Basic Services](examples/basic/) - Simple NATS services
-- [HTTP Integration](examples/http/) - REST API examples
+- [Basic Services](examples/basic/) - Simple NATS services and patterns
 - [E-commerce System](examples/ecommerce/) - Complete microservices system
-- [Real-time Chat](examples/websocket/) - WebSocket communication
-- [Database Patterns](examples/database/) - Repository and model examples
+- [WebSocket Services](examples/websocket/) - Real-time communication
+- [Database Integration](examples/database/) - Repository pattern examples
+- [Saga Pattern](examples/saga/) - Distributed transactions
+- [All Examples](examples/) - Complete examples overview
 
-### API Reference
-- [Core Services](docs/api/core.md)
-- [Database Layer](docs/api/database.md)
-- [Authentication](docs/api/auth.md)
-- [Performance Features](docs/api/performance.md)
+### Guides
+- [Installation Guide](INSTALL.md) - Detailed installation instructions
+- [Quick Start](docs/getting-started/quickstart.md) - Get up and running
+- [Known Limitations](KNOWN_LIMITATIONS.md) - What's not implemented
+- [Examples Overview](examples/README.md) - Working vs broken examples
 
 ## 🧪 Testing
 
