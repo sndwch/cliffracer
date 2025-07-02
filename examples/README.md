@@ -50,6 +50,17 @@ This directory contains examples of working Cliffracer functionality. We've focu
 **Status**: ✅ Fully functional
 **Use case**: Validating service performance
 
+### [Saga Pattern](saga/)
+**Distributed transaction management** demonstrating:
+- Orchestration-based saga coordination
+- Automatic compensation on failure
+- E-commerce order processing example
+- Travel booking with multi-service coordination
+- Banking transfers with ACID-like guarantees
+
+**Status**: ✅ Fully functional and tested
+**Use case**: Managing distributed transactions across microservices
+
 ## ❌ Broken Examples (Avoid)
 
 ### [Auth Patterns](auth-patterns.md)
@@ -80,6 +91,9 @@ This directory contains examples of working Cliffracer functionality. We've focu
 ```
 examples/
 ├── ecommerce/          # ✅ Complete working e-commerce system
+├── saga/              # ✅ Saga pattern for distributed transactions
+├── websocket/         # ✅ Real-time WebSocket services
+├── database/          # ✅ Database integration examples
 ├── aws/               # ⚠️ Partial - AWS client only, not integrated
 ├── auth-patterns.md   # ❌ Broken - Auth system disabled
 ├── backend-migration.md # ❌ Broken - Not implemented

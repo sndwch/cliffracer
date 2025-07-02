@@ -12,7 +12,7 @@ services:
     environment:
       POSTGRES_DB: cliffracer
       POSTGRES_USER: cliffracer_user
-      POSTGRES_PASSWORD: cliffracer_password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
     ports:
       - "5432:5432"
     volumes:
@@ -55,7 +55,7 @@ services:
     environment:
       POSTGRES_DB: zabbix
       POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD: zabbix_password
+      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD:-changeme}
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     volumes:
       - zabbix_postgres_data:/var/lib/postgresql/data
@@ -73,7 +73,7 @@ services:
       DB_SERVER_HOST: zabbix-postgres
       POSTGRES_DB: zabbix
       POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD: zabbix_password
+      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD:-changeme}
       ZBX_ENABLE_SNMP_TRAPS: "true"
     ports:
       - "10051:10051"
@@ -96,7 +96,7 @@ services:
       DB_SERVER_HOST: zabbix-postgres
       POSTGRES_DB: zabbix
       POSTGRES_USER: zabbix
-      POSTGRES_PASSWORD: zabbix_password
+      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD:-changeme}
       ZBX_SERVER_HOST: zabbix-server
       PHP_TZ: "America/New_York"
     ports:
@@ -175,7 +175,7 @@ services:
       - ZABBIX_SERVER=zabbix-server
       - LOG_LEVEL=INFO
       - LOG_FORMAT=json
-      - DATABASE_URL=postgresql://cliffracer_user:cliffracer_password@postgres:5432/cliffracer
+      - DATABASE_URL=postgresql://cliffracer_user:${POSTGRES_PASSWORD:-changeme}@postgres:5432/cliffracer
     depends_on:
       - nats
       - postgres
@@ -319,7 +319,7 @@ services:
     container_name: cliffracer_formatter
     environment:
       - SERVICE_NAME=cliffracer_formatter
-      - DATABASE_URL=postgresql://cliffracer_user:cliffracer_password@postgres:5432/cliffracer
+      - DATABASE_URL=postgresql://cliffracer_user:${POSTGRES_PASSWORD:-changeme}@postgres:5432/cliffracer
       - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID:-}
       - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET:-}
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT:-HaikuFormatter/1.0}
