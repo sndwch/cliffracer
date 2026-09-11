@@ -117,7 +117,7 @@ jobs:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           if [ -n "${UV_PUBLISH_TOKEN:-}" ]; then
-            uv publish dist/*
+            uv publish --check-url https://pypi.org/simple/ dist/*
           else
             echo "::warning::PYPI_API_TOKEN secret not set; skipping public PyPI publish."
           fi
