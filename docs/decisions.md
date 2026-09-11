@@ -118,3 +118,15 @@ Canonical architectural constraints and invariants governing the Cliffracer runt
      - *Supported*: Stable, covered by the composition guarantee, actively tested in the pairwise matrix.
      - *Deprecated*: Supported but emitting warnings on import, slated for removal.
 - **Consequences**: Provides strong, honest ecosystem stability guarantees without exponential CI bloat or probabilistic flakiness. Extension promotions to "Supported" require structural design review (e.g. how rate-limiting interacts with actor mailboxes), not just passing tests.
+
+## ADR-0019: Virtual Actor Model and State Fencing
+- **Status**: Proposed
+- **Context**: The `cliffracer-actors` extension aims to introduce a Virtual Actor model using NATS primitives. While NATS subject-based routing and KV provide excellent building blocks, they do not magically solve distributed systems complexities. A naive implementation risks split-brain processing on network reconnects, silent message loss on fire-and-forget, and interest-graph memory leaks.
+- **Decision**: The Actor extension is strictly an incubating feature governed by the following structural invariants:
+  1. **Ask-only v1**: `tell` (fire-and-forget) is forbidden. Activation relies on the NATS `no-responders` error, which only exists for `ask` (Request-Reply). A queue-grouped activator service will handle these errors, acquire a lock, instantiate the actor, and have the caller retry via a distinct `ClientActorActivating` exception.
+  2. **Interest = Location. Lease = Right to Exist**: A NATS subscription routes traffic, but ownership is dictated by a KV `create` lease with a TTL heartbeat. On NATS disconnect, the node must immediately drop all local actors and forbid automatic resubscription on reconnect to prevent dual-delivery split-brain.
+  3. **Fence Before Visibility**: A zombie actor is dangerous before it ever flushes state. No side effects (replies, outbound events, nested asks) may execute unless the actor currently holds a valid, unexpired lease. KV CAS on state flush is a secondary backup, not the primary fence. `write-behind` caching is forbidden in v1.
+  4. **Working-Set Limits**: Actors require one exclusive NATS subscription each. To protect the NATS interest graph from exploding, the framework requires a hard per-process activation cap, idle deactivation (passivation), and strict unsubscription upon death.
+  5. **Sequential Mailbox & Header Call-Chains**: Actor mailboxes process requests strictly sequentially via `asyncio` mutual exclusion. Reentrancy is disabled by default. Deadlocks are prevented structurally: every actor request appends its ID to a header call-chain, and any cyclical request (e.g., A -> B -> A) is immediately rejected with an `ActorCycle` error.
+  6. **State is a KV Document**: Actor state is flushed as a document to NATS KV using leader-safe CAS. Direct reads must not be stale.
+- **Consequences**: Safely bounds the scope of virtual actors to an explicitly leased, memory-capped, ask-only paradigm. Requires developers to design around cold-start activation latencies and strict single-threaded deadlock prevention.
