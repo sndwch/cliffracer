@@ -100,7 +100,7 @@ jobs:
       - name: Decide whether a release is warranted
         id: decide
         run: |
-          NEXT="$(uv run semantic-release -c pyproject.toml version --print-tag 2>/dev/null || true)"
+          NEXT="$(uv run semantic-release -c pyproject.toml version --as-prerelease --prerelease-token dev --print-tag 2>/dev/null || true)"
           LAST="$(uv run semantic-release -c pyproject.toml version --print-last-released-tag 2>/dev/null || true)"
           echo "last=$LAST next=$NEXT"
           if [ -z "$NEXT" ] || [ "$NEXT" = "$LAST" ]; then
