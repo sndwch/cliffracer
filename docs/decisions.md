@@ -103,3 +103,15 @@ Canonical architectural constraints and invariants governing the Cliffracer runt
 - **Context**: Isolating NATS connection management, extension hooks, and message dispatch from application-level service logic improves maintainability and testability.
 - **Decision**: `Container` manages broker connectivity, extension lifecycles, and dispatch pipelines. `CliffracerService` serves as the user-facing service interface, providing clean delegation to its internal container.
 - **Consequences**: Clear separation of concerns between user-facing service definition and runtime message dispatch infrastructure.
+
+## ADR-0018: Extension Lifecycle and Combinatorial Testing
+- **Status**: Accepted
+- **Context**: The Cliffracer ecosystem consists of numerous opt-in extensions (\`http\`, \`cron\`, \`resilience\`, etc.). Matrix testing every possible combination of extensions is computationally impossible ($O(2^N)$). However, users need a guarantee that adding an officially supported extension will not conflict with their existing stack.
+- **Decision**: 
+  1. **The Composition Guarantee**: Cliffracer formally guarantees that any officially supported extension will compose cleanly with any other supported extension in any combination.
+  2. **Lifecycle Tiers**: Extensions are categorized into three tiers:
+     - *Incubating*: Experimental, no composition guarantees, excluded from combinatorial testing.
+     - *Supported*: Stable, covered by the composition guarantee, actively tested.
+     - *Deprecated*: Supported but emitting warnings, slated for removal.
+  3. **Combinatorial Fuzzing**: Rather than matrix testing, the CI pipeline employs property-based combinatorial fuzzing. On every run, the pipeline tests a random subset of *Supported* extensions to ensure they boot cleanly, compile schemas accurately, and meet performance baselines without conflict.
+- **Consequences**: Provides strong ecosystem stability guarantees without exponential CI bloat. Requires developers to explicitly manage extension tier promotion.
