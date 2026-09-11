@@ -103,3 +103,18 @@ Canonical architectural constraints and invariants governing the Cliffracer runt
 - **Context**: Isolating NATS connection management, extension hooks, and message dispatch from application-level service logic improves maintainability and testability.
 - **Decision**: `Container` manages broker connectivity, extension lifecycles, and dispatch pipelines. `CliffracerService` serves as the user-facing service interface, providing clean delegation to its internal container.
 - **Consequences**: Clear separation of concerns between user-facing service definition and runtime message dispatch infrastructure.
+
+## ADR-0018: Extension Lifecycle and Combinatorial Testing
+- **Status**: Accepted
+- **Context**: The Cliffracer ecosystem consists of numerous opt-in extensions. Guaranteeing that any extension composes cleanly with any other in a $O(2^N)$ matrix is computationally impossible. Furthermore, probabilistic fuzzing in PR pipelines creates unacceptable flakiness, and shallow boot-testing fails to verify deep behavioral composition. 
+- **Decision**: 
+  1. **The Structural Composition Contract**: Extensions interact with dispatch only through documented hook points. Hook order is explicitly declaration-order dependent. Each extension strictly owns a namespaced config/env prefix, and port ownership is centrally arbitrated.
+  2. **The Composition Guarantee**: Cliffracer guarantees that *Supported* extensions comply with the composition contract. Compliance is enforced by construction where possible, and verified exhaustively in CI.
+  3. **Testing Methodology**: 
+     - **Deterministic Pairwise (PRs)**: The overwhelming majority of interaction bugs are pairwise. The CI pipeline executes an exhaustive, deterministic $O(N^2)$ pairwise matrix (e.g. `n-choose-2`) for all Supported extensions as a blocking gate. It also runs a single "all-enabled" megaservice smoke test.
+     - **Nightly Higher-Order Fuzzing**: Randomized higher-order sampling (triples and up) runs in a nightly job. The seed is printed on failure for reproducibility (`--composition-seed=...`), and any discovered bug is promoted to a deterministic regression test.
+  4. **Lifecycle Tiers** (Declared in package metadata):
+     - *Incubating*: Experimental, no composition guarantees, emits a warning on import, excluded from pairwise CI.
+     - *Supported*: Stable, covered by the composition guarantee, actively tested in the pairwise matrix.
+     - *Deprecated*: Supported but emitting warnings on import, slated for removal.
+- **Consequences**: Provides strong, honest ecosystem stability guarantees without exponential CI bloat or probabilistic flakiness. Extension promotions to "Supported" require structural design review (e.g. how rate-limiting interacts with actor mailboxes), not just passing tests.
