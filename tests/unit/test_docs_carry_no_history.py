@@ -42,7 +42,8 @@ PATTERNS = {
         r"\b(we decided|the ruling|it was decided|the reason we)\b", re.I
     ),
     "release narration": re.compile(
-        r"\b(4\.0 (deleted|removed|replaced|split)|0\.0\.70 removed|orphan sweep|the 1\.0 split)\b", re.I
+        r"\b(4\.0 (deleted|removed|replaced|split)|0\.0\.70 removed|orphan sweep|the 1\.0 split)\b",
+        re.I,
     ),
 }
 
