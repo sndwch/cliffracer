@@ -587,9 +587,6 @@ cliffracer run myapp.services                  # every service in the module
 cliffracer run myapp.services:OrderService
 ```
 
-[CLAUDE.md](CLAUDE.md#running-services-with-the-cli) has the flags, config file
-format and discovery rules.
-
 ## Configuration
 
 Core settings are fields on `ServiceConfig`, set in code or in a
