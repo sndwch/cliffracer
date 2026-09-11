@@ -1,0 +1,120 @@
+{
+  "version": "1.0.0",
+  "timestamp": "2026-09-10T20:22:16.111759+00:00",
+  "git_commit": "f961c4db8af4fe7af13ba5e9edc1ad34737a25bd",
+  "platform": {
+    "python": "3.13.2",
+    "system": "Linux",
+    "machine": "x86_64"
+  },
+  "environment": {
+    "runner": {
+      "cpu_count": 20,
+      "cpu_arch": "x86_64",
+      "total_ram_gb": 125.47,
+      "os": "Linux 7.0.0-30-generic",
+      "python_version": "3.13.2"
+    },
+    "network": {
+      "nats_url": "nats://localhost:4222",
+      "target_host": "localhost",
+      "port": 4222,
+      "is_collocated": true,
+      "topology": "Localhost / Loopback (collocated zero-hop IPC/TCP)"
+    },
+    "nats": {
+      "version": "2.10.29",
+      "jetstream_enabled": true,
+      "max_payload_bytes": 1048576,
+      "server_id": "NC36IPQG4EFA5WUEMAFJDJOHQ2Y3D7FGQIG7MIOKBYJ5LF3XFBXGLNSB",
+      "memory_usage_bytes": 60469248,
+      "cpu_pct": 49,
+      "max_connections": 65536,
+      "active_connections": 5
+    }
+  },
+  "metrics": {
+    "faststream": {
+      "hypervisor_msgs_sec": 160059.9,
+      "overhead_per_msg_ms": 0.00619,
+      "standalone_msgs_sec": 17622692.2
+    },
+    "jetstream": {
+      "throughput_msgs_sec": 50292.1,
+      "batch_size": 250,
+      "messages_consumed": 20000,
+      "p50_batch_latency_ms": 4.556
+    },
+    "serialization": {
+      "1MB": {
+        "msgpack_ser_ms": 0.0877,
+        "msgpack_deser_ms": 0.0686,
+        "msgpack_ser_speedup": 16.94,
+        "json_size_bytes": 1048642,
+        "msgpack_deser_speedup": 11.0,
+        "msgpack_size_bytes": 1048590,
+        "json_deser_ms": 0.7537,
+        "json_ser_ms": 1.4869
+      },
+      "100KB": {
+        "msgpack_ser_ms": 0.0047,
+        "msgpack_deser_ms": 0.0058,
+        "msgpack_ser_speedup": 30.72,
+        "json_size_bytes": 102466,
+        "msgpack_deser_speedup": 12.62,
+        "msgpack_size_bytes": 102414,
+        "json_deser_ms": 0.074,
+        "json_ser_ms": 0.1446
+      },
+      "1KB": {
+        "msgpack_ser_ms": 0.0008,
+        "msgpack_deser_ms": 0.0009,
+        "msgpack_ser_speedup": 4.58,
+        "json_size_bytes": 1090,
+        "msgpack_deser_speedup": 2.85,
+        "msgpack_size_bytes": 1036,
+        "json_deser_ms": 0.0025,
+        "json_ser_ms": 0.0037
+      }
+    },
+    "auth": {
+      "token_validation_ops_sec": 79407.1,
+      "legacy_hash_ops_sec": 55.89,
+      "modern_hash_ops_sec": 54.89
+    },
+    "kv": {
+      "bulk_get_ops_sec": 29873.6,
+      "p50_latency_ms": 0.13,
+      "stress_failure_handled": true,
+      "bulk_put_ops_sec": 40780.4,
+      "items_processed": 5000,
+      "recovery_verified": true
+    },
+    "rpc": {
+      "concurrency_1000": {
+        "p50_latency_ms": 14.244,
+        "throughput_msgs_sec": 45201.6,
+        "p99_latency_ms": 16.075,
+        "p95_latency_ms": 15.9
+      },
+      "concurrency_100": {
+        "p50_latency_ms": 2.017,
+        "throughput_msgs_sec": 37160.7,
+        "p99_latency_ms": 3.194,
+        "p95_latency_ms": 3.059
+      },
+      "concurrency_10": {
+        "p50_latency_ms": 0.336,
+        "throughput_msgs_sec": 21701.6,
+        "p99_latency_ms": 0.766,
+        "p95_latency_ms": 0.725
+      }
+    },
+    "http_gateway": {
+      "raw_rpc_latency_ms": 0.0074,
+      "http_gateway_latency_ms": 0.187,
+      "overhead_ms": 0.1796
+    }
+  },
+  "runs_aggregated": 5
+}

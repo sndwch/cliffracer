@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cliffracer-logging"
+dynamic = ["version"]
+description = "NATS log streaming, correlation-filtered sinks and timing logs for cliffracer services"
+requires-python = ">=3.11"
+readme = "README.md"
+# Hatchling auto-detects the LICENSE file. It must be copied, not symlinked,
+# to avoid sdist unpacking errors.
+license = {text = "MIT"}
+dependencies = [
+    "cliffracer",
+]
+
+[tool.hatch.version]
+source = "vcs"
+raw-options = { root = "../.." }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cliffracer_logging"]
+
+[tool.uv.sources]
+cliffracer = { workspace = true }

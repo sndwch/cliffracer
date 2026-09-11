@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: nats_server
+    ports:
+      - "4222:4222"   # Client connections
+      - "8222:8222"   # HTTP monitoring
+    command: [
+      "-js",          # Enable JetStream
+      "-sd", "/data",  # Storage directory
+      "-m", "8222"     # Enable monitoring
+    ]
+    volumes:
+      - nats_data:/data
+    restart: unless-stopped
+
+  # Example microservice deployment
+  order_service:
+    build: .
+    container_name: order_service
+    environment:
+      - SERVICE_NAME=order_service
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      - nats
+    restart: always
+    command: python -m example_services order
+
+  inventory_service:
+    build: .
+    container_name: inventory_service
+    environment:
+      - SERVICE_NAME=inventory_service
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      - nats
+    restart: always
+    command: python -m example_services inventory
+
+  notification_service:
+    build: .
+    container_name: notification_service
+    environment:
+      - SERVICE_NAME=notification_service
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      - nats
+    restart: always
+    command: python -m example_services notification
+
+volumes:
+  nats_data:

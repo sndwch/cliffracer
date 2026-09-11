@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, "release/**", "feat/**", "fix/**" ]
+  pull_request:
+    branches: [ main, "release/**" ]
+
+concurrency:
+  group: cliffracer-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      NATS_NAME: cliffracer-ci-nats-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start NATS (JetStream + monitoring)
+        run: |
+          docker run -d --name "$NATS_NAME" -p 4222:4222 -p 8222:8222 nats:2.10.29-alpine -js -m 8222
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8222/healthz >/dev/null; then echo "NATS ready"; break; fi
+            echo "waiting for NATS..."; sleep 1
+          done
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra dev
+
+      - name: Lint with ruff
+        run: uv run ruff check src/ packages/ tests/ examples/ load-testing/ scripts/
+
+      - name: Check formatting
+        run: uv run ruff format --check src/ packages/ tests/ examples/ load-testing/ scripts/
+
+      - name: Type check with mypy
+        run: uv run mypy src/ packages/*/src
+
+      - name: Run tests
+        run: uv run pytest -p no:cacheprovider --tb=short
+        env:
+          CLIFFRACER_TEST_NATS_URL: nats://localhost:4222
+        timeout-minutes: 10
+
+      - name: Verify continuous benchmark performance thresholds
+        run: |
+          uv run python scripts/run_benchmarks.py --runs 3 --output /tmp/current_benchmark.json --nats-url "$CLIFFRACER_TEST_NATS_URL"
+          uv run python scripts/check_benchmark_regression.py --baseline benchmark_baseline.json --current /tmp/current_benchmark.json --threshold 0.15
+        env:
+          CLIFFRACER_TEST_NATS_URL: nats://localhost:4222
+
+      - name: Cleanup service containers
+        if: always()
+        run: docker rm -f "$NATS_NAME" || true
+
+  release:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.repository == 'sndwch/cliffracer'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install the release toolchain
+        run: uv sync --locked --group release
+
+      - name: Configure git identity for the tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Decide whether a release is warranted
+        id: decide
+        run: |
+          NEXT="$(uv run semantic-release -c pyproject.toml version --print-tag 2>/dev/null || true)"
+          LAST="$(uv run semantic-release -c pyproject.toml version --print-last-released-tag 2>/dev/null || true)"
+          echo "last=$LAST next=$NEXT"
+          if [ -z "$NEXT" ] || [ "$NEXT" = "$LAST" ]; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "No release warranted."
+          else
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push the tag FIRST, before anything is built or published
+        if: steps.decide.outputs.released == 'true'
+        run: |
+          TAG="${{ steps.decide.outputs.tag }}"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+      - name: Build
+        if: steps.decide.outputs.released == 'true'
+        run: uv build --all-packages
+
+      - name: Publish to PyPI
+        id: publish
+        if: steps.decide.outputs.released == 'true'
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -n "${UV_PUBLISH_TOKEN:-}" ]; then
+            uv publish dist/*
+          else
+            echo "::warning::PYPI_API_TOKEN secret not set; skipping public PyPI publish."
+          fi
+
+      - name: Delete the tag if publishing failed
+        if: failure() && steps.decide.outputs.released == 'true'
+        run: |
+          TAG="${{ steps.decide.outputs.tag }}"
+          echo "Publish failed; removing $TAG so the next run can retry it."
+          git push --delete origin "$TAG" || true
+
+      - name: Create GitHub Release
+        id: relnote
+        continue-on-error: true
+        if: steps.decide.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.decide.outputs.tag }}"
+          PREV="$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then RANGE="$PREV..$TAG"; else RANGE="$TAG"; fi
+          NOTES="$(python3 scripts/release_note.py "$RANGE" || true)"
+          if [ -z "$NOTES" ]; then NOTES="Release $TAG"; fi
+          gh release create "$TAG" dist/* --title "$TAG" --notes "$NOTES"

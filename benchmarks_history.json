@@ -1,0 +1,90 @@
+{
+  "v1.0.0": {
+    "tag": "v1.0.0",
+    "metrics": {
+      "rpc": {
+        "concurrency_10": {
+          "throughput_msgs_sec": 8229.0,
+          "p50_latency_ms": 0.955,
+          "p95_latency_ms": 1.101,
+          "p99_latency_ms": 1.101
+        },
+        "concurrency_100": {
+          "throughput_msgs_sec": 21819.5,
+          "p50_latency_ms": 3.59,
+          "p95_latency_ms": 4.015,
+          "p99_latency_ms": 4.026
+        },
+        "concurrency_1000": {
+          "throughput_msgs_sec": 39425.2,
+          "p50_latency_ms": 17.297,
+          "p95_latency_ms": 18.733,
+          "p99_latency_ms": 18.909
+        }
+      },
+      "jetstream": {
+        "throughput_msgs_sec": 40953.2,
+        "p50_batch_latency_ms": 1.11,
+        "messages_consumed": 200,
+        "batch_size": 50
+      },
+      "serialization": {
+        "1KB": {
+          "json_ser_ms": 0.0046,
+          "json_deser_ms": 0.0029,
+          "json_size_bytes": 1090,
+          "msgpack_ser_ms": 0.0011,
+          "msgpack_deser_ms": 0.0012,
+          "msgpack_size_bytes": 1036,
+          "msgpack_ser_speedup": 4.07,
+          "msgpack_deser_speedup": 2.55
+        },
+        "100KB": {
+          "json_ser_ms": 0.191,
+          "json_deser_ms": 0.0938,
+          "json_size_bytes": 102466,
+          "msgpack_ser_ms": 0.0081,
+          "msgpack_deser_ms": 0.0068,
+          "msgpack_size_bytes": 102414,
+          "msgpack_ser_speedup": 23.5,
+          "msgpack_deser_speedup": 13.86
+        },
+        "1MB": {
+          "json_ser_ms": 1.7216,
+          "json_deser_ms": 0.7525,
+          "json_size_bytes": 1048642,
+          "msgpack_ser_ms": 0.1194,
+          "msgpack_deser_ms": 0.0692,
+          "msgpack_size_bytes": 1048590,
+          "msgpack_ser_speedup": 14.42,
+          "msgpack_deser_speedup": 10.87
+        }
+      },
+      "http_gateway": {
+        "raw_rpc_latency_ms": 0.0089,
+        "http_gateway_latency_ms": 0.1822,
+        "overhead_ms": 0.1733,
+        "overhead_pct": 1953.6
+      },
+      "faststream": {
+        "standalone_msgs_sec": 17816746.6,
+        "hypervisor_msgs_sec": 151621.1,
+        "overhead_per_msg_ms": 0.00654,
+        "overhead_pct": 11650.8
+      },
+      "auth": {
+        "token_validation_ops_sec": 76235.3,
+        "modern_hash_ops_sec": 54.59,
+        "legacy_hash_ops_sec": 54.62
+      },
+      "kv": {
+        "bulk_put_ops_sec": 27115.1,
+        "bulk_get_ops_sec": 23001.3,
+        "p50_latency_ms": 0.172,
+        "items_processed": 50,
+        "stress_failure_handled": true,
+        "recovery_verified": true
+      }
+    }
+  }
+}

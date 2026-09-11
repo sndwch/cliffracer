@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cliffracer-resilience"
+dynamic = ["version"]
+description = "Circuit breaking and rate limiting for Cliffracer services"
+requires-python = ">=3.11"
+readme = "README.md"
+license = {text = "MIT"}
+dependencies = [
+    "cliffracer",
+]
+
+[tool.hatch.version]
+source = "vcs"
+raw-options = { root = "../.." }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cliffracer_resilience"]
+
+[tool.uv.sources]
+cliffracer = { workspace = true }

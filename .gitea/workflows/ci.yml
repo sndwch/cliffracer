@@ -1,0 +1,211 @@
+name: CI
+on:
+  # Trigger on main and active release branches. Release publishing is gated
+  # on main, so pushes to release branches run tests without tagging.
+  push:
+    branches: [ main, "release/**", "feat/**", "fix/**" ]
+  pull_request:
+    branches: [ main, "release/**" ]
+
+concurrency:
+  # Queue, never cancel. A cancelled release can strand a tag between the
+  # local-tag step and the push step, leaving the repo in a state where the
+  # next run computes the wrong next version.
+  group: cliffracer-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Service containers use unique run-scoped names to prevent collision
+    # with host containers and other concurrent runner jobs.
+    env:
+      NATS_NAME: cliffracer-ci-nats-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start NATS (JetStream + monitoring)
+        run: |
+          # Pinned version ensures consistent JetStream server behavior across runs.
+          docker run -d --name "$NATS_NAME" -p 4222:4222 -p 8222:8222 nats:2.10.29-alpine -js -m 8222
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8222/healthz >/dev/null; then echo "NATS ready"; break; fi
+            echo "waiting for NATS..."; sleep 1
+          done
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra dev
+
+      # Lint all project modules, packages, tests, and examples.
+      - name: Lint with ruff
+        run: uv run ruff check src/ packages/ tests/ examples/ load-testing/ scripts/
+
+      # Enforce consistent code formatting across the repository.
+      - name: Check formatting
+        run: uv run ruff format --check src/ packages/ tests/ examples/ load-testing/ scripts/
+
+      - name: Type check with mypy
+        run: uv run mypy src/ packages/*/src
+
+      - name: Run tests
+        run: uv run pytest -p no:cacheprovider --tb=short
+        env:
+          # Points test runner to the local CI NATS broker.
+          CLIFFRACER_TEST_NATS_URL: nats://localhost:4222
+        timeout-minutes: 10
+
+      # Continuous Benchmarks: verify continuous benchmark performance thresholds against baseline
+      - name: Verify continuous benchmark performance thresholds
+        run: |
+          uv run python scripts/run_benchmarks.py --runs 3 --output /tmp/current_benchmark.json --nats-url "$CLIFFRACER_TEST_NATS_URL"
+          uv run python scripts/check_benchmark_regression.py --baseline benchmark_baseline.json --current /tmp/current_benchmark.json --threshold 0.15
+        env:
+          CLIFFRACER_TEST_NATS_URL: nats://localhost:4222
+
+      # Clean up the run-scoped NATS container on completion.
+      - name: Cleanup service containers
+        if: always()
+        run: docker rm -f "$NATS_NAME" || true
+
+  release:
+    needs: test
+    # Publishes releases only on main branch merges.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # hatch-vcs and semantic-release both need full history and tags.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v3
+
+      - name: Install the release toolchain
+        run: uv sync --locked --group release
+
+      - name: Configure git identity for the tag
+        run: |
+          git config user.name "gitea-actions"
+          git config user.email "gitea-actions@users.noreply.gitea.local"
+
+      # Determine whether a new release version is warranted based on commits.
+      - name: Decide whether a release is warranted
+        id: decide
+        run: |
+          NEXT="$(uv run semantic-release -c pyproject.toml version --print-tag 2>/dev/null || true)"
+          LAST="$(uv run semantic-release -c pyproject.toml version --print-last-released-tag 2>/dev/null || true)"
+          echo "last=$LAST next=$NEXT"
+          if [ -z "$NEXT" ] || [ "$NEXT" = "$LAST" ]; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "No release warranted."
+          else
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Push git tag before building or publishing. If branch/tag protection
+      # rejects the push, no artifacts are published and the run halts cleanly.
+      - name: Push the tag FIRST, before anything is built or published
+        if: steps.decide.outputs.released == 'true'
+        run: |
+          TAG="${{ steps.decide.outputs.tag }}"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+      # Build distribution archives for all workspace packages.
+      - name: Build
+        if: steps.decide.outputs.released == 'true'
+        run: uv build --all-packages
+
+      # Publish wheels and sdists to the private registry. Target URL is strictly
+      # validated to ensure artifacts are never uploaded to public registries.
+      - name: Publish to the private Gitea PyPI registry
+        id: publish
+        if: steps.decide.outputs.released == 'true'
+        env:
+          UV_PUBLISH_URL: ${{ github.server_url }}/api/packages/jeff/pypi
+          UV_PUBLISH_USERNAME: jeff
+          UV_PUBLISH_PASSWORD: ${{ secrets.PYPI_PUBLISH_TOKEN }}
+          # UV_PUBLISH_CHECK_URL skips files already uploaded, making partial
+          # publish retries idempotent.
+          UV_PUBLISH_CHECK_URL: ${{ github.server_url }}/api/packages/jeff/pypi/simple
+        run: |
+          set -euo pipefail
+          case "${UV_PUBLISH_URL:-}" in
+            ${{ github.server_url }}/*) : ;;
+            *) echo "::error::refusing to publish to '"'"'${UV_PUBLISH_URL:-<unset>}'"'"' -- D32: nothing is ever uploaded to public PyPI"; exit 1 ;;
+          esac
+          uv publish dist/*
+
+      # Roll back the tag if package publishing fails, allowing retries to
+      # recompute the same version.
+      - name: Delete the tag if publishing failed
+        if: failure() && steps.decide.outputs.released == 'true'
+        run: |
+          TAG="${{ steps.decide.outputs.tag }}"
+          echo "Publish failed; removing $TAG so the next run can retry it."
+          git push --delete origin "$TAG" || true
+
+      # Create Gitea release note from git commit history. Step failure emits
+      # a warning without invalidating successful package publication.
+      - name: Write the changelog into a Gitea release note
+        id: relnote
+        continue-on-error: true
+        if: steps.decide.outputs.released == 'true' && steps.publish.outcome == 'success'
+        env:
+          # Gitea populates this automatically with repo scope for the run.
+          # PYPI_PUBLISH_TOKEN cannot create releases -- it is scoped to the
+          # package registry.
+          RELEASE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          TAG="${{ steps.decide.outputs.tag }}"
+          # Compute git commit range for the current release.
+          #
+          # PREV is the tag before this one, so the range is exactly what this
+          # release contains. If it is empty (first release) the range degrades
+          # to the whole history, which is correct rather than wrong.
+          PREV="$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then RANGE="$PREV..$TAG"; else RANGE="$TAG"; fi
+          # Render changelog via release_note.py, highlighting breaking changes.
+          if ! NOTES="$(python3 scripts/release_note.py "$RANGE")"; then
+            echo "::warning::scripts/release_note.py FAILED for $RANGE -- this is"
+            echo "  a renderer error, NOT an empty range. The tag and the"
+            echo "  published packages are correct; the note is missing and the"
+            echo "  reason is above, not below."
+            exit 1
+          fi
+          if [ -z "$NOTES" ]; then
+            echo "::warning::No commits found in $RANGE for the release note."
+            NOTES="No changes recorded for $TAG."
+          fi
+          # Count release commits and breaking change notes for logging.
+          COMMIT_LINES=$(printf '%s\n' "$NOTES" | sed -n '/^## Commits/,$p' | grep -c '^- ' || true)
+          BREAKING_LINES=$(printf '%s\n' "$NOTES" | grep -c '^### ' || true)
+          echo "Release note for $TAG covers $RANGE ($COMMIT_LINES commits, $BREAKING_LINES breaking)"
+          NOTES="$NOTES" python3 - "$TAG" <<'EOF' > /tmp/body.json
+          import json, os, sys
+          json.dump({"tag_name": sys.argv[1], "name": sys.argv[1],
+                     "body": os.environ.get("NOTES", "")}, sys.stdout)
+          EOF
+          CODE=$(curl -s -o /tmp/relnote.out -w '%{http_code}' -X POST \
+            -H "Authorization: token $RELEASE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/body.json \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases")
+          echo "release-note HTTP $CODE"
+          if [ "$CODE" != "201" ]; then
+            echo "::warning::Release note for $TAG was NOT created (HTTP $CODE)."
+            echo "The tag and the published package are correct; only the note is missing."
+            cat /tmp/relnote.out || true
+            exit 1
+          fi
+          echo "Release note created for $TAG"

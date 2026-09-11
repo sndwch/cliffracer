@@ -1,0 +1,156 @@
+version: '3.8'
+
+services:
+  # NATS Server for NATS backend
+  nats:
+    image: nats:2.10-alpine
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["-js", "-m", "8222"]
+    profiles: ["nats", "dual", "all"]
+  
+  # LocalStack for AWS service emulation (development)
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=sns,sqs,events
+      - DEBUG=1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    profiles: ["aws", "dual", "all"]
+  
+  # User Service with NATS backend
+  user-service-nats:
+    build: .
+    environment:
+      - MESSAGING_BACKEND=nats
+      - NATS_URL=nats://nats:4222
+      - SERVICE_NAME=user_service
+    ports:
+      - "8001:8001"
+    depends_on:
+      - nats
+    command: python example_modular_services.py nats run
+    profiles: ["nats", "dual"]
+  
+  # User Service with AWS backend (using LocalStack)
+  user-service-aws:
+    build: .
+    environment:
+      - MESSAGING_BACKEND=aws
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - SERVICE_NAME=user_service
+    ports:
+      - "8011:8001"  # Different port to avoid conflicts
+    depends_on:
+      - localstack
+    command: python example_modular_services.py aws run
+    profiles: ["aws", "dual"]
+  
+  # Notification Service with NATS
+  notification-service-nats:
+    build: .
+    environment:
+      - MESSAGING_BACKEND=nats
+      - NATS_URL=nats://nats:4222
+      - SERVICE_NAME=notification_service
+    depends_on:
+      - nats
+    command: python -c "
+      from example_modular_services import NotificationService, create_config;
+      import asyncio;
+      service = NotificationService(create_config('nats', 'notification_service'));
+      asyncio.run(service.start());
+      asyncio.run(asyncio.Event().wait())
+      "
+    profiles: ["nats"]
+  
+  # Notification Service with AWS
+  notification-service-aws:
+    build: .
+    environment:
+      - MESSAGING_BACKEND=aws
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - SERVICE_NAME=notification_service
+    depends_on:
+      - localstack
+    command: python -c "
+      from example_modular_services import NotificationService, create_config;
+      import asyncio;
+      service = NotificationService(create_config('aws', 'notification_service'));
+      asyncio.run(service.start());
+      asyncio.run(asyncio.Event().wait())
+      "
+    profiles: ["aws"]
+  
+  # Order Service with NATS
+  order-service-nats:
+    build: .
+    environment:
+      - MESSAGING_BACKEND=nats
+      - NATS_URL=nats://nats:4222
+      - SERVICE_NAME=order_service
+    depends_on:
+      - nats
+    command: python -c "
+      from example_modular_services import OrderService, create_config;
+      import asyncio;
+      service = OrderService(create_config('nats', 'order_service'));
+      asyncio.run(service.start());
+      asyncio.run(asyncio.Event().wait())
+      "
+    profiles: ["nats"]
+  
+  # Order Service with AWS
+  order-service-aws:
+    build: .
+    environment:
+      - MESSAGING_BACKEND=aws
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - SERVICE_NAME=order_service
+    depends_on:
+      - localstack
+    command: python -c "
+      from example_modular_services import OrderService, create_config;
+      import asyncio;
+      service = OrderService(create_config('aws', 'order_service'));
+      asyncio.run(service.start());
+      asyncio.run(asyncio.Event().wait())
+      "
+    profiles: ["aws"]
+  
+  # Test client for both backends
+  test-client:
+    build: .
+    environment:
+      - MESSAGING_BACKEND=${TEST_BACKEND:-nats}
+      - NATS_URL=nats://nats:4222
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_ENDPOINT_URL=http://localstack:4566
+    depends_on:
+      - nats
+      - localstack
+    command: python example_modular_services.py ${TEST_BACKEND:-nats} test
+    profiles: ["test"]
+
+# Define profiles for different deployment scenarios
+# Usage examples:
+#   docker-compose --profile nats up -d          # NATS backend only
+#   docker-compose --profile aws up -d           # AWS backend only  
+#   docker-compose --profile dual up -d          # Both backends side-by-side
+#   docker-compose --profile test up test-client # Run tests

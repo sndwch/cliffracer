@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements-nats-extended.txt .
+RUN pip install --no-cache-dir -r requirements-nats-extended.txt
+
+# Copy service code
+COPY nats_service.py .
+COPY nats_service_extended.py .
+COPY nats_runner.py .
+COPY example_services.py .
+COPY example_extended_services.py .
+
+# Expose ports for HTTP/WebSocket services
+EXPOSE 8001 8002
+
+# Default command
+CMD ["python", "-m", "example_extended_services"]

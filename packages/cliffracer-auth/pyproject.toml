@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cliffracer-auth"
+dynamic = ["version"]
+description = "JWT authentication for cliffracer services"
+requires-python = ">=3.11"
+readme = "README.md"
+# Hatchling auto-detects the LICENSE file. It must be copied, not symlinked,
+# to avoid sdist unpacking errors.
+license = {text = "MIT"}
+dependencies = [
+    "cliffracer",
+    "PyJWT>=2.8.0,<3.0.0",
+]
+
+[tool.hatch.version]
+source = "vcs"
+raw-options = { root = "../.." }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cliffracer_auth"]
+
+[tool.uv.sources]
+cliffracer = { workspace = true }
