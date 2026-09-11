@@ -61,7 +61,7 @@ PATTERN = re.compile("|".join(rf"\b{re.escape(name)}\b" for name in REMOVED), re
 # CHANGELOG.md records past releases and is exempt.
 EXEMPT = {
     "packages/cliffracer-backdoor/tests/test_one_switch.py",
-    }
+}
 
 
 def swept_files() -> list[Path]:
