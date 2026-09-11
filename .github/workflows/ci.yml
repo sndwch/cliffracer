@@ -113,14 +113,7 @@ jobs:
       - name: Publish to PyPI
         id: publish
         if: steps.decide.outputs.released == 'true'
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          if [ -n "${UV_PUBLISH_TOKEN:-}" ]; then
-            uv publish --check-url https://pypi.org/simple/ dist/*
-          else
-            echo "::warning::PYPI_API_TOKEN secret not set; skipping public PyPI publish."
-          fi
+        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/ dist/*
 
       - name: Delete the tag if publishing failed
         if: failure() && steps.decide.outputs.released == 'true'
