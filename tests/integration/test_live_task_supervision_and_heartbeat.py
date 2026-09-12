@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from cliffracer import CliffracerService, ServiceConfig, StreamSpec, listener, validated_listener
 from tests.conftest import broker_url
 
+pytestmark = pytest.mark.integration
+
 
 class ItemMessage(BaseModel):
     item_id: str
@@ -39,7 +41,6 @@ async def _clean_live_test_streams():
     await nc.close()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_live_jetstream_heartbeat_long_handler_survives():
@@ -92,7 +93,6 @@ async def test_live_jetstream_heartbeat_long_handler_survives():
         await svc.stop()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_live_namespaced_service_dlq_decoupling():

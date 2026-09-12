@@ -10,6 +10,8 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, ServiceOrchestrator, ServiceRunner
 
+pytestmark = pytest.mark.unit
+
 
 class TestServiceLifecycle:
     """Test service startup, shutdown, and lifecycle management"""
@@ -441,7 +443,6 @@ class TestServiceOrchestrator:
             assert orchestrator.runners[1].service._running is False
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_concurrent_start_and_stop_eliminates_zombie_state():
     """Verify atomic start/stop lock eliminates zombie states under concurrency."""
@@ -468,7 +469,6 @@ async def test_concurrent_start_and_stop_eliminates_zombie_state():
         assert svc._stopped is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_disconnect_drains_before_unsubscribing():
     """Verify disconnect calls nc.drain while subscriptions are intact."""

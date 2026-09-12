@@ -15,6 +15,8 @@ from pydantic import BaseModel
 from cliffracer import CliffracerService, ServiceConfig, listener, validated_listener
 from cliffracer.core.jetstream import StreamSpec
 
+pytestmark = pytest.mark.unit
+
 
 class SampleEvent(BaseModel):
     id: str
@@ -54,7 +56,6 @@ def _create_service():
     return svc
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_malformed_json_dead_letters_and_terminates():
     """Malformed JSON payload publishes to DLQ and calls msg.term()."""
@@ -86,7 +87,6 @@ async def test_malformed_json_dead_letters_and_terminates():
     assert kwargs["service"] == "item_service"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_malformed_json_on_validated_listener_terminates():
     """Malformed JSON on a @validated_listener terminates without calling ack or nak."""
@@ -109,7 +109,6 @@ async def test_malformed_json_on_validated_listener_terminates():
     assert published_deadletters[0][0] == "dlq.item_service"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_dlq_publish_failure_still_terminates_malformed_message():
     """If publishing to DLQ fails, malformed message is still terminated to avoid redelivery loops."""

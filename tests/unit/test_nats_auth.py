@@ -7,6 +7,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.service import redact_nats_url
 
+pytestmark = pytest.mark.unit
+
 
 class TestRedactNatsUrl:
     def test_plain_url_is_unchanged(self):

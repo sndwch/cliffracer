@@ -16,6 +16,8 @@ from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.correlation import CorrelationContext
 from cliffracer.core.extension import Extension, RejectMessage, SharedDependency, WorkerContext
 
+pytestmark = pytest.mark.unit
+
 
 def _create_test_tracer() -> tuple[TracerProvider, InMemorySpanExporter]:
     """Create an isolated TracerProvider with an InMemorySpanExporter for testing."""
@@ -45,7 +47,6 @@ def _make_worker_ctx(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
 async def test_default_tracer_configuration_and_lifecycle():
     """Verify default tracer provider configuration and health details lifecycle."""
     provider, exporter = _create_test_tracer()
@@ -70,7 +71,6 @@ async def test_default_tracer_configuration_and_lifecycle():
     assert health["tracer_name"] == "test-service"
 
 
-@pytest.mark.unit
 async def test_two_services_do_not_share_state():
     """Verify bound copy isolation between two service instances."""
     provider, exporter = _create_test_tracer()
@@ -102,7 +102,6 @@ async def test_two_services_do_not_share_state():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
 async def test_inbound_span_extraction_with_valid_traceparent():
     """Verify inbound span extracts trace ID and parent span ID from W3C traceparent."""
     provider, exporter = _create_test_tracer()
@@ -147,7 +146,6 @@ async def test_inbound_span_extraction_with_valid_traceparent():
     assert span.status.status_code == StatusCode.OK
 
 
-@pytest.mark.unit
 async def test_inbound_span_extraction_with_missing_header():
     """Verify inbound span without traceparent creates a fresh root span."""
     provider, exporter = _create_test_tracer()
@@ -183,7 +181,6 @@ async def test_inbound_span_extraction_with_missing_header():
     assert span.status.status_code == StatusCode.OK
 
 
-@pytest.mark.unit
 async def test_inbound_span_extraction_with_case_insensitive_header():
     """Verify inbound span extracts traceparent regardless of header casing."""
     provider, exporter = _create_test_tracer()
@@ -218,7 +215,6 @@ async def test_inbound_span_extraction_with_case_insensitive_header():
     assert hex(span.parent.span_id)[2:].rjust(16, "0") == parent_span_id_hex
 
 
-@pytest.mark.unit
 async def test_inbound_span_extraction_with_malformed_header():
     """Verify inbound span with malformed traceparent falls back to root trace gracefully."""
     provider, exporter = _create_test_tracer()
@@ -253,7 +249,6 @@ async def test_inbound_span_extraction_with_malformed_header():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
 async def test_span_exception_recording_on_handler_failure():
     """Verify unhandled handler exception is recorded and marks span as ERROR."""
     provider, exporter = _create_test_tracer()
@@ -291,7 +286,6 @@ class _PolicyRefuser(Extension):
         raise RejectMessage("unauthorized request")
 
 
-@pytest.mark.unit
 async def test_span_exception_recording_on_reject_message():
     """Verify RejectMessage from worker_setup records exception and marks span as ERROR."""
     provider, exporter = _create_test_tracer()
@@ -330,7 +324,6 @@ async def test_span_exception_recording_on_reject_message():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
 async def test_outbound_span_creation_and_traceparent_injection_rpc():
     """Verify outbound RPC starts CLIENT span and injects W3C traceparent into headers."""
     provider, exporter = _create_test_tracer()
@@ -377,7 +370,6 @@ async def test_outbound_span_creation_and_traceparent_injection_rpc():
     assert parts[2] == hex(span.context.span_id)[2:].rjust(16, "0")
 
 
-@pytest.mark.unit
 async def test_outbound_span_creation_for_event_producer():
     """Verify outbound event publish starts PRODUCER span."""
     provider, exporter = _create_test_tracer()
@@ -411,7 +403,6 @@ async def test_outbound_span_creation_for_event_producer():
     assert span.attributes["cliffracer.subject"] == "telemetry.metric"
 
 
-@pytest.mark.unit
 async def test_outbound_span_exception_recording():
     """Verify outbound call error is recorded on span and status set to ERROR."""
     provider, exporter = _create_test_tracer()
@@ -455,7 +446,6 @@ async def test_outbound_span_exception_recording():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
 async def test_end_to_end_trace_propagation_across_mock_caller_and_receiver():
     """Verify trace context propagates seamlessly from caller to receiver."""
     provider, exporter = _create_test_tracer()
@@ -534,7 +524,6 @@ async def test_end_to_end_trace_propagation_across_mock_caller_and_receiver():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
 async def test_concurrent_dispatch_context_isolation():
     """Verify concurrent async dispatches maintain separate span contexts without leakage."""
     provider, exporter = _create_test_tracer()

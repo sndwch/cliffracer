@@ -9,6 +9,8 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
 
+pytestmark = pytest.mark.unit
+
 
 def _rpc_msg(subject: str = "svc.rpc.work", data: dict | None = None):
     msg = AsyncMock()
@@ -19,7 +21,6 @@ def _rpc_msg(subject: str = "svc.rpc.work", data: dict | None = None):
     return msg
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_max_rpc_concurrency_bounds_in_flight_handlers():
     """max_rpc_concurrency limits simultaneous in-flight handler executions."""
@@ -58,7 +59,6 @@ async def test_max_rpc_concurrency_bounds_in_flight_handlers():
         assert reply["result"] == "ok"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_unbounded_concurrency_by_default():
     """When max_rpc_concurrency is None, requests run concurrently without limit."""
@@ -90,7 +90,6 @@ async def test_unbounded_concurrency_by_default():
     assert max_active == 5
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_shutdown_timeout_cancels_hanging_tasks():
     """Service shutdown terminates hanging in-flight tasks when shutdown_timeout expires."""
@@ -127,7 +126,6 @@ async def test_shutdown_timeout_cancels_hanging_tasks():
     assert len(svc.container._active_tasks) == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_shutdown_allows_tasks_to_finish_if_within_deadline():
     """Service shutdown waits for tasks to finish normally if they finish before shutdown_timeout."""

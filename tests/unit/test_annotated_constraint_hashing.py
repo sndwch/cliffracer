@@ -9,8 +9,9 @@ from cliffracer import CliffracerService, rpc
 from cliffracer.client import ClientOutOfDate, ServiceClient
 from cliffracer.introspect import canonical, describe
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 def test_constraint_change_changes_signature_and_description_hash():
     """Changing a Field constraint (ge=1 -> ge=10) changes signature_hash and description_hash."""
 
@@ -42,7 +43,6 @@ def test_constraint_change_changes_signature_and_description_hash():
     assert desc1.description_hash != desc2.description_hash
 
 
-@pytest.mark.unit
 def test_string_constraints_extracted_and_hashed():
     """String constraints (min_length, max_length, pattern) are extracted into constraints dict."""
 
@@ -65,7 +65,6 @@ def test_string_constraints_extracted_and_hashed():
     }
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_service_client_detects_constraint_drift():
     """ServiceClient.verify() raises ClientOutOfDate when server changes Field constraints."""

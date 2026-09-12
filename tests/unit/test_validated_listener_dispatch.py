@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig, validated_listener
 
+pytestmark = pytest.mark.unit
+
 
 class OrderCreated(BaseModel):
     order_id: str
@@ -37,14 +39,12 @@ def _make_service(on_invalid=None, default="deadletter"):
     return svc
 
 
-@pytest.mark.unit
 def test_discovery_registers_schema():
     svc = _make_service()
     assert "orders.created" in svc.container.registry.event_handlers
     assert any(s is OrderCreated for s, _ in svc.container.registry.event_schemas.values())
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_valid_message_reaches_handler_as_model():
     svc = _make_service()
@@ -56,7 +56,6 @@ async def test_valid_message_reaches_handler_as_model():
     svc.container._publish_dlq.assert_not_called()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_invalid_message_dead_letters():
     svc = _make_service(default="deadletter")
@@ -72,7 +71,6 @@ async def test_invalid_message_dead_letters():
     assert any(e.get("loc") == ["amount"] for e in kwargs["errors"])
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_drop_does_not_publish():
     svc = _make_service(on_invalid="drop")
@@ -82,7 +80,6 @@ async def test_drop_does_not_publish():
     svc.container._publish_dlq.assert_not_called()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_non_dict_message_routes_to_on_invalid_policy():
     """Verify non-dict payload routes to on_invalid policy without TypeError."""

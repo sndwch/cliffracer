@@ -1,3 +1,8 @@
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
 def test_rpc_proxy_does_not_leak_service_instance():
     import gc
     import weakref

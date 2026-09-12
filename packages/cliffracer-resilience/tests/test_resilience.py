@@ -31,6 +31,8 @@ from cliffracer.client import RpcRefused
 from cliffracer.core.exceptions import ConnectionError as CliffracerConnectionError
 from cliffracer.core.exceptions import RPCError, RPCTimeoutError
 
+pytestmark = pytest.mark.unit
+
 
 def _rpc_msg(subject: str, data: dict, headers: dict | None = None) -> AsyncMock:
     """Helper to build a mock incoming NATS message."""
@@ -52,7 +54,6 @@ def _get_replies(msg: AsyncMock) -> list[dict]:
 # ============================================================================
 
 
-@pytest.mark.unit
 def test_circuit_breaker_initial_state():
     cb = CircuitBreaker("test-service")
     assert cb.state == CLOSED
@@ -63,7 +64,6 @@ def test_circuit_breaker_initial_state():
     assert cb.success_count == 0
 
 
-@pytest.mark.unit
 async def test_circuit_breaker_success_keeps_closed():
     cb = CircuitBreaker("test-service")
     async with cb:
@@ -73,7 +73,6 @@ async def test_circuit_breaker_success_keeps_closed():
     assert cb.failure_count == 0
 
 
-@pytest.mark.unit
 async def test_circuit_breaker_trips_to_open_after_threshold():
     config = CircuitBreakerConfig(failure_threshold=3, recovery_timeout=10.0)
     cb = CircuitBreaker("test-service", config=config)
@@ -95,7 +94,6 @@ async def test_circuit_breaker_trips_to_open_after_threshold():
     assert cb.is_closed is False
 
 
-@pytest.mark.unit
 async def test_circuit_breaker_fast_fail_when_open():
     """Verify that when OPEN, calls fail fast locally without wire traffic."""
     config = CircuitBreakerConfig(failure_threshold=1, recovery_timeout=60.0)
@@ -125,7 +123,6 @@ async def test_circuit_breaker_fast_fail_when_open():
     assert exc_info.value.details.get("state") == "open"
 
 
-@pytest.mark.unit
 async def test_circuit_breaker_transition_to_half_open_after_cooldown():
     config = CircuitBreakerConfig(failure_threshold=1, recovery_timeout=0.05)
     cb = CircuitBreaker("test-service", config=config)
@@ -144,7 +141,6 @@ async def test_circuit_breaker_transition_to_half_open_after_cooldown():
     assert cb.is_half_open is True
 
 
-@pytest.mark.unit
 async def test_circuit_breaker_half_open_probe_success_resets_to_closed():
     config = CircuitBreakerConfig(failure_threshold=1, recovery_timeout=0.05)
     cb = CircuitBreaker("test-service", config=config)
@@ -165,7 +161,6 @@ async def test_circuit_breaker_half_open_probe_success_resets_to_closed():
     assert cb.failure_count == 0
 
 
-@pytest.mark.unit
 async def test_circuit_breaker_half_open_probe_failure_trips_to_open():
     config = CircuitBreakerConfig(failure_threshold=1, recovery_timeout=0.05)
     cb = CircuitBreaker("test-service", config=config)
@@ -187,7 +182,6 @@ async def test_circuit_breaker_half_open_probe_failure_trips_to_open():
     assert cb.is_open is True
 
 
-@pytest.mark.unit
 async def test_circuit_breaker_half_open_max_calls():
     config = CircuitBreakerConfig(failure_threshold=1, recovery_timeout=0.05, half_open_max_calls=1)
     cb = CircuitBreaker("test-service", config=config)
@@ -209,7 +203,6 @@ async def test_circuit_breaker_half_open_max_calls():
     assert cb.state == CLOSED
 
 
-@pytest.mark.unit
 async def test_circuit_breaker_monitored_exceptions_filtering():
     config = CircuitBreakerConfig(failure_threshold=2)
     cb = CircuitBreaker("test-service", config=config)
@@ -237,7 +230,6 @@ async def test_circuit_breaker_monitored_exceptions_filtering():
     assert cb.state == OPEN
 
 
-@pytest.mark.unit
 def test_circuit_breaker_manual_trip_and_reset():
     cb = CircuitBreaker("test-service")
     cb.trip()
@@ -247,7 +239,6 @@ def test_circuit_breaker_manual_trip_and_reset():
     assert cb.failure_count == 0
 
 
-@pytest.mark.unit
 def test_circuit_breaker_registry():
     registry = CircuitBreakerRegistry(default_config=CircuitBreakerConfig(failure_threshold=3))
     cb1 = registry.get("auth")
@@ -269,7 +260,6 @@ def test_circuit_breaker_registry():
 # ============================================================================
 
 
-@pytest.mark.unit
 async def test_resilient_rpc_proxy_success_and_failure():
     class TestService(CliffracerService):
         inventory = ResilientRpcProxy(
@@ -309,7 +299,6 @@ async def test_resilient_rpc_proxy_success_and_failure():
     svc.call_rpc.assert_not_called()
 
 
-@pytest.mark.unit
 def test_resilient_rpc_proxy_call_async_fails_when_open():
     class TestService(CliffracerService):
         inventory = ResilientRpcProxy("inventory_service")
@@ -321,7 +310,6 @@ def test_resilient_rpc_proxy_call_async_fails_when_open():
         svc.inventory.check_stock.call_async(item_id="item-1")
 
 
-@pytest.mark.unit
 def test_resilient_rpc_proxy_call_async_returns_coroutine_when_closed():
     class TestService(CliffracerService):
         inventory = ResilientRpcProxy("inventory_service")
@@ -344,7 +332,6 @@ def test_resilient_rpc_proxy_call_async_returns_coroutine_when_closed():
 # ============================================================================
 
 
-@pytest.mark.unit
 async def test_in_memory_rate_limiter_sliding_window():
     limiter = InMemoryRateLimiter()
     key = "user_1"
@@ -367,7 +354,6 @@ async def test_in_memory_rate_limiter_sliding_window():
     assert await limiter.acquire(key, calls=3, window=0.05) is True
 
 
-@pytest.mark.unit
 async def test_in_memory_rate_limiter_reset():
     limiter = InMemoryRateLimiter()
     await limiter.acquire("k1", calls=1, window=10.0)
@@ -417,7 +403,6 @@ class _MockKvStore:
         self.store.pop(key, None)
 
 
-@pytest.mark.unit
 async def test_kv_rate_limiter_distributed_sliding_window():
     mock_kv = _MockKvStore()
     limiter = KvRateLimiter(kv=mock_kv, bucket_name="rate_limits")
@@ -439,7 +424,6 @@ async def test_kv_rate_limiter_distributed_sliding_window():
     assert await limiter.acquire(key, calls=2, window=0.05) is True
 
 
-@pytest.mark.unit
 async def test_kv_rate_limiter_fallback_to_in_memory():
     mock_kv = MagicMock()
     mock_kv.get = AsyncMock(side_effect=ConnectionError("NATS disconnected"))
@@ -457,7 +441,6 @@ async def test_kv_rate_limiter_fallback_to_in_memory():
 # ============================================================================
 
 
-@pytest.mark.unit
 async def test_rate_limit_decorator_standalone():
     @rate_limit(calls=2, window=0.05)
     async def greet(name: str) -> str:
@@ -476,7 +459,6 @@ async def test_rate_limit_decorator_standalone():
     assert await greet("dave") == "hello dave"
 
 
-@pytest.mark.unit
 async def test_rate_limit_decorator_metadata_attachment():
     @rate_limit(calls=10, window=60.0, key="client_ip")
     @rpc
@@ -496,7 +478,6 @@ async def test_rate_limit_decorator_metadata_attachment():
 # ============================================================================
 
 
-@pytest.mark.unit
 async def test_resilience_extension_allows_calls_within_limit():
     class OrdersService(CliffracerService):
         resilience = ResilienceExtension()
@@ -518,7 +499,6 @@ async def test_resilience_extension_allows_calls_within_limit():
     assert replies[0].get("result") == "pong"
 
 
-@pytest.mark.unit
 async def test_resilience_extension_rejects_exceeded_requests_with_wire_refusal():
     """Verify that when a rate limit is exceeded, ResilienceExtension raises
     RateLimitExceeded in worker_setup, skipping the handler, and the container
@@ -567,7 +547,6 @@ async def test_resilience_extension_rejects_exceeded_requests_with_wire_refusal(
     assert "correlation_id" in wire_response
 
 
-@pytest.mark.unit
 async def test_resilience_extension_partitioned_by_key():
     class MultiTenantService(CliffracerService):
         resilience = ResilienceExtension()
@@ -602,7 +581,6 @@ async def test_resilience_extension_partitioned_by_key():
     assert _get_replies(msg_b2)[0]["error"] == "refused: rate limit exceeded"
 
 
-@pytest.mark.unit
 async def test_resilience_extension_sliding_window_replenishes():
     class FastService(CliffracerService):
         resilience = ResilienceExtension()
@@ -634,7 +612,6 @@ async def test_resilience_extension_sliding_window_replenishes():
     assert _get_replies(m3)[0].get("result") == "tock"
 
 
-@pytest.mark.unit
 def test_resilient_rpc_proxy_call_async_preserves_half_open_state():
     """Fire-and-forget calls do not reset HALF_OPEN circuit state."""
 
@@ -654,7 +631,6 @@ def test_resilient_rpc_proxy_call_async_preserves_half_open_state():
     assert cb.success_count == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_resilient_rpc_proxy_call_async_awaitable_and_zero_warnings():
     """Awaiting call_async coroutine executes without unawaited warnings."""
@@ -682,7 +658,6 @@ async def test_resilient_rpc_proxy_call_async_awaitable_and_zero_warnings():
     assert len(coroutine_warnings) == 0
 
 
-@pytest.mark.unit
 def test_resilient_method_proxy_call_async_typing():
     """Inspect return type of ResilientMethodProxy.call_async."""
     import typing

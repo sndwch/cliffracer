@@ -19,6 +19,8 @@ from cliffracer_auth import (
 )
 from cliffracer_auth.simple_auth import clear_current_context, set_current_context
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(autouse=True)
 def _clean_context():
@@ -44,7 +46,6 @@ def _authenticate(roles=None, permissions=None):
     )
 
 
-@pytest.mark.unit
 class TestRequiresAuth:
     def test_sync_call_allowed_with_a_context(self):
         @requires_auth
@@ -96,7 +97,6 @@ class TestRequiresAuth:
             handler()
 
 
-@pytest.mark.unit
 class TestRequiresRoles:
     def test_allowed_on_a_matching_role(self):
         @requires_roles("admin")
@@ -133,7 +133,6 @@ class TestRequiresRoles:
         assert await handler() == "ok"
 
 
-@pytest.mark.unit
 class TestRequiresPermissions:
     def test_allowed_on_a_matching_permission(self):
         @requires_permissions("orders:write")
@@ -162,7 +161,6 @@ class TestRequiresPermissions:
         assert await handler() == "ok"
 
 
-@pytest.mark.unit
 def test_the_documented_limitation_holds():
     """Nothing sets the auth context on the NATS RPC path — only AuthMiddleware,
     on HTTP. This pins the limitation KNOWN_LIMITATIONS.md now states, so it

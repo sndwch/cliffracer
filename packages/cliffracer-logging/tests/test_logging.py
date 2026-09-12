@@ -11,6 +11,8 @@ from cliffracer_logging.config import ContextualLogger, LoggingConfig, get_servi
 
 from cliffracer import CliffracerService, ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 class TestLoggingConfig:
     """Test LoggingConfig class"""

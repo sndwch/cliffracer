@@ -7,8 +7,9 @@ from pydantic import ValidationError
 from cliffracer import ServiceConfig
 from cliffracer.core.jetstream import StreamSpec, subject_covered_by
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 class TestStreamSpec:
     def test_minimal_spec_has_file_storage_and_limits_retention(self):
         spec = StreamSpec(name="EXTRACTION", subjects=["*.events.extraction.*"])
@@ -68,7 +69,6 @@ class TestStreamSpec:
         assert not spec.matches(wire_config)
 
 
-@pytest.mark.unit
 class TestSubjectCoveredBy:
     SPECS = [
         StreamSpec(name="EXTRACTION", subjects=["*.events.extraction.*"]),
@@ -95,7 +95,6 @@ class TestSubjectCoveredBy:
         assert not subject_covered_by([], "anything.at.all")
 
 
-@pytest.mark.unit
 class TestServiceConfigJetStreamFields:
     def test_defaults_are_inert(self):
         cfg = ServiceConfig(name="svc")
@@ -120,7 +119,6 @@ class TestServiceConfigJetStreamFields:
         assert cfg.jetstream_streams[0].name == "X"
 
 
-@pytest.mark.unit
 class TestDlqCoverageAssertion:
     """A dead-letter queue that can silently drop messages is not one.
 

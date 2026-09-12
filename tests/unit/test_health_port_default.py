@@ -8,6 +8,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.runners import ServiceOrchestrator
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture(autouse=True)
 def _real_ports(monkeypatch):
@@ -40,7 +42,6 @@ async def _detached(svc):
     return svc
 
 
-@pytest.mark.unit
 async def test_two_default_services_on_same_port_fail_fast_on_second(caplog):
     """Ensure default health port collisions fail fast with an error."""
     port = _free_port()
@@ -59,7 +60,6 @@ async def test_two_default_services_on_same_port_fail_fast_on_second(caplog):
         await b.stop()
 
 
-@pytest.mark.unit
 async def test_an_explicit_port_still_fails_closed():
     """Ensure explicit health port collisions raise an error."""
     port = _free_port()
@@ -78,7 +78,6 @@ async def test_an_explicit_port_still_fails_closed():
         await c.stop()
 
 
-@pytest.mark.unit
 async def test_a_single_default_service_still_binds():
     """Ensure a single service binds the configured health port."""
     port = _free_port()
@@ -94,7 +93,6 @@ async def test_a_single_default_service_still_binds():
         await svc.stop()
 
 
-@pytest.mark.unit
 async def test_two_services_through_the_orchestrator_contending_fail_fast():
     """Ensure multiple services orchestrated with colliding ports fail fast."""
     port = _free_port()
@@ -126,7 +124,6 @@ async def test_two_services_through_the_orchestrator_contending_fail_fast():
             await svc.stop()
 
 
-@pytest.mark.unit
 async def test_an_overridden_health_port_reaches_the_listener():
     """Ensure config overrides applied by ServiceRunner reach the health listener."""
     port = _free_port()

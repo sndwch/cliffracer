@@ -12,12 +12,13 @@ from cliffracer.core.jetstream import (
     consumer_config_for,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _config(**overrides):
     return ServiceConfig(name="svc", namespace="ns", jetstream_enabled=True, **overrides)
 
 
-@pytest.mark.unit
 def test_two_subjects_sharing_a_durable_are_refused():
     """Multiple event listeners sharing a single durable name are refused."""
 
@@ -41,7 +42,6 @@ def test_two_subjects_sharing_a_durable_are_refused():
     assert "ns.events.extraction.failed" in message
 
 
-@pytest.mark.unit
 def test_the_refusal_explains_the_silence():
     """Verify error message clearly describes durable name collision."""
 
@@ -62,7 +62,6 @@ def test_the_refusal_explains_the_silence():
     assert "own durable" in message
 
 
-@pytest.mark.unit
 def test_distinct_durables_are_fine():
     class S(CliffracerService):
         @listener("events.a", durable="durable-a")
@@ -82,7 +81,6 @@ def test_distinct_durables_are_fine():
     }
 
 
-@pytest.mark.unit
 def test_listeners_without_durables_are_unaffected():
     """Core-NATS fan-out listeners have no durable and cannot collide."""
 
@@ -101,7 +99,6 @@ def test_listeners_without_durables_are_unaffected():
     assert svc.container.registry.event_durables == {}
 
 
-@pytest.mark.unit
 def test_one_handler_listening_to_two_subjects_still_needs_two_durables():
     """Stacked decorators on one method are still two filter subjects."""
 
@@ -115,7 +112,6 @@ def test_one_handler_listening_to_two_subjects_still_needs_two_durables():
         S(_config())._discover_handlers()
 
 
-@pytest.mark.unit
 def test_drift_is_empty_when_the_server_agrees():
     asked = consumer_config_for(_config())
     same = ConsumerConfig(
@@ -125,7 +121,6 @@ def test_drift_is_empty_when_the_server_agrees():
     assert consumer_config_drift(asked, same) == []
 
 
-@pytest.mark.unit
 def test_drift_names_the_field_and_both_values():
     """Verify detected drift reports field name and requested vs existing values."""
     asked = consumer_config_for(_config(jetstream_max_deliver=99, jetstream_ack_wait=1.0))
@@ -140,7 +135,6 @@ def test_drift_names_the_field_and_both_values():
     assert "max_ack_pending" not in drift
 
 
-@pytest.mark.unit
 def test_drift_covers_every_field_consumer_config_for_sets():
     """Guard against a new tuning field being added and never compared."""
     asked = consumer_config_for(_config())
@@ -149,7 +143,6 @@ def test_drift_covers_every_field_consumer_config_for_sets():
         assert getattr(asked, field) is not None, f"{field} is not set by consumer_config_for"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_a_drifted_consumer_is_reported_not_swallowed():
     svc = CliffracerService(_config(jetstream_max_deliver=99))
@@ -178,7 +171,6 @@ async def test_a_drifted_consumer_is_reported_not_swallowed():
     assert "nats consumer rm EVENTS some-durable" in warnings[0]
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_an_unreadable_consumer_never_blocks_startup():
     """Reporting config must not be able to stop a service starting."""

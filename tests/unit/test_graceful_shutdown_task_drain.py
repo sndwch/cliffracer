@@ -14,6 +14,8 @@ from cliffracer.core.service import CliffracerService
 from cliffracer.core.service_config import ServiceConfig
 from cliffracer.testing.messages import MockMessage
 
+pytestmark = pytest.mark.unit
+
 
 class LifecycleTrackingExtension(Extension):
     """Extension that tracks when its lifecycle begins and ends."""
@@ -30,7 +32,6 @@ class LifecycleTrackingExtension(Extension):
         self.stopped = True
 
 
-@pytest.mark.unit
 async def test_in_flight_event_drained_on_shutdown():
     """An event handler executing when stop() is called completes before extensions stop."""
     tracking_ext = LifecycleTrackingExtension()
@@ -91,7 +92,6 @@ async def test_in_flight_event_drained_on_shutdown():
         assert len(svc.container._active_tasks) == 0
 
 
-@pytest.mark.unit
 async def test_in_flight_async_rpc_drained_on_shutdown():
     """An async RPC handler executing when stop() is called completes before extensions stop."""
     tracking_ext = LifecycleTrackingExtension()
@@ -145,7 +145,6 @@ async def test_in_flight_async_rpc_drained_on_shutdown():
         assert len(svc.container._active_tasks) == 0
 
 
-@pytest.mark.unit
 async def test_shutdown_timeout_cancels_stuck_tasks():
     """Tasks exceeding shutdown_timeout are cancelled so shutdown does not hang."""
 
@@ -195,7 +194,6 @@ async def test_shutdown_timeout_cancels_stuck_tasks():
         assert svc._stopped is True
 
 
-@pytest.mark.unit
 async def test_pull_consumer_in_flight_event_shielded_and_drained():
     """In-flight pull consumer message is shielded from loop cancellation and drained."""
     tracking_ext = LifecycleTrackingExtension()

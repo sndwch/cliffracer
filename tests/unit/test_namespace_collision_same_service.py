@@ -1,8 +1,11 @@
+import pytest
 from pydantic import BaseModel
 
 from cliffracer import CliffracerService, rpc
 from cliffracer.generate_client.emitter import emit
 from cliffracer.introspect import describe
+
+pytestmark = pytest.mark.unit
 
 
 # Simulate two models from different modules

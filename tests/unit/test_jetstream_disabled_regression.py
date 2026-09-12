@@ -7,6 +7,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig, listener
 from cliffracer.core.jetstream import StreamSpec
 
+pytestmark = pytest.mark.unit
+
 
 class _Svc(CliffracerService):
     @listener("orders.created", fanout=True)
@@ -35,7 +37,6 @@ def _service(**overrides):
     return svc
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_js_is_none_when_disabled():
     svc = _service()
@@ -43,7 +44,6 @@ async def test_js_is_none_when_disabled():
     assert svc.js is None
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_publish_event_is_a_single_core_publish():
     svc = _service()
@@ -57,7 +57,6 @@ async def test_publish_event_is_a_single_core_publish():
     assert "correlation_id" in call.kwargs["headers"]
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_publish_event_still_namespaces_when_disabled():
     svc = _service(namespace="app1")
@@ -65,7 +64,6 @@ async def test_publish_event_still_namespaces_when_disabled():
     assert svc.nc.publish.call_args.args[0] == "app1.orders.created"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_durable_listener_still_uses_a_core_subscription():
     """durable= is inert without the flag. This is the argument's whole contract."""
@@ -77,7 +75,6 @@ async def test_durable_listener_still_uses_a_core_subscription():
     assert "orders.shipped" in subscribed
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_declared_streams_are_not_provisioned_when_disabled():
     """jetstream_streams set but the flag off must touch the server not at all.
@@ -105,7 +102,6 @@ async def test_declared_streams_are_not_provisioned_when_disabled():
     await svc.stop()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_a_raising_handler_is_caught_and_the_next_handler_still_runs():
     """The core path logs and continues. It must not start propagating."""

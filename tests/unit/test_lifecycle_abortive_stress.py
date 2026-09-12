@@ -19,6 +19,8 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 class InstrumentedLifecycleService(CliffracerService):
     """Service instrumented to record exact counts of lifecycle events."""
@@ -108,7 +110,6 @@ def assert_lifecycle_state(
         assert svc.container.lifecycle._startup_succeeded == startup_succeeded
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_lifecycle_chaos_monkey_500_events():
     """500 randomized concurrent lifecycle events (start, stop, cancel) on a single service.
@@ -163,7 +164,6 @@ async def test_lifecycle_chaos_monkey_500_events():
     )
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_cascading_abortive_startup_failures_with_concurrent_stops():
     """20 sequential abortive startups across various lifecycle failure points,
@@ -234,7 +234,6 @@ async def test_cascading_abortive_startup_failures_with_concurrent_stops():
             )
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_external_task_cancellation_during_startup_stages():
     """Cancelling start() directly via external task cancellation at each phase.
@@ -286,7 +285,6 @@ async def test_external_task_cancellation_during_startup_stages():
             assert svc.connect_count == svc.disconnect_count
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_cancellation_of_stop_itself_guarantees_disconnect_and_extensions_cleanup():
     """If stop() itself is cancelled while awaiting on_shutdown,
@@ -330,7 +328,6 @@ async def test_cancellation_of_stop_itself_guarantees_disconnect_and_extensions_
     assert svc.disconnect_count == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_cleanup_stage_exceptions_do_not_abort_subsequent_cleanup_nor_mask_startup_error():
     """Exceptions in intermediate teardown stages (timers, extensions)
@@ -363,7 +360,6 @@ async def test_cleanup_stage_exceptions_do_not_abort_subsequent_cleanup_nor_mask
     assert_lifecycle_state(svc, running=False, stopped=True, starting=False)
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_sequential_restart_cycles_after_clean_and_abortive_stops():
     """Verify service can cycle through start -> stop -> start -> abort -> start -> stop cleanly."""
@@ -392,7 +388,6 @@ async def test_sequential_restart_cycles_after_clean_and_abortive_stops():
     assert svc.on_shutdown_count == 5  # only clean runs hit on_shutdown
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_massive_start_cancellation_stampede():
     """100 tasks call start(). Half are cancelled mid-flight, and 50 call stop().
@@ -435,7 +430,6 @@ async def test_massive_start_cancellation_stampede():
     assert svc.connect_count == svc.disconnect_count
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_repeated_cancellation_during_shielded_abortive_cleanup():
     """Demonstrates defect: when start() receives cancellation while awaiting

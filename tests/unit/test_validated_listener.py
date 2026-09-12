@@ -5,12 +5,13 @@ from pydantic import BaseModel
 
 from cliffracer import ServiceConfig, validated_listener
 
+pytestmark = pytest.mark.unit
+
 
 class Evt(BaseModel):
     id: str
 
 
-@pytest.mark.unit
 def test_decorator_attaches_metadata():
     @validated_listener("orders.created", Evt, fanout=True)
     async def handler(self, message: Evt):
@@ -23,7 +24,6 @@ def test_decorator_attaches_metadata():
     assert on_invalid is None
 
 
-@pytest.mark.unit
 def test_decorator_on_invalid_override():
     @validated_listener("orders.x", Evt, on_invalid="drop", fanout=True)
     async def handler(self, message: Evt):
@@ -32,7 +32,6 @@ def test_decorator_on_invalid_override():
     assert handler._cliffracer_validated_events[0][2] == "drop"
 
 
-@pytest.mark.unit
 def test_service_config_invalid_defaults():
     cfg = ServiceConfig(name="svc")
     assert cfg.default_on_invalid == "deadletter"

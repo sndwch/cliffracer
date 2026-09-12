@@ -22,6 +22,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.health_listener import HealthListener
 
+pytestmark = pytest.mark.unit
+
 
 async def _raw_request(
     port: int,
@@ -128,7 +130,6 @@ def _simulate_service_state(
         svc.nc = None
 
 
-@pytest.mark.unit
 async def test_health_listener_dependency_exceptions_segregation():
     """Verify that multiple explosive downstream dependencies degrade /ready but never /live."""
     svc = CliffracerService(ServiceConfig(name="orders_svc", health_port=0))
@@ -178,7 +179,6 @@ async def test_health_listener_dependency_exceptions_segregation():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_health_listener_dependency_timeout_segregation():
     """Verify that hanging downstream dependencies trigger timeout in /ready without stalling /live."""
     svc = CliffracerService(ServiceConfig(name="slow_dep_svc", health_port=0))
@@ -227,7 +227,6 @@ def _assert_health_mirrors_ready(health_body: dict[str, Any], ready_body: dict[s
     assert health_body.get("unhealthy_dependencies") == ready_body.get("unhealthy_dependencies")
 
 
-@pytest.mark.unit
 async def test_health_listener_broker_states_segregation():
     """Verify /live remains 200 during CONNECTING, DISCONNECTED, and CLOSED states while /ready fails."""
     svc = CliffracerService(ServiceConfig(name="broker_test_svc", health_port=0))
@@ -281,7 +280,6 @@ async def test_health_listener_broker_states_segregation():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_health_listener_broker_flapping_dynamic_recovery():
     """Verify /live remains constant 200 while /ready dynamically toggles 200 <-> 503 as broker flaps."""
     svc = CliffracerService(ServiceConfig(name="flapping_svc", health_port=0))
@@ -308,7 +306,6 @@ async def test_health_listener_broker_flapping_dynamic_recovery():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_health_listener_stopped_service_all_probes_503():
     """Verify /live, /ready, and /health return 503 when service is stopped."""
     svc = CliffracerService(ServiceConfig(name="stopped_svc", health_port=0))
@@ -333,7 +330,6 @@ async def test_health_listener_stopped_service_all_probes_503():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_health_listener_method_not_allowed_on_all_endpoints():
     """Verify POST, PUT, DELETE, PATCH, and OPTIONS on /live, /ready, /health, /info return 405."""
     svc = CliffracerService(ServiceConfig(name="methods_svc", health_port=0))
@@ -358,7 +354,6 @@ async def test_health_listener_method_not_allowed_on_all_endpoints():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_health_listener_invalid_and_adversarial_paths_return_404():
     """Verify unknown and adversarial paths return 404 Not Found."""
     svc = CliffracerService(ServiceConfig(name="paths_svc", health_port=0))
@@ -392,7 +387,6 @@ async def test_health_listener_invalid_and_adversarial_paths_return_404():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_health_listener_malformed_and_edge_case_requests():
     """Verify HealthListener survives malformed HTTP requests and immediate connection drops."""
     svc = CliffracerService(ServiceConfig(name="malformed_svc", health_port=0))
@@ -433,7 +427,6 @@ async def test_health_listener_malformed_and_edge_case_requests():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_health_listener_non_blocking_concurrency_stress():
     """Stress test: verify /live probe is NEVER blocked or delayed by a slow/hanging /ready probe."""
     svc = CliffracerService(ServiceConfig(name="concurrency_stress_svc", health_port=0))

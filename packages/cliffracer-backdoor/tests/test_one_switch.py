@@ -7,6 +7,8 @@ from cliffracer_backdoor import BackdoorExtension
 
 from cliffracer import CliffracerService, ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 # Environment configurations to verify legacy flags are ignored.
 ENVIRONMENTS = [
     pytest.param({}, id="nothing-set"),
@@ -20,7 +22,6 @@ ENVIRONMENTS = [
 ]
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("environment", ENVIRONMENTS)
 async def test_enabled_true_starts_the_console_whatever_else_is_set(monkeypatch, environment):
     for name, value in environment.items():
@@ -43,7 +44,6 @@ async def test_enabled_true_starts_the_console_whatever_else_is_set(monkeypatch,
         await svc.backdoor.stop()
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("environment", ENVIRONMENTS)
 async def test_the_default_starts_nothing_whatever_else_is_set(monkeypatch, environment):
     """Verify backdoor does not start when enabled is not set."""
@@ -63,7 +63,6 @@ async def test_the_default_starts_nothing_whatever_else_is_set(monkeypatch, envi
         await svc.backdoor.stop()
 
 
-@pytest.mark.unit
 def test_the_environment_switch_is_the_prefixed_one(monkeypatch):
     """Verify CLIFFRACER_BACKDOOR_ENABLED toggles extension enablement."""
     monkeypatch.setenv("CLIFFRACER_BACKDOOR_ENABLED", "true")

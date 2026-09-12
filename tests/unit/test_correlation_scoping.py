@@ -8,6 +8,8 @@ from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.correlation import CorrelationContext
 from cliffracer.core.timer import Timer
 
+pytestmark = pytest.mark.unit
+
 
 class _Recorder:
     """Stands in for a service whose timer method starts an RPC."""

@@ -30,6 +30,8 @@ from cliffracer.introspect import (
     describe,
 )
 
+pytestmark = pytest.mark.unit
+
 
 # ---------------------------------------------------------------------------
 # Models for Testing
@@ -125,7 +127,6 @@ class ComprehensiveService(CliffracerService):
 # ---------------------------------------------------------------------------
 # Unit Tests: Pydantic JSON Schemas in Components
 # ---------------------------------------------------------------------------
-@pytest.mark.unit
 def test_components_catalog_contains_all_nested_and_return_models() -> None:
     desc = describe(ComprehensiveService, service="comp", version="1.0.0")
 
@@ -143,7 +144,6 @@ def test_components_catalog_contains_all_nested_and_return_models() -> None:
     assert "EventPayload" in titles
 
 
-@pytest.mark.unit
 def test_component_keys_match_sha256_prefix_and_typerefs() -> None:
     desc = describe(ComprehensiveService, service="comp", version="1.0.0")
 
@@ -165,7 +165,6 @@ def test_component_keys_match_sha256_prefix_and_typerefs() -> None:
     assert desc.components[ret_hash]["title"] == "ComplexResponse"
 
 
-@pytest.mark.unit
 def test_cyclic_model_schema_collection_terminates() -> None:
     CyclicTree.model_rebuild()
     out = collect_model_schemas(CyclicTree)
@@ -175,7 +174,6 @@ def test_cyclic_model_schema_collection_terminates() -> None:
     assert "CyclicTree" in str(collected_schema)
 
 
-@pytest.mark.unit
 def test_components_round_trip_serialization() -> None:
     desc = describe(ComprehensiveService, service="comp", version="1.0.0")
     d_dict = desc.to_dict()
@@ -188,7 +186,6 @@ def test_components_round_trip_serialization() -> None:
 # ---------------------------------------------------------------------------
 # Unit Tests: Listeners and Streams Discovery
 # ---------------------------------------------------------------------------
-@pytest.mark.unit
 def test_listeners_discovery_and_queue_group_semantics() -> None:
     desc = describe(ComprehensiveService, service="comp", version="1.0.0")
     assert len(desc.listeners) == 5
@@ -234,7 +231,6 @@ def test_listeners_discovery_and_queue_group_semantics() -> None:
     assert bcast_l.queue_group is None
 
 
-@pytest.mark.unit
 def test_jetstream_stream_introspection_from_config() -> None:
     config = ServiceConfig(
         name="comp",
@@ -267,7 +263,6 @@ def test_jetstream_stream_introspection_from_config() -> None:
     assert s_b.max_age_seconds == 3600.0
 
 
-@pytest.mark.unit
 def test_listener_and_stream_round_trip_serialization() -> None:
     config = ServiceConfig(
         name="comp",
@@ -287,7 +282,6 @@ def test_listener_and_stream_round_trip_serialization() -> None:
 # ---------------------------------------------------------------------------
 # Unit Tests: Docstring Preservation
 # ---------------------------------------------------------------------------
-@pytest.mark.unit
 def test_handlerspec_preserves_summary_and_full_description() -> None:
     spec = build_handler_spec(
         "execute_task",
@@ -301,7 +295,6 @@ def test_handlerspec_preserves_summary_and_full_description() -> None:
     assert spec.description == spec.doc_description
 
 
-@pytest.mark.unit
 def test_method_docstring_fields_multiline_singleline_none() -> None:
     desc = describe(ComprehensiveService, service="comp", version="1.0.0")
 
@@ -329,7 +322,6 @@ def test_method_docstring_fields_multiline_singleline_none() -> None:
     assert m_none.description is None
 
 
-@pytest.mark.unit
 def test_event_listener_docstrings_preserved() -> None:
     desc = describe(ComprehensiveService, service="comp", version="1.0.0")
 
@@ -341,7 +333,6 @@ def test_event_listener_docstrings_preserved() -> None:
     assert "Updates downstream projections." in val_l.description
 
 
-@pytest.mark.unit
 def test_backward_compatibility_with_legacy_description_dict() -> None:
     legacy_dict = {
         "service": "legacy",

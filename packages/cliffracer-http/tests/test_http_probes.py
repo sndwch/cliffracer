@@ -15,6 +15,8 @@ from pydantic import BaseModel
 from cliffracer import CliffracerService, ServiceConfig, rpc
 from cliffracer.core.extension import ExtensionSetupContext
 
+pytestmark = pytest.mark.unit
+
 
 class PingResponse(BaseModel):
     pong: bool

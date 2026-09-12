@@ -18,6 +18,8 @@ from cliffracer import (
 )
 from tests.conftest import broker_url
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(autouse=True)
 async def _clean_test_streams():
@@ -46,7 +48,6 @@ class SimpleResult(BaseModel):
     active_during: int
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_live_nats_bounded_rpc_concurrency():
@@ -103,7 +104,6 @@ async def test_live_nats_bounded_rpc_concurrency():
         await svc.stop()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_live_nats_shutdown_deadline_cancels_hung_handler():
@@ -145,7 +145,6 @@ async def test_live_nats_shutdown_deadline_cancels_hung_handler():
         await client_nc.close()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_live_nats_complex_overlapping_listeners():
@@ -228,7 +227,6 @@ class ValidatedItem(BaseModel):
     quantity: int
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_live_jetstream_durable_adversarial_payloads_dlq_and_termination():

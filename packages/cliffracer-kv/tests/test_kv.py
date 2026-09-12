@@ -22,6 +22,8 @@ from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 class SampleUser(BaseModel):
     id: str
@@ -34,7 +36,6 @@ class SampleUser(BaseModel):
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_normalize_ttl_seconds():
     assert normalize_ttl_seconds(None) is None
     assert normalize_ttl_seconds(60) == 60.0
@@ -46,7 +47,6 @@ def test_normalize_ttl_seconds():
         normalize_ttl_seconds("not-a-number")
 
 
-@pytest.mark.unit
 def test_bucket_config_from_value():
     # From string
     cfg = BucketConfig.from_value("users", default_ttl=300)
@@ -82,7 +82,6 @@ def test_bucket_config_from_value():
         BucketConfig.from_value(123)
 
 
-@pytest.mark.unit
 def test_object_store_config_from_value():
     # From string
     cfg = ObjectStoreConfig.from_value("assets", default_ttl=3600)
@@ -111,7 +110,6 @@ def test_object_store_config_from_value():
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_serialize_and_deserialize_pydantic_model():
     user = SampleUser(id="u123", username="alice", is_active=True)
     serialized = serialize_value(user)
@@ -131,7 +129,6 @@ def test_serialize_and_deserialize_pydantic_model():
     assert res_inferred["id"] == "u123"
 
 
-@pytest.mark.unit
 def test_serialize_and_deserialize_primitives():
     # Dict
     d = {"key": "value", "count": 42}
@@ -166,7 +163,6 @@ def test_serialize_and_deserialize_primitives():
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_bucket_auto_provisioning_with_bucket_level_ttl():
     """Verify that bucket-level TTL configuration is passed directly to JetStream."""
@@ -208,7 +204,6 @@ async def test_bucket_auto_provisioning_with_bucket_level_ttl():
     assert call_dict["temp_tokens"]["ttl"] == 60.0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_object_store_auto_provisioning_with_ttl():
     """Verify that object store provisioning passes TTL to JetStream create_object_store."""
@@ -241,7 +236,6 @@ async def test_object_store_auto_provisioning_with_ttl():
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_kv_put_and_get_operations():
     js_mock = AsyncMock()
@@ -274,7 +268,6 @@ async def test_kv_put_and_get_operations():
     assert retrieved.username == "bob"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_kv_get_missing_key_returns_default():
     js_mock = AsyncMock()
@@ -289,7 +282,6 @@ async def test_kv_get_missing_key_returns_default():
     assert val == "missing_default"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_kv_optimistic_concurrency_revision():
     js_mock = AsyncMock()
@@ -304,7 +296,6 @@ async def test_kv_optimistic_concurrency_revision():
     assert kv_mock.update.call_args.kwargs["last"] == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_kv_delete_and_purge():
     js_mock = AsyncMock()
@@ -326,7 +317,6 @@ async def test_kv_delete_and_purge():
     assert await ext.delete("users", "missing") is False
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_kv_keys_and_history():
     js_mock = AsyncMock()
@@ -351,7 +341,6 @@ async def test_kv_keys_and_history():
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_object_store_operations():
     js_mock = AsyncMock()
@@ -396,7 +385,6 @@ async def test_object_store_operations():
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_jetstream_unavailable_raises_error():
     # Neither service nor js provided
@@ -424,7 +412,6 @@ async def test_jetstream_unavailable_raises_error():
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_two_services_do_not_share_kv_state():
     """Verify that shallow copying during bind preserves isolated per-service state."""

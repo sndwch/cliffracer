@@ -7,6 +7,8 @@ import pytest
 
 from cliffracer.core.jetstream import StreamDeclarationError, StreamSpec, ensure_streams
 
+pytestmark = pytest.mark.unit
+
 
 def _js(existing_specs=()):
     """A fake JetStreamContext whose streams_info returns the given declarations."""
@@ -17,7 +19,6 @@ def _js(existing_specs=()):
     return js
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_absent_stream_is_added():
     js = _js()
@@ -28,7 +29,6 @@ async def test_absent_stream_is_added():
     assert js.add_stream.call_args.kwargs["config"].name == "EXTRACTION"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_identical_declaration_is_a_no_op():
     """A publisher and its consumer must both be able to declare the shared stream."""
@@ -40,7 +40,6 @@ async def test_identical_declaration_is_a_no_op():
     assert js.update_stream.await_count == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_subject_order_does_not_make_a_declaration_conflict():
     js = _js([StreamSpec(name="X", subjects=["a.b", "a.c"])])
@@ -48,7 +47,6 @@ async def test_subject_order_does_not_make_a_declaration_conflict():
     assert js.update_stream.await_count == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_differing_declaration_raises_by_default():
     js = _js([StreamSpec(name="X", subjects=["a.b"])])
@@ -62,7 +60,6 @@ async def test_differing_declaration_raises_by_default():
     assert js.update_stream.await_count == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_differing_declaration_updates_when_allowed():
     js = _js([StreamSpec(name="X", subjects=["a.b"])])
@@ -72,7 +69,6 @@ async def test_differing_declaration_updates_when_allowed():
     assert set(js.update_stream.call_args.kwargs["config"].subjects) == {"a.b", "a.c"}
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_overlapping_claim_against_another_stream_raises_naming_both():
     """The jorbo case: a natural-looking jorbo.events.> collides with EXTRACTION."""
@@ -88,7 +84,6 @@ async def test_overlapping_claim_against_another_stream_raises_naming_both():
     assert js.add_stream.await_count == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_non_overlapping_claims_coexist():
     js = _js([StreamSpec(name="EXTRACTION", subjects=["*.events.extraction.*"])])
@@ -102,7 +97,6 @@ async def test_non_overlapping_claims_coexist():
     assert js.add_stream.await_count == 2
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_two_specs_in_one_call_are_checked_against_each_other():
     js = _js()
@@ -116,7 +110,6 @@ async def test_two_specs_in_one_call_are_checked_against_each_other():
         )
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_no_specs_does_not_call_the_server():
     js = _js()

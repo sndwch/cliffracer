@@ -17,6 +17,8 @@ from cliffracer.client import (
     ServiceClient,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class Order(BaseModel):
     sku: str
@@ -74,7 +76,6 @@ def _desc(sig="sha256:sig-create", methods=("create",)):
     }
 
 
-@pytest.mark.unit
 async def test_a_call_encodes_models_sends_the_subject_and_validates_the_result():
     nc = FakeNC(
         [
@@ -96,7 +97,6 @@ async def test_a_call_encodes_models_sends_the_subject_and_validates_the_result(
     assert headers["authorization"] == "bearer tok" and "correlation_id" in headers
 
 
-@pytest.mark.unit
 async def test_verify_runs_once_and_names_changed_and_missing_methods():
     nc = FakeNC([_desc(sig="sha256:OTHER", methods=())])
     c = OrdersClient(nc, service="orders")
@@ -105,7 +105,6 @@ async def test_verify_runs_once_and_names_changed_and_missing_methods():
     assert e.value.missing == ["create"]
 
 
-@pytest.mark.unit
 async def test_a_changed_signature_is_reported_as_changed_not_missing():
     """The other branch of the drift check, and the unit suite missed it.
 
@@ -122,7 +121,6 @@ async def test_a_changed_signature_is_reported_as_changed_not_missing():
     assert e.value.missing == []
 
 
-@pytest.mark.unit
 async def test_verify_ignores_methods_the_service_added():
     nc = FakeNC(
         [_desc(methods=("create", "extra")), {"success": True, "result": {"sku": "a", "qty": 1}}]
@@ -132,7 +130,6 @@ async def test_verify_ignores_methods_the_service_added():
     assert len(nc.sent) == 2  # describe once, then the call
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     ("reply", "exc"),
     [
@@ -155,7 +152,6 @@ async def test_error_mapping(reply, exc):
         await c.create(Order(sku="a"))
 
 
-@pytest.mark.unit
 async def test_timeout_maps_to_RpcTimeout():
     import nats.errors
 
@@ -165,7 +161,6 @@ async def test_timeout_maps_to_RpcTimeout():
         await c.create(Order(sku="a"))
 
 
-@pytest.mark.unit
 async def test_a_reply_without_success_is_a_protocol_error():
     nc = FakeNC([_desc(), {"result": "x"}])
     c = OrdersClient(nc, service="orders")
@@ -173,7 +168,6 @@ async def test_a_reply_without_success_is_a_protocol_error():
         await c.create(Order(sku="a"))
 
 
-@pytest.mark.unit
 async def test_verify_false_skips_the_describe_call():
     nc = FakeNC([{"success": True, "result": {"sku": "a", "qty": 1}}])
     c = OrdersClient(nc, service="orders", verify=False)
@@ -181,7 +175,6 @@ async def test_verify_false_skips_the_describe_call():
     assert nc.sent[0][0] == "orders.rpc.create"
 
 
-@pytest.mark.unit
 async def test_the_describe_request_carries_the_clients_headers():
     """Found end to end: a client with a token could not verify against a
     service behind AuthExtension, because only `_call` sent the headers. The
@@ -198,7 +191,6 @@ async def test_the_describe_request_carries_the_clients_headers():
     assert "correlation_id" in describe_headers
 
 
-@pytest.mark.unit
 async def test_verify_really_runs_once_across_calls():
     """`_verified` is what stops a describe on every call. Two calls, one describe."""
     nc = FakeNC(
@@ -216,7 +208,6 @@ async def test_verify_really_runs_once_across_calls():
     assert subjects == ["orders.describe", "orders.rpc.create", "orders.rpc.create"]
 
 
-@pytest.mark.unit
 async def test_encode_uses_the_declared_annotation_not_the_runtime_type():
     """The reason `_encode` takes an annotation at all.
 
@@ -275,7 +266,6 @@ async def _refusal_envelope_from_the_container() -> dict:
     return msg.response
 
 
-@pytest.mark.unit
 async def test_a_refused_describe_is_RpcRefused_not_a_KeyError():
     """Verify refused describe request raises RpcRefused rather than KeyError."""
     envelope = await _refusal_envelope_from_the_container()
@@ -287,7 +277,6 @@ async def test_a_refused_describe_is_RpcRefused_not_a_KeyError():
     assert caught.value.reason == "unauthenticated"
 
 
-@pytest.mark.unit
 async def test_a_describe_that_errors_is_a_ClientError_naming_the_subject():
     c = OrdersClient(FakeNC([{"error": "boom", "timestamp": "t"}]), service="orders")
     with pytest.raises(ClientError) as caught:
@@ -295,7 +284,6 @@ async def test_a_describe_that_errors_is_a_ClientError_naming_the_subject():
     assert "orders.describe" in str(caught.value) and "boom" in str(caught.value)
 
 
-@pytest.mark.unit
 async def test_a_describe_timeout_is_RpcTimeout():
     """The existing timeout test cannot reach this: its fake hands verify a
     good description first, so the timeout it scripts always lands on the CALL.
@@ -308,7 +296,6 @@ async def test_a_describe_timeout_is_RpcTimeout():
     assert "orders.describe" in str(caught.value)
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("verify", [True, False])
 async def test_no_responders_is_its_own_error_on_both_paths(verify):
     """A stopped service is not a timeout: the broker says so immediately, and
@@ -323,7 +310,6 @@ async def test_no_responders_is_its_own_error_on_both_paths(verify):
     assert expected in str(caught.value)
 
 
-@pytest.mark.unit
 async def test_a_description_for_another_service_is_refused_by_name():
     """A `service=` or `namespace=` slip points the client at the wrong
     service. The hashes can line up by coincidence of shape, so the name is
@@ -338,7 +324,6 @@ async def test_a_description_for_another_service_is_refused_by_name():
 # --- the base class, and the attribute it brought with it ---------------------
 
 
-@pytest.mark.unit
 def test_the_client_errors_are_cliffracer_errors_but_not_service_errors():
     """`ClientError` under `CliffracerError`, deliberately not under
     `ServiceError`. A service catching `ServiceError` is catching "something
@@ -361,7 +346,6 @@ def test_the_client_errors_are_cliffracer_errors_but_not_service_errors():
         assert issubclass(cls, ClientError), cls
 
 
-@pytest.mark.unit
 def test_a_validation_error_prints_pydantics_list_once():
     """Verify RpcValidationError formats details without duplication."""
     details = [{"loc": ["qty"], "msg": "must be > 0"}]
@@ -373,7 +357,6 @@ def test_a_validation_error_prints_pydantics_list_once():
     assert isinstance(error.details, list)
 
 
-@pytest.mark.unit
 async def test_re_verify_on_validation_error_detects_replica_mismatch():
     v1_desc = _desc(sig="sha256:sig-create")
     v2_desc = _desc(sig="sha256:sig-create-v2")
@@ -391,7 +374,6 @@ async def test_re_verify_on_validation_error_detects_replica_mismatch():
     assert exc.value.changed == ["create"]
 
 
-@pytest.mark.unit
 async def test_re_verify_on_validation_error_re_raises_when_schema_unchanged():
     v1_desc = _desc(sig="sha256:sig-create")
     val_err_reply = {

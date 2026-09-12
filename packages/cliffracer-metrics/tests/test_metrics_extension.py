@@ -14,6 +14,8 @@ from cliffracer_metrics import (
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.extension import Extension, RejectMessage, WorkerContext
 
+pytestmark = pytest.mark.unit
+
 
 class Svc(CliffracerService):
     metrics = MetricsExtension()
@@ -26,7 +28,6 @@ def _ctx(kind: str, subject: str) -> WorkerContext:
 # Extension hook chain tests.
 
 
-@pytest.mark.unit
 async def test_a_dispatch_is_timed_and_counted():
     svc = Svc(ServiceConfig(name="m"))
     await svc.container._setup_extensions()
@@ -41,7 +42,6 @@ async def test_a_dispatch_is_timed_and_counted():
     assert summary["rpc"]["latency_ms"]["max"] >= 0
 
 
-@pytest.mark.unit
 async def test_an_error_is_counted_and_reraised():
     svc = Svc(ServiceConfig(name="m"))
     await svc.container._setup_extensions()
@@ -60,7 +60,6 @@ class _Refuser(Extension):
         raise RejectMessage("not authorised")
 
 
-@pytest.mark.unit
 async def test_a_refusal_is_counted_as_rejected_and_not_as_an_error():
     """Verify RejectMessage is recorded under rejected rather than errors."""
 
@@ -83,7 +82,6 @@ async def test_a_refusal_is_counted_as_rejected_and_not_as_an_error():
     assert stats["count"] == 1, "it was still a dispatch"
 
 
-@pytest.mark.unit
 async def test_two_services_do_not_share_metrics():
     """Verify metrics state is isolated per service instance."""
     a, b = Svc(ServiceConfig(name="a")), Svc(ServiceConfig(name="b"))
@@ -105,13 +103,11 @@ async def test_two_services_do_not_share_metrics():
     assert b.metrics.health_details() == {}
 
 
-@pytest.mark.unit
 async def test_no_contribution_before_setup():
     """/health must not report "not set up" as an error or a zero."""
     assert Svc(ServiceConfig(name="m")).metrics.health_details() is None
 
 
-@pytest.mark.unit
 async def test_the_latency_window_is_bounded():
     """A long-running service dispatches without limit and /health reads this
     list on every request, so it cannot grow forever."""
@@ -133,7 +129,6 @@ async def test_the_latency_window_is_bounded():
 # ---- Library component tests ----------------------------------------------
 
 
-@pytest.mark.unit
 def test_performance_metrics_records_and_summarises():
     m = PerformanceMetrics()
     m.record_latency(12.5)
@@ -148,7 +143,6 @@ def test_performance_metrics_records_and_summarises():
     assert set(summary) >= {"latency", "throughput", "resources", "custom"}
 
 
-@pytest.mark.unit
 async def test_batch_processor_batches_by_size():
     """A full batch is handed to the processor as one call, not item by item."""
     seen = []
@@ -216,7 +210,6 @@ class TestPoolUsesCredentials:
 # ---- Health port binding tests --------------------------------------------
 
 
-@pytest.mark.unit
 @pytest.mark.nats_required
 async def test_starting_a_service_does_not_bind_the_default_port():
     """Verify service startup allocates an ephemeral health port under test fixtures."""
@@ -230,7 +223,6 @@ async def test_starting_a_service_does_not_bind_the_default_port():
         await svc.stop()
 
 
-@pytest.mark.unit
 def test_pool_is_connected_reflects_actual_connection_status():
     """Verify pool.is_connected checks conn.is_connected rather than conn.is_closed."""
     from unittest.mock import MagicMock

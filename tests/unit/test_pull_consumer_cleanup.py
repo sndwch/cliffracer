@@ -8,6 +8,8 @@ import pytest
 from cliffracer.core.container import BrokerConnectionState, Container
 from cliffracer.core.service_config import ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 class DummyService:
     def __init__(self) -> None:
@@ -15,7 +17,6 @@ class DummyService:
         self._running = True
 
 
-@pytest.mark.unit
 async def test_pull_loop_unsubscribes_on_cancel():
     """Cancelling a task running _pull_loop invokes sub.unsubscribe()."""
     svc = DummyService()
@@ -44,7 +45,6 @@ async def test_pull_loop_unsubscribes_on_cancel():
     pull_sub.unsubscribe.assert_awaited_once()
 
 
-@pytest.mark.unit
 async def test_pull_loop_skips_unsubscribe_when_closed_or_draining():
     """Pull loop does not invoke unsubscribe if broker connection is closed or draining."""
     svc = DummyService()
@@ -82,7 +82,6 @@ async def test_pull_loop_skips_unsubscribe_when_closed_or_draining():
     pull_sub2.unsubscribe.assert_not_called()
 
 
-@pytest.mark.unit
 async def test_pull_consumer_unsubscribes_during_service_stop():
     """Stopping a service cancels pull loops and unsubscribes all pull consumers."""
     from cliffracer.core.decorators import listener
@@ -138,7 +137,6 @@ async def test_pull_consumer_unsubscribes_during_service_stop():
         pull_sub.unsubscribe.assert_awaited_once()
 
 
-@pytest.mark.unit
 async def test_pull_loop_sleeps_on_zero_messages():
     """When _pull_once returns 0, _pull_loop sleeps 0.05s to prevent 100% CPU spin."""
     svc = DummyService()

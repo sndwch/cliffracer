@@ -5,12 +5,13 @@ from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig, listener, validated_listener
 
+pytestmark = pytest.mark.unit
+
 
 class Evt(BaseModel):
     id: str
 
 
-@pytest.mark.unit
 def test_local_listener_is_namespace_prefixed():
     class S(CliffracerService):
         @listener("orders.created", fanout=True)
@@ -23,7 +24,6 @@ def test_local_listener_is_namespace_prefixed():
     assert "orders.created" not in svc.container.registry.event_handlers
 
 
-@pytest.mark.unit
 def test_cross_namespace_listener_uses_wildcard():
     class S(CliffracerService):
         @listener("orders.created", cross_namespace=True, fanout=True)
@@ -35,7 +35,6 @@ def test_cross_namespace_listener_uses_wildcard():
     assert "*.orders.created" in svc.container.registry.event_handlers
 
 
-@pytest.mark.unit
 def test_validated_listener_cross_namespace():
     class S(CliffracerService):
         @validated_listener("orders.created", Evt, cross_namespace=True, fanout=True)
@@ -49,7 +48,6 @@ def test_validated_listener_cross_namespace():
     assert any(s is Evt for s, _ in svc.container.registry.event_schemas.values())
 
 
-@pytest.mark.unit
 def test_backcompat_no_namespace_local_listener_unchanged():
     class S(CliffracerService):
         @listener("orders.created", fanout=True)

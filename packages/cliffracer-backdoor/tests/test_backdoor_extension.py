@@ -14,8 +14,9 @@ from cliffracer_backdoor.cli import main, parse_endpoint
 
 from cliffracer import CliffracerService, ServiceConfig
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 def test_the_console_is_disabled_unless_asked_for():
     """A debug console evaluates arbitrary Python in the service process, so
     default-on would be a remote code execution endpoint rather than a feature.
@@ -23,7 +24,6 @@ def test_the_console_is_disabled_unless_asked_for():
     assert BackdoorConfig().enabled is False
 
 
-@pytest.mark.unit
 def test_config_comes_from_the_environment_under_its_own_prefix(monkeypatch):
     monkeypatch.setenv("CLIFFRACER_BACKDOOR_ENABLED", "true")
     monkeypatch.setenv("CLIFFRACER_BACKDOOR_PORT", "4321")
@@ -31,13 +31,11 @@ def test_config_comes_from_the_environment_under_its_own_prefix(monkeypatch):
     assert cfg.enabled is True and cfg.port == 4321
 
 
-@pytest.mark.unit
 def test_a_constructor_override_beats_the_environment(monkeypatch):
     monkeypatch.setenv("CLIFFRACER_BACKDOOR_PORT", "4321")
     assert BackdoorExtension(port=5555).config.port == 5555
 
 
-@pytest.mark.unit
 async def test_a_disabled_extension_binds_nothing_and_says_so():
     class Svc(CliffracerService):
         backdoor = BackdoorExtension()
@@ -52,7 +50,6 @@ async def test_a_disabled_extension_binds_nothing_and_says_so():
         await svc.backdoor.stop()
 
 
-@pytest.mark.unit
 async def test_an_enabled_extension_binds_and_reports_the_BOUND_port():
     """port=0 asks the OS for one, so health must report what was bound rather
     than what was configured -- reporting config.port would say 0 forever."""
@@ -75,7 +72,6 @@ async def test_an_enabled_extension_binds_and_reports_the_BOUND_port():
         assert svc.backdoor.health_details()["port"] is None, "stop() must clear it"
 
 
-@pytest.mark.unit
 def test_two_services_do_not_share_backdoor_state():
     """bind() is a shallow copy, so per-instance state is created in setup()."""
 
@@ -95,7 +91,6 @@ def test_two_services_do_not_share_backdoor_state():
 # --- CLI tests -------------------------------------------------------------
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     "text,expected",
     [("localhost:9999", ("localhost", 9999)), ("127.0.0.1:1", ("127.0.0.1", 1))],
@@ -104,20 +99,17 @@ def test_parse_endpoint_accepts_host_port(text, expected):
     assert parse_endpoint(text) == expected
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("text", ["localhost", ":9999", "localhost:notaport"])
 def test_parse_endpoint_refuses_anything_else(text):
     with pytest.raises(ValueError):
         parse_endpoint(text)
 
 
-@pytest.mark.unit
 def test_the_cli_exits_2_on_a_malformed_endpoint(capsys):
     assert main(["localhost"]) == 2
     assert "expected host:port" in capsys.readouterr().err
 
 
-@pytest.mark.unit
 def test_the_cli_exits_nonzero_when_nothing_is_listening(capsys):
     """A client that prints instructions and returns 0 is a false success.
 
@@ -145,7 +137,6 @@ def test_the_cli_exits_nonzero_when_nothing_is_listening(capsys):
 # --- the library classes, exported and constructed by nothing else ----------
 
 
-@pytest.mark.unit
 def test_the_inspectors_are_constructible():
     class Svc(CliffracerService):
         pass
@@ -155,7 +146,6 @@ def test_the_inspectors_are_constructible():
     assert NATSInspector(svc) is not None
 
 
-@pytest.mark.unit
 async def test_the_console_binds_a_literal_address_not_the_name_localhost():
     """CI run 1425 caught this and the local suite could not.
 
@@ -202,7 +192,6 @@ async def test_the_console_binds_a_literal_address_not_the_name_localhost():
         await svc.backdoor.stop()
 
 
-@pytest.mark.unit
 def test_the_password_comes_from_CLIFFRACER_BACKDOOR_PASSWORD(monkeypatch):
     """Password is read from CLIFFRACER_BACKDOOR_PASSWORD via settings prefix."""
     monkeypatch.setenv("CLIFFRACER_BACKDOOR_PASSWORD", "from-the-environment")
@@ -210,7 +199,6 @@ def test_the_password_comes_from_CLIFFRACER_BACKDOOR_PASSWORD(monkeypatch):
     assert BackdoorConfig().password == "from-the-environment"
 
 
-@pytest.mark.unit
 def test_CONTROL_the_old_unprefixed_name_is_ignored(monkeypatch):
     """Ensure unprefixed environment variable is ignored."""
     monkeypatch.delenv("CLIFFRACER_BACKDOOR_PASSWORD", raising=False)
@@ -226,7 +214,6 @@ def test_CONTROL_the_old_unprefixed_name_is_ignored(monkeypatch):
     )
 
 
-@pytest.mark.unit
 def test_a_constructor_password_still_wins_over_the_environment(monkeypatch):
     monkeypatch.setenv("CLIFFRACER_BACKDOOR_PASSWORD", "from-the-environment")
 

@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.health_listener import HealthListener
 
+pytestmark = pytest.mark.unit
+
 
 class Svc(CliffracerService):
     http = HttpExtension(port=0)
@@ -55,20 +57,17 @@ def _connect(svc) -> None:
     svc.nc = type("C", (), {"is_closed": False, "is_connected": True})()
 
 
-@pytest.mark.unit
 async def test_routes_are_registered_from_markers():
     client = await _setup(Svc(ServiceConfig(name="s")))
     assert client.get("/hello/bob").json() == {"hello": "bob"}
 
 
-@pytest.mark.unit
 async def test_health_and_info_are_served_on_the_app_too():
     client = await _setup(Svc(ServiceConfig(name="s")))
     assert client.get("/health").json()["service"] == "s"
     assert client.get("/info").json()["name"] == "s"
 
 
-@pytest.mark.unit
 async def test_health_answers_503_when_the_service_is_not_healthy():
     """Verify /health returns HTTP 503 when the service is stopped or unhealthy."""
     svc = Svc(ServiceConfig(name="s"))
@@ -80,7 +79,6 @@ async def test_health_answers_503_when_the_service_is_not_healthy():
     assert response.json()["status"] == "stopped"
 
 
-@pytest.mark.unit
 async def test_health_still_answers_200_when_the_service_is_healthy():
     """Verify /health returns HTTP 200 when the service is connected and healthy."""
     svc = Svc(ServiceConfig(name="s"))
@@ -93,7 +91,6 @@ async def test_health_still_answers_200_when_the_service_is_healthy():
     assert response.json()["status"] == "healthy"
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("connected, expected", [(True, 200), (False, 503)])
 async def test_the_two_health_endpoints_answer_a_service_identically(connected, expected):
     """Verify both health endpoints return matching status codes for identical service states."""
@@ -118,7 +115,6 @@ async def test_the_two_health_endpoints_answer_a_service_identically(connected, 
     assert route.json()["status"] == core_body["status"]
 
 
-@pytest.mark.unit
 async def test_websocket_handler_is_registered():
     client = await _setup(Svc(ServiceConfig(name="s")))
     with client.websocket_connect("/ws/echo") as ws:
@@ -126,7 +122,6 @@ async def test_websocket_handler_is_registered():
         assert ws.receive_text() == "HI"
 
 
-@pytest.mark.unit
 async def test_health_contribution_reports_websockets_under_the_extension_name():
     svc = Svc(ServiceConfig(name="s"))
     await _setup(svc)
@@ -134,7 +129,6 @@ async def test_health_contribution_reports_websockets_under_the_extension_name()
     assert health["http"] == {"websockets": {"active_connections": 0, "registered_handlers": 1}}
 
 
-@pytest.mark.unit
 async def test_two_services_do_not_share_websocket_state():
     """Verify per-instance state isolation across multiple service instances."""
     a, b = Svc(ServiceConfig(name="a")), Svc(ServiceConfig(name="b"))
@@ -149,7 +143,6 @@ async def test_two_services_do_not_share_websocket_state():
     assert len(b.http.active_connections) == 0
 
 
-@pytest.mark.unit
 async def test_the_extension_is_bound_per_instance_and_the_class_attribute_stays_unbound():
     a = Svc(ServiceConfig(name="a"))
     assert a.http is not Svc.http
@@ -157,7 +150,6 @@ async def test_the_extension_is_bound_per_instance_and_the_class_attribute_stays
     assert Svc.http.service is None
 
 
-@pytest.mark.unit
 async def test_the_extension_takes_the_core_listener_off_the_same_port():
     svc = Svc(ServiceConfig(name="s", health_port=0))
     await svc.container._setup_extensions()
@@ -166,7 +158,6 @@ async def test_the_extension_takes_the_core_listener_off_the_same_port():
     assert svc.health_listener._disabled is not None
 
 
-@pytest.mark.unit
 async def test_the_extension_takes_the_core_listener_off_a_DIFFERENT_port_too():
     """Verify core health listener is disabled even when HttpExtension uses a different port."""
 
@@ -185,7 +176,6 @@ async def test_the_extension_takes_the_core_listener_off_a_DIFFERENT_port_too():
         await svc.health_listener.stop()
 
 
-@pytest.mark.unit
 async def test_the_reason_names_the_port_the_extension_serves_on():
     """The disable reason is what an operator reads in the log to find /health."""
 
@@ -202,14 +192,12 @@ async def test_the_reason_names_the_port_the_extension_serves_on():
     assert "cliffracer_http" in reason
 
 
-@pytest.mark.unit
 async def test_info_details_lists_the_websocket_handlers():
     svc = Svc(ServiceConfig(name="s"))
     await _setup(svc)
     assert svc.get_service_info()["http"] == {"websocket_handlers": ["/ws/echo"]}
 
 
-@pytest.mark.unit
 async def test_broadcast_reaches_every_live_socket_and_drops_the_dead_ones():
     """`broadcast_to_websockets` is in the extension's interface and the plan
     ships no test for it. A send that raises must not stop the others, and the
@@ -237,7 +225,6 @@ async def test_broadcast_reaches_every_live_socket_and_drops_the_dead_ones():
     assert {live_a, live_b} <= svc.http.active_connections
 
 
-@pytest.mark.unit
 async def test_broadcast_survives_concurrent_client_disconnect():
     """Verify broadcast_to_websockets handles concurrent disconnects during iteration."""
 
@@ -280,7 +267,6 @@ async def test_broadcast_survives_concurrent_client_disconnect():
     assert {socks[0], socks[1], socks[3]} <= svc.http.active_connections
 
 
-@pytest.mark.unit
 async def test_broadcast_concurrent_disconnect_with_dead_socket():
     """When a client disconnects mid-broadcast and raises on send_text, the error
     is caught, the socket is dropped, and the remaining sockets still receive the message."""
@@ -320,7 +306,6 @@ async def test_broadcast_concurrent_disconnect_with_dead_socket():
     assert s0 in svc.http.active_connections
 
 
-@pytest.mark.unit
 def test_config_reads_its_own_env_prefix(monkeypatch):
     """Spec 3.5: each extension's settings carry its own prefix, so installing
     the extension is the only thing that adds them."""
@@ -353,7 +338,6 @@ class Decorated(CliffracerService):
         await websocket.send_text("1")
 
 
-@pytest.mark.unit
 async def test_routes_are_registered_before_start_not_at_first_request():
     """Registration happens at discovery, so a route exists before the server
     is ever started. Otherwise a service could pass its own health check and
@@ -365,7 +349,6 @@ async def test_routes_are_registered_before_start_not_at_first_request():
     assert "/typed/{n}" in paths
 
 
-@pytest.mark.unit
 async def test_an_undecorated_method_is_not_a_route():
     svc = Decorated(ServiceConfig(name="s"))
     await svc.container._setup_extensions()
@@ -374,7 +357,6 @@ async def test_an_undecorated_method_is_not_a_route():
     assert not any("not_a_route" in p for p in paths)
 
 
-@pytest.mark.unit
 async def test_decorator_kwargs_reach_fastapi():
     """`@http.get(path, **kw)` must forward kw to add_api_route; without this
     the decorator silently accepts options it then drops."""
@@ -385,7 +367,6 @@ async def test_decorator_kwargs_reach_fastapi():
     assert "ported" in route.tags
 
 
-@pytest.mark.unit
 async def test_the_built_in_health_and_info_routes_survive_user_routes():
     svc = Decorated(ServiceConfig(name="s"))
     await svc.container._setup_extensions()
@@ -394,7 +375,6 @@ async def test_the_built_in_health_and_info_routes_survive_user_routes():
     assert {"/health", "/info", "/typed/{n}"} <= paths
 
 
-@pytest.mark.unit
 async def test_a_service_without_the_extension_is_unaffected():
     """The counterpart of core's `test_a_service_without_the_http_mixin_is_
     unaffected`: declaring no extension must leave a service with no app and no
@@ -409,7 +389,6 @@ async def test_a_service_without_the_extension_is_unaffected():
     assert not hasattr(svc, "http")
 
 
-@pytest.mark.unit
 async def test_a_disconnecting_socket_is_removed_from_active_connections():
     """Ported from core's websocket connection-management case: the set must not
     grow without bound as clients come and go."""
@@ -423,7 +402,6 @@ async def test_a_disconnecting_socket_is_removed_from_active_connections():
     assert len(svc.http.active_connections) == 0, "the socket was not discarded on disconnect"
 
 
-@pytest.mark.unit
 async def test_a_caller_supplied_title_reaches_the_app():
     """Verify custom title passed to HttpExtension is applied to FastAPI instance."""
 
@@ -436,7 +414,6 @@ async def test_a_caller_supplied_title_reaches_the_app():
     assert svc.http.app.title == "Orders API v2"
 
 
-@pytest.mark.unit
 async def test_without_a_title_the_service_name_is_still_the_default():
     """Verify default title uses service name when no title is explicitly passed."""
 
@@ -449,7 +426,6 @@ async def test_without_a_title_the_service_name_is_still_the_default():
     assert svc.http.app.title == "orders API"
 
 
-@pytest.mark.unit
 async def test_other_fastapi_kwargs_still_pass_through():
     """Verify additional FastAPI kwargs pass through to the FastAPI instance."""
 
@@ -463,7 +439,6 @@ async def test_other_fastapi_kwargs_still_pass_through():
     assert svc.http.app.version == "9.9.9"
 
 
-@pytest.mark.unit
 async def test_two_services_do_not_share_a_default_title():
     """Verify multiple services sharing a class attribute do not overwrite each other's default title."""
 
@@ -482,7 +457,6 @@ async def test_two_services_do_not_share_a_default_title():
     )
 
 
-@pytest.mark.unit
 def test_the_shared_kwargs_cannot_be_written_to_at_all():
     """Verify _fastapi_kwargs is immutable to prevent cross-service configuration leaks."""
     extension = HttpExtension(port=0, description="x")

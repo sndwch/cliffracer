@@ -18,6 +18,8 @@ from cliffracer.core.typed_rpc import (
     unimportable_models,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class Order(BaseModel):
     sku: str
@@ -35,7 +37,6 @@ ORDER_REF = {
 }
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     ("tp", "ref"),
     [
@@ -72,7 +73,6 @@ def test_type_ref_round_trips(tp, ref):
     assert type_ref(python_type(ref)) == ref
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("tp", [object, list, dict, dict[int, str], set[int], bytes, complex])
 def test_unsupported_types_are_refused_by_name(tp):
     with pytest.raises(UnsupportedType) as e:
@@ -80,7 +80,6 @@ def test_unsupported_types_are_refused_by_name(tp):
     assert "unsupported" in str(e.value)
 
 
-@pytest.mark.unit
 def test_any_is_refused():
     from typing import Any
 
@@ -88,7 +87,6 @@ def test_any_is_refused():
         type_ref(Any)
 
 
-@pytest.mark.unit
 def test_a_private_model_module_is_named_by_the_generator_check_not_by_type_ref():
     """Verify private model modules are accepted by type_ref."""
 
@@ -109,7 +107,6 @@ def test_a_private_model_module_is_named_by_the_generator_check_not_by_type_ref(
     assert unimportable_models({"kind": "list", "item": ref}) == ["_private:Hidden"]
 
 
-@pytest.mark.unit
 def test_unimportable_models_looks_inside_containers():
     class Hidden(BaseModel):
         x: int
@@ -122,13 +119,11 @@ def test_unimportable_models_looks_inside_containers():
     assert unimportable_models(type_ref(Hidden | None)) == expected
 
 
-@pytest.mark.unit
 def test_CONTROL_an_importable_model_has_no_offenders():
     assert unimportable_models(type_ref(Order)) == []
     assert unimportable_models(type_ref(list[Order])) == []
 
 
-@pytest.mark.unit
 def test_CONTROL_scalars_table_is_the_five_json_scalars():
     assert set(SCALARS.values()) == {"str", "int", "float", "bool", "none"}
 
@@ -150,7 +145,6 @@ class _Svc:
         return "x"
 
 
-@pytest.mark.unit
 def test_spec_reads_params_defaults_and_return():
     spec = build_handler_spec("create", _Svc.create, owner=_Svc)
     assert [p.name for p in spec.params] == ["order", "note"]
@@ -160,14 +154,12 @@ def test_spec_reads_params_defaults_and_return():
     assert spec.takes_correlation_id is False
 
 
-@pytest.mark.unit
 def test_correlation_id_is_excluded_from_params_and_flagged():
     spec = build_handler_spec("with_cid", _Svc.with_cid, owner=_Svc)
     assert [p.name for p in spec.params] == ["sku"]
     assert spec.takes_correlation_id is True
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     ("method", "needle"),
     [("no_return", "return"), ("no_param", "sku"), ("bad_type", "bytes")],
@@ -179,7 +171,6 @@ def test_untyped_or_unsupported_handler_refuses_by_name(method, needle):
     assert f"_Svc.{method}" in msg and needle in msg
 
 
-@pytest.mark.unit
 def test_CONTROL_the_annotated_form_of_each_refusal_passes():
     class Ok:
         async def no_return(self, sku: str) -> str: ...
@@ -190,7 +181,6 @@ def test_CONTROL_the_annotated_form_of_each_refusal_passes():
         build_handler_spec(m, getattr(Ok, m), owner=Ok)
 
 
-@pytest.mark.unit
 def test_model_schema_hash_changes_with_field_modifications():
     """Verify model schema hash changes when model fields are modified."""
 
@@ -210,7 +200,6 @@ def test_model_schema_hash_changes_with_field_modifications():
     assert ref_a["schema_hash"] != ref_b["schema_hash"]
 
 
-@pytest.mark.unit
 def test_annotated_constraints_preserved_in_payload_model():
     """Verify Annotated/Field constraints are preserved in TypeRef and enforced in payload."""
 
@@ -230,7 +219,6 @@ def test_annotated_constraints_preserved_in_payload_model():
     assert validated.age == 21
 
 
-@pytest.mark.unit
 def test_positional_only_parameter_rejected():
     """Verify positional-only parameter (/) is rejected with UntypedHandler."""
 
@@ -244,7 +232,6 @@ def test_positional_only_parameter_rejected():
     assert "positional-only parameter 'a' is not allowed on an RPC handler" in msg
 
 
-@pytest.mark.unit
 def test_invalid_default_value_rejected():
     """Verify default value not matching annotation is rejected with UntypedHandler."""
 
@@ -258,7 +245,6 @@ def test_invalid_default_value_rejected():
     assert "default value None for parameter 'x' does not match annotation" in msg
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     "bad_name", ["model_config", "model_dump", "model_dump_json", "copy", "dict"]
 )
@@ -278,7 +264,6 @@ def test_reserved_basemodel_parameter_name_rejected(bad_name):
     assert f"parameter '{bad_name}' conflicts with BaseModel member" in str(exc.value)
 
 
-@pytest.mark.unit
 def test_staticmethod_with_self_parameter_is_not_skipped():
     """Verify staticmethod self parameter is treated as real parameter, not receiver."""
 
@@ -292,7 +277,6 @@ def test_staticmethod_with_self_parameter_is_not_skipped():
     assert spec.params[0].ref == {"kind": "scalar", "name": "int"}
 
 
-@pytest.mark.unit
 def test_correlation_id_annotation_validated():
     """Verify correlation_id annotation must be str or str | None if provided."""
 
@@ -326,7 +310,6 @@ class _GenericPage[T](BaseModel):
     items: list[T]
 
 
-@pytest.mark.unit
 def test_unimportable_models_rejects_non_identifier_qualnames():
     # Parametrized generic Page[int]
     page_ref = type_ref(_GenericPage[int])
@@ -349,7 +332,6 @@ def test_unimportable_models_rejects_non_identifier_qualnames():
     assert "<locals>" in unimp[0]
 
 
-@pytest.mark.unit
 def test_literal_over_enum_normalizes_to_scalar():
     # Enum member values are unwrapped to plain int/str scalars
     int_enum_ref = type_ref(Literal[_NumEnum.ONE, _NumEnum.TWO])
@@ -359,7 +341,6 @@ def test_literal_over_enum_normalizes_to_scalar():
     assert str_enum_ref == {"kind": "literal", "values": ["alpha", "beta"]}
 
 
-@pytest.mark.unit
 def test_empty_literal_is_refused():
     # Empty literal refused with UnsupportedType
     with pytest.raises(UnsupportedType) as exc_info:
@@ -368,7 +349,6 @@ def test_empty_literal_is_refused():
     assert "Literal cannot be empty" in str(exc_info.value)
 
 
-@pytest.mark.unit
 def test_positional_only_correlation_id_rejected():
     """Verify positional-only correlation_id is rejected with UntypedHandler."""
 
@@ -382,7 +362,6 @@ def test_positional_only_correlation_id_rejected():
     assert "positional-only parameter 'correlation_id' is not allowed on an RPC handler" in msg
 
 
-@pytest.mark.unit
 def test_handler_named_after_service_client_member_rejected():
     """Verify handlers named after ServiceClient members are rejected at startup."""
 
@@ -402,7 +381,6 @@ def test_handler_named_after_service_client_member_rejected():
     assert "conflicts with ServiceClient member" in str(exc.value)
 
 
-@pytest.mark.unit
 def test_handler_parameter_starting_with_underscore_rejected():
     """Verify parameters starting with underscore are rejected at startup."""
 
@@ -415,7 +393,6 @@ def test_handler_parameter_starting_with_underscore_rejected():
     assert "starting with '_' cannot be a valid RPC parameter" in str(exc.value)
 
 
-@pytest.mark.unit
 def test_handlerspec_preserves_multiline_docstring_fields():
     """Verify build_handler_spec populates doc, doc_summary, and doc_description."""
 
@@ -435,7 +412,6 @@ def test_handlerspec_preserves_multiline_docstring_fields():
     assert spec.description == spec.doc_description
 
 
-@pytest.mark.unit
 def test_collect_model_schemas_from_spec_and_nested_models():
     """Verify collect_model_schemas extracts all schemas from HandlerSpec."""
     from cliffracer.core.typed_rpc import collect_model_schemas

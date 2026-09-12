@@ -27,6 +27,8 @@ from cliffracer.client import (
 )
 from cliffracer.core.extension import Extension, RejectMessage, WorkerContext
 
+pytestmark = pytest.mark.unit
+
 
 class MockRpcMsg:
     def __init__(
@@ -65,7 +67,6 @@ def rpc_service() -> SampleRpcService:
     return svc
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_unknown_method_error_envelope(rpc_service: SampleRpcService) -> None:
     """Unknown method reply guarantees success: False, error, timestamp, correlation_id."""
@@ -87,7 +88,6 @@ async def test_rpc_unknown_method_error_envelope(rpc_service: SampleRpcService) 
     assert ts.tzinfo is not None
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_unknown_method_without_reply_drops_cleanly(
     rpc_service: SampleRpcService,
@@ -103,7 +103,6 @@ async def test_rpc_unknown_method_without_reply_drops_cleanly(
     assert msg.response_bytes is None
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_validation_failure_error_envelope(rpc_service: SampleRpcService) -> None:
     """Validation failure reply guarantees success: False, error, details, timestamp, correlation_id."""
@@ -125,7 +124,6 @@ async def test_rpc_validation_failure_error_envelope(rpc_service: SampleRpcServi
     assert reply["correlation_id"] == "corr-val-1"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_payload_decode_failure_error_envelope(rpc_service: SampleRpcService) -> None:
     """Invalid payload bytes guarantee success: False with validation failed error envelope."""
@@ -145,7 +143,6 @@ async def test_rpc_payload_decode_failure_error_envelope(rpc_service: SampleRpcS
     assert reply["correlation_id"] == "corr-decode-1"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_reject_message_error_envelope() -> None:
     """RejectMessage raised by extension guarantees success: False in reply."""
@@ -180,7 +177,6 @@ async def test_rpc_reject_message_error_envelope() -> None:
     assert reply["correlation_id"] == "corr-block-1"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_unhandled_exception_error_envelope(rpc_service: SampleRpcService) -> None:
     """Unhandled exception in handler guarantees success: False with traceback."""
@@ -216,7 +212,6 @@ async def test_rpc_unhandled_exception_error_envelope(rpc_service: SampleRpcServ
     assert reply_opt["correlation_id"] == "corr-crash-opt"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_describe_request_refusal_error_envelope() -> None:
     """RejectMessage in describe request guarantees success: False."""
@@ -247,7 +242,6 @@ async def test_describe_request_refusal_error_envelope() -> None:
     assert reply["correlation_id"] == "corr-desc-1"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_describe_request_exception_error_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unhandled exception in describe request guarantees success: False."""
@@ -275,7 +269,6 @@ async def test_describe_request_exception_error_envelope(monkeypatch: pytest.Mon
     assert reply["correlation_id"] == "corr-desc-err"
 
 
-@pytest.mark.unit
 def test_client_raise_for_error_interop() -> None:
     """ServiceClient correctly maps error responses with success: False to typed exceptions."""
     client = ServiceClient(service="math_svc")
@@ -314,7 +307,6 @@ def test_client_raise_for_error_interop() -> None:
     assert "internal crash" in str(exc_server.value)
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_client_enforces_success_key_present() -> None:
     """ServiceClient raises protocol ClientError when reply completely lacks success key."""

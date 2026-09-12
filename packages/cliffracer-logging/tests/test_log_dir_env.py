@@ -12,6 +12,8 @@ import pytest
 from cliffracer_logging import LoggingConfig
 from loguru import logger
 
+pytestmark = pytest.mark.unit
+
 
 def _configure_into(tmp_path, monkeypatch, **env):
     """Run configure() with a clean logger and a controlled environment."""
@@ -27,7 +29,6 @@ def _configure_into(tmp_path, monkeypatch, **env):
             logger.remove(hid)
 
 
-@pytest.mark.unit
 def test_CLIFFRACER_LOG_DIR_chooses_the_directory(tmp_path, monkeypatch):
     target = tmp_path / "chosen"
     target.mkdir()
@@ -39,7 +40,6 @@ def test_CLIFFRACER_LOG_DIR_chooses_the_directory(tmp_path, monkeypatch):
     assert json.loads(written[-1])["record"]["message"] == "a message"
 
 
-@pytest.mark.unit
 def test_CONTROL_the_old_unprefixed_name_is_ignored(tmp_path, monkeypatch):
     """Set the OLD name and nothing else: it must not choose the directory.
 
@@ -56,7 +56,6 @@ def test_CONTROL_the_old_unprefixed_name_is_ignored(tmp_path, monkeypatch):
     assert (tmp_path / "logs" / "probe.log").exists(), "the ./logs default was not used"
 
 
-@pytest.mark.unit
 def test_CONTROL_with_neither_set_the_default_is_logs(tmp_path, monkeypatch):
     monkeypatch.delenv("CLIFFRACER_LOG_DIR", raising=False)
     monkeypatch.delenv("LOG_DIR", raising=False)

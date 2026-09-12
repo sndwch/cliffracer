@@ -11,6 +11,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.extension import Extension, entrypoint
 
+pytestmark = pytest.mark.unit
+
 
 class DeepNode:
     """Arbitrary custom object nested inside data structures."""
@@ -68,7 +70,6 @@ class EntrypointStressExtension(Extension):
         return {"stress_gate": _binder}
 
 
-@pytest.mark.unit
 def test_multithreaded_extension_isolation_stress() -> None:
     """Stress-test extension state isolation across 25 concurrent worker threads."""
     spec = ComplexStressExtension(seed=100)
@@ -172,7 +173,6 @@ async def test_asyncio_concurrent_extension_isolation_stress() -> None:
     assert spec.root_node.log == []
 
 
-@pytest.mark.unit
 def test_deeply_nested_recursive_extension_isolation() -> None:
     """Verify state isolation across 4 levels of nested extensions."""
     e4 = RecursiveExtension(depth=4, metadata={"vals": [400]})
@@ -216,7 +216,6 @@ def test_deeply_nested_recursive_extension_isolation() -> None:
     assert root.metadata["vals"] == [100]
 
 
-@pytest.mark.unit
 def test_entrypoint_resolution_across_twenty_plus_concurrent_services() -> None:
     """Verify @entrypoint resolution and isolation across 25 concurrent CliffracerService instances."""
     gate_spec = EntrypointStressExtension()
@@ -270,7 +269,6 @@ def test_entrypoint_resolution_across_twenty_plus_concurrent_services() -> None:
     assert gate_spec.call_counts == {}
 
 
-@pytest.mark.unit
 def test_freeze_immutability_enforcement() -> None:
     """Verify specification immutability under freeze() rejects mutations."""
     spec = ComplexStressExtension(seed=1)
@@ -303,7 +301,6 @@ def test_freeze_immutability_enforcement() -> None:
     assert bound.seed == 777
 
 
-@pytest.mark.unit
 def test_freeze_immutability_bypass_vectors() -> None:
     """Adversarial checks verifying all bypass vectors in freeze() are blocked."""
     spec = ComplexStressExtension(seed=1)

@@ -8,6 +8,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig, rpc
 from cliffracer.core.extension import Extension, RejectMessage
 
+pytestmark = pytest.mark.unit
+
 
 class Rejecter(Extension):
     async def setup(self, ctx):
@@ -72,7 +74,6 @@ async def _dispatch(ext_cls, attr):
     return svc, msg, Svc.reached
 
 
-@pytest.mark.unit
 async def test_reject_message_skips_the_handler_and_still_runs_result_and_teardown():
     svc, msg, reached = await _dispatch(Rejecter, "rejecter")
     assert reached is False, "the handler must not run"
@@ -82,7 +83,6 @@ async def test_reject_message_skips_the_handler_and_still_runs_result_and_teardo
     assert "nope" in body, body
 
 
-@pytest.mark.unit
 async def test_a_plain_exception_from_worker_setup_still_does_not():
     """CONTROL. This is the property RejectMessage is the single exception to."""
     svc, msg, reached = await _dispatch(Boomer, "boomer")
@@ -106,7 +106,6 @@ class GateBoomer(Extension):
         self.seen.append("teardown")
 
 
-@pytest.mark.unit
 async def test_gate_extension_fails_closed_on_unexpected_exception():
     svc, msg, reached = await _dispatch(GateBoomer, "gate_boomer")
     assert reached is False, "handler must not run when gate hook raises"

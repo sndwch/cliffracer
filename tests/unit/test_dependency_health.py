@@ -12,6 +12,8 @@ from cliffracer.core.exceptions import ConfigurationError
 from cliffracer.core.service import CliffracerService
 from cliffracer.core.service_config import ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 class _FakeNats:
     """Stands in for nats-py's client. Only `is_closed` is read here."""
@@ -391,7 +393,6 @@ def test_a_dependency_is_immutable_once_declared():
 # --- one name, one probe ---------------------------------------------------
 
 
-@pytest.mark.unit
 def test_one_name_on_two_methods_is_refused_at_registration():
     """Verify duplicate dependency names on distinct methods raise ConfigurationError."""
 
@@ -412,7 +413,6 @@ def test_one_name_on_two_methods_is_refused_at_registration():
     assert "Api._check_db" in message and "Api._check_db_replica" in message, message
 
 
-@pytest.mark.unit
 async def test_a_subclass_may_override_a_base_class_dependency():
     """Verify subclass dependency overrides base class dependency."""
     ran = []
@@ -434,7 +434,6 @@ async def test_a_subclass_may_override_a_base_class_dependency():
     assert ran == ["subclass"], f"the base's probe ran instead: {ran}"
 
 
-@pytest.mark.unit
 def test_CONTROL_one_name_on_one_method_still_registers():
     """A rule that refused everything would satisfy the test above and take
     every declared dependency in the framework with it."""
@@ -452,7 +451,6 @@ def test_CONTROL_one_name_on_one_method_still_registers():
     assert sorted(dep.name for dep in svc._dependencies) == ["postgres", "s3"]
 
 
-@pytest.mark.unit
 def test_CONTROL_add_dependency_still_replaces_by_name():
     """The runtime path is documented to REPLACE, and this change does not
     touch it: the refusal is about two declarations in a class body, where
@@ -463,7 +461,6 @@ def test_CONTROL_add_dependency_still_replaces_by_name():
     assert [dep.name for dep in svc._dependencies] == ["metrics"]
 
 
-@pytest.mark.unit
 def test_two_mixins_claiming_one_name_are_refused():
     """Verify sibling classes defining identical dependency names raise ConfigurationError."""
 

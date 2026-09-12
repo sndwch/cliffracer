@@ -124,6 +124,8 @@ markers = [
     "integration: Integration tests that may require external services",
     "nats_required: Tests that require a running NATS server",
     "slow: Tests that take a long time to run",
+    "benchmark: Performance benchmarks; not a correctness gate",
+    "repo: Guards over the repository itself (docs, packaging, CI, the suite)",
 ]
 asyncio_mode = "auto"
 # Global per-test timeout ceiling to prevent suite hangs on blocked calls.

@@ -21,6 +21,8 @@ from cliffracer.core.service_config import ServiceConfig
 from cliffracer.core.typed_events import build_event_spec
 from cliffracer.core.typed_rpc import UntypedHandler
 
+pytestmark = pytest.mark.unit
+
 
 class UserRegistered(BaseModel):
     user_id: str
@@ -31,7 +33,6 @@ class DummyOwner:
     pass
 
 
-@pytest.mark.unit
 def test_build_event_spec_single_model_parameter() -> None:
     async def on_user_registered(self: Any, event: UserRegistered) -> None:
         """Handle user registered."""
@@ -46,7 +47,6 @@ def test_build_event_spec_single_model_parameter() -> None:
     assert spec.doc_summary == "Handle user registered."
 
 
-@pytest.mark.unit
 def test_build_event_spec_synthesizes_forbid_model() -> None:
     async def on_payment(
         self: Any,
@@ -66,7 +66,6 @@ def test_build_event_spec_synthesizes_forbid_model() -> None:
     assert spec.payload_model.model_config.get("extra") == "forbid"
 
 
-@pytest.mark.unit
 def test_build_event_spec_zero_domain_parameters() -> None:
     async def on_heartbeat(self: Any, subject: str) -> None:
         pass
@@ -78,7 +77,6 @@ def test_build_event_spec_zero_domain_parameters() -> None:
     assert len(spec.payload_model.model_fields) == 0
 
 
-@pytest.mark.unit
 def test_build_event_spec_rejects_unannotated_parameter() -> None:
     async def bad_handler(self: Any, user_id) -> None:  # type: ignore[no-untyped-def]
         pass
@@ -87,7 +85,6 @@ def test_build_event_spec_rejects_unannotated_parameter() -> None:
         build_event_spec("bad_handler", bad_handler, owner=DummyOwner)
 
 
-@pytest.mark.unit
 def test_build_event_spec_rejects_var_keyword() -> None:
     async def var_kw_handler(self: Any, **kwargs: Any) -> None:
         pass
@@ -96,7 +93,6 @@ def test_build_event_spec_rejects_var_keyword() -> None:
         build_event_spec("var_kw_handler", var_kw_handler, owner=DummyOwner)
 
 
-@pytest.mark.unit
 def test_build_event_spec_rejects_var_data() -> None:
     async def var_data_handler(self: Any, **data: Any) -> None:
         pass
@@ -105,7 +101,6 @@ def test_build_event_spec_rejects_var_data() -> None:
         build_event_spec("var_data_handler", var_data_handler, owner=DummyOwner)
 
 
-@pytest.mark.unit
 def test_build_event_spec_rejects_var_positional() -> None:
     async def var_args_handler(self: Any, *args: Any) -> None:
         pass
@@ -114,7 +109,6 @@ def test_build_event_spec_rejects_var_positional() -> None:
         build_event_spec("var_args_handler", var_args_handler, owner=DummyOwner)
 
 
-@pytest.mark.unit
 def test_build_event_spec_rejects_positional_only() -> None:
     async def pos_only_handler(self: Any, user_id: str, /) -> None:
         pass
@@ -123,7 +117,6 @@ def test_build_event_spec_rejects_positional_only() -> None:
         build_event_spec("pos_only_handler", pos_only_handler, owner=DummyOwner)
 
 
-@pytest.mark.unit
 def test_build_event_spec_rejects_bare_containers() -> None:
     async def bare_dict_handler(self: Any, payload: dict) -> None:
         pass
@@ -138,7 +131,6 @@ def test_build_event_spec_rejects_bare_containers() -> None:
         build_event_spec("bare_any_handler", bare_any_handler, owner=DummyOwner)
 
 
-@pytest.mark.unit
 def test_build_event_spec_rejects_invalid_subject_annotation() -> None:
     async def bad_subject_handler(self: Any, subject: int) -> None:
         pass
@@ -147,7 +139,6 @@ def test_build_event_spec_rejects_invalid_subject_annotation() -> None:
         build_event_spec("bad_subject_handler", bad_subject_handler, owner=DummyOwner)
 
 
-@pytest.mark.unit
 def test_build_event_spec_rejects_invalid_correlation_id_annotation() -> None:
     async def bad_cid_handler(self: Any, correlation_id: int) -> None:
         pass
@@ -158,7 +149,6 @@ def test_build_event_spec_rejects_invalid_correlation_id_annotation() -> None:
         build_event_spec("bad_cid_handler", bad_cid_handler, owner=DummyOwner)
 
 
-@pytest.mark.unit
 def test_build_event_spec_rejects_private_parameter_name() -> None:
     async def priv_handler(self: Any, _secret: str) -> None:
         pass
@@ -167,7 +157,6 @@ def test_build_event_spec_rejects_private_parameter_name() -> None:
         build_event_spec("priv_handler", priv_handler, owner=DummyOwner)
 
 
-@pytest.mark.unit
 def test_build_event_spec_rejects_mismatched_default() -> None:
     async def bad_default(self: Any, count: int = "not_an_int") -> None:  # type: ignore[assignment]
         pass
@@ -178,7 +167,6 @@ def test_build_event_spec_rejects_mismatched_default() -> None:
         build_event_spec("bad_default", bad_default, owner=DummyOwner)
 
 
-@pytest.mark.unit
 def test_discovery_inspects_listener_and_broadcast() -> None:
     class SampleService(CliffracerService):
         @listener("events.user", fanout=True)
@@ -199,7 +187,6 @@ def test_discovery_inspects_listener_and_broadcast() -> None:
     assert "broadcast.alert" in svc.container.registry.event_specs_by_subject
 
 
-@pytest.mark.unit
 def test_discovery_fails_fast_on_untyped_listener() -> None:
     class UntypedService(CliffracerService):
         @listener("events.raw", fanout=True)
@@ -212,7 +199,6 @@ def test_discovery_fails_fast_on_untyped_listener() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 def test_discovery_fails_fast_on_untyped_broadcast() -> None:
     class UntypedBroadcastService(CliffracerService):
         @broadcast("alerts.raw")
@@ -225,7 +211,6 @@ def test_discovery_fails_fast_on_untyped_broadcast() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_event_dispatcher_valid_single_model_dispatch() -> None:
     received: list[UserRegistered] = []
@@ -252,7 +237,6 @@ async def test_event_dispatcher_valid_single_model_dispatch() -> None:
     assert received[0].email == "user@example.com"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_event_dispatcher_valid_synthesized_model_dispatch() -> None:
     received_orders: list[tuple[str, float, str]] = []
@@ -278,7 +262,6 @@ async def test_event_dispatcher_valid_synthesized_model_dispatch() -> None:
     assert received_orders[0] == ("ord-99", 49.99, "orders.created")
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_event_dispatcher_invalid_payload_routes_to_dlq_and_safe_term() -> None:
     handled = False

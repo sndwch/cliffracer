@@ -20,6 +20,8 @@ from cliffracer.core.decorators import validated_listener
 from cliffracer.core.extension import Extension, RejectMessage, WorkerContext
 from cliffracer.testing import ServiceTestHarness
 
+pytestmark = pytest.mark.unit
+
 # ==============================================================================
 # TEST FIXTURES & EXTENSIONS
 # ==============================================================================
@@ -119,7 +121,6 @@ class MockBankingService(CliffracerService):
 # ==============================================================================
 
 
-@pytest.mark.unit
 async def test_harness_publish_alias_for_emit_event() -> None:
     """ServiceTestHarness implements publish as an alias for emit_event."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -137,7 +138,6 @@ async def test_harness_publish_alias_for_emit_event() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 async def test_harness_rpc_successful_execution_and_envelope() -> None:
     """RPC invocation through harness returns decoded TestResponse with result and headers."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -157,7 +157,6 @@ async def test_harness_rpc_successful_execution_and_envelope() -> None:
         assert resp.data["correlation_id"] == "test-corr-100"
 
 
-@pytest.mark.unit
 async def test_harness_rpc_application_exception_envelope() -> None:
     """Application exceptions in RPC handlers are caught and packaged in error response envelope."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -192,7 +191,6 @@ async def test_harness_rpc_application_exception_envelope() -> None:
         assert "traceback" in resp_fatal_opt.data
 
 
-@pytest.mark.unit
 async def test_harness_rpc_schema_validation_error_envelope() -> None:
     """Type mismatches in RPC parameters return schema validation failure envelope."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -204,7 +202,6 @@ async def test_harness_rpc_schema_validation_error_envelope() -> None:
         assert "details" in resp.data
 
 
-@pytest.mark.unit
 async def test_harness_rpc_unknown_method_envelope() -> None:
     """Calling an undeclared RPC method returns Unknown method error response."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -218,7 +215,6 @@ async def test_harness_rpc_unknown_method_envelope() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 async def test_harness_emit_event_delivers_to_listener() -> None:
     """Event emitted through harness routes to @listener and returns DispatchOutcome.OK."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -234,7 +230,6 @@ async def test_harness_emit_event_delivers_to_listener() -> None:
         assert svc.received_events[0]["user"] == "alice"
 
 
-@pytest.mark.unit
 async def test_harness_emit_event_unrouted_subject_returns_ok() -> None:
     """Emitting to an unregistered subject completes with DispatchOutcome.OK and 0 invocations."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -244,7 +239,6 @@ async def test_harness_emit_event_unrouted_subject_returns_ok() -> None:
         assert len(svc.received_events) == 0
 
 
-@pytest.mark.unit
 async def test_harness_emit_event_validated_listener_success_and_invalid() -> None:
     """Validated listener validates schema; invalid payload returns DispatchOutcome.INVALID."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -274,7 +268,6 @@ async def test_harness_emit_event_validated_listener_success_and_invalid() -> No
 # ==============================================================================
 
 
-@pytest.mark.unit
 async def test_harness_rpc_executes_extension_lifecycle_hooks() -> None:
     """Harness executes worker_setup, handler, worker_result, and worker_teardown in sequence."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -287,7 +280,6 @@ async def test_harness_rpc_executes_extension_lifecycle_hooks() -> None:
         assert ext.hook_log == ["setup:rpc", "result:rpc:ok", "teardown:rpc"]
 
 
-@pytest.mark.unit
 async def test_harness_rpc_extension_reject_message_returns_refused_envelope() -> None:
     """Extension raising RejectMessage in worker_setup skips handler and answers with error."""
 
@@ -304,7 +296,6 @@ async def test_harness_rpc_extension_reject_message_returns_refused_envelope() -
         assert "refused: Access denied: Invalid credentials" in (resp.error or "")
 
 
-@pytest.mark.unit
 async def test_harness_rpc_extension_non_rejection_exception_is_isolated() -> None:
     """Generic exception in extension worker_setup is isolated (logged) and handler runs."""
 
@@ -326,7 +317,6 @@ async def test_harness_rpc_extension_non_rejection_exception_is_isolated() -> No
 # ==============================================================================
 
 
-@pytest.mark.unit
 async def test_harness_describe_endpoint() -> None:
     """ServiceTestHarness queries describe metadata without network dialing."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -337,7 +327,6 @@ async def test_harness_describe_endpoint() -> None:
         assert "fail_unhandled" in method_names
 
 
-@pytest.mark.unit
 async def test_harness_teardown_drains_active_tasks() -> None:
     """ServiceTestHarness teardown awaits and drains in-flight supervised tasks."""
     async with ServiceTestHarness(MockBankingService) as harness:
@@ -351,7 +340,6 @@ async def test_harness_teardown_drains_active_tasks() -> None:
     assert len(harness.container.lifecycle.active_tasks) == 0
 
 
-@pytest.mark.unit
 async def test_harness_mock_nats_client_attributes() -> None:
     """Harness binds mock NATS client with is_connected=True, no real sockets."""
     async with ServiceTestHarness(MockBankingService) as harness:

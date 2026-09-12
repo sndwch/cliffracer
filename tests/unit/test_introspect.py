@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from cliffracer import CliffracerService, rpc
 from cliffracer.introspect import Description, canonical, describe
 
+pytestmark = pytest.mark.unit
+
 
 class Order(BaseModel):
     sku: str
@@ -40,7 +42,6 @@ class Orders(CliffracerService):
         return x
 
 
-@pytest.mark.unit
 def test_describe_lists_rpc_methods_sorted_with_params_defaults_and_return():
     d = describe(Orders, service="orders", version="1.0.0")
     assert d.service == "orders" and d.version == "1.0.0"
@@ -55,7 +56,6 @@ def test_describe_lists_rpc_methods_sorted_with_params_defaults_and_return():
     assert [p.name for p in d.methods[0].params] == []  # correlation_id excluded
 
 
-@pytest.mark.unit
 def test_hashes_are_stable_and_change_with_the_signature():
     a = describe(Orders, service="orders", version="1.0.0")
     b = describe(Orders, service="orders", version="9.9.9")
@@ -72,7 +72,6 @@ def test_hashes_are_stable_and_change_with_the_signature():
     assert c.description_hash != a.description_hash
 
 
-@pytest.mark.unit
 def test_round_trip_through_canonical_json_is_byte_identical():
     d = describe(Orders, service="orders", version="1.0.0")
     text = canonical(d.to_dict())
@@ -80,7 +79,6 @@ def test_round_trip_through_canonical_json_is_byte_identical():
     assert canonical(again.to_dict()) == text
 
 
-@pytest.mark.unit
 def test_a_class_with_an_untyped_handler_refuses_like_discovery():
     from cliffracer.core.typed_rpc import UntypedHandler
 
@@ -93,7 +91,6 @@ def test_a_class_with_an_untyped_handler_refuses_like_discovery():
         describe(Bad, service="bad", version="0")
 
 
-@pytest.mark.unit
 def test_describe_includes_components_and_method_docstrings():
     d = describe(Orders, service="orders", version="1.0.0")
     assert ORDER_SCHEMA_HASH in d.components

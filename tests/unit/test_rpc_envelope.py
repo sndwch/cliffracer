@@ -7,6 +7,8 @@ from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
 
+pytestmark = pytest.mark.unit
+
 
 class CreateUser(BaseModel):
     username: str
@@ -50,7 +52,6 @@ async def svc():
     return service
 
 
-@pytest.mark.unit
 async def test_a_model_parameter_is_validated_and_a_model_return_is_encoded(svc):
     msg = _MockMsg(
         "envelope_svc.rpc.create_user", {"request": {"username": "alice", "email": "a@b"}}
@@ -60,7 +61,6 @@ async def test_a_model_parameter_is_validated_and_a_model_return_is_encoded(svc)
     assert msg.response["result"] == {"user_id": "user_alice"}
 
 
-@pytest.mark.unit
 async def test_validation_failure_envelope(svc):
     msg = _MockMsg("envelope_svc.rpc.create_user", {"request": {"username": "alice"}})
     await svc.container._handle_rpc_request(msg)
@@ -70,7 +70,6 @@ async def test_validation_failure_envelope(svc):
     assert "traceback" not in msg.response
 
 
-@pytest.mark.unit
 async def test_an_extra_key_is_a_validation_failure(svc):
     msg = _MockMsg("envelope_svc.rpc.plain", {"value": "hello", "bogus": 1})
     await svc.container._handle_rpc_request(msg)
@@ -78,7 +77,6 @@ async def test_an_extra_key_is_a_validation_failure(svc):
     assert any("bogus" in str(e.get("loc")) for e in msg.response["details"])
 
 
-@pytest.mark.unit
 async def test_correlation_id_in_the_body_is_not_an_extra_key(svc):
     """Every caller puts correlation_id in the body today (call_rpc). It must keep working."""
     msg = _MockMsg("envelope_svc.rpc.plain", {"value": "hello", "correlation_id": "abc"})
@@ -86,14 +84,12 @@ async def test_correlation_id_in_the_body_is_not_an_extra_key(svc):
     assert msg.response["success"] is True and msg.response["result"] == "hello"
 
 
-@pytest.mark.unit
 async def test_correlation_id_is_injected_only_when_declared(svc):
     msg = _MockMsg("envelope_svc.rpc.with_cid", {"value": "v", "correlation_id": "cid-1"})
     await svc.container._handle_rpc_request(msg)
     assert msg.response["result"].startswith("v:")
 
 
-@pytest.mark.unit
 async def test_every_success_reply_carries_success_true(svc):
     """One envelope. The old plain shape (no `success` key) is gone."""
     msg = _MockMsg("envelope_svc.rpc.plain", {"value": "hello"})
@@ -103,7 +99,6 @@ async def test_every_success_reply_carries_success_true(svc):
     assert "correlation_id" in msg.response
 
 
-@pytest.mark.unit
 async def test_a_flat_payload_for_a_model_parameter_fails_loudly(svc):
     """The upgrade hazard, made audible.
 
@@ -125,7 +120,6 @@ async def test_a_flat_payload_for_a_model_parameter_fails_loudly(svc):
     assert "missing" in types and "extra_forbidden" in types, msg.response["details"]
 
 
-@pytest.mark.unit
 async def test_the_handler_never_runs_on_invalid_input(svc):
     ran = []
     original = svc.container.registry.rpc_handlers["create_user"]
@@ -141,7 +135,6 @@ async def test_the_handler_never_runs_on_invalid_input(svc):
     assert ran == []
 
 
-@pytest.mark.unit
 async def test_a_wrong_typed_return_is_a_server_error_not_a_lie(svc):
     """A handler returning something its annotation does not describe answers an error."""
 
@@ -155,7 +148,6 @@ async def test_a_wrong_typed_return_is_a_server_error_not_a_lie(svc):
     assert "error" in msg.response
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("bad_payload", [42, "hello", [1, 2], None])
 async def test_non_dict_payload_returns_validation_error_envelope(svc, bad_payload):
     msg = _MockMsg("envelope_svc.rpc.plain", bad_payload)
@@ -166,7 +158,6 @@ async def test_non_dict_payload_returns_validation_error_envelope(svc, bad_paylo
     assert "traceback" not in msg.response
 
 
-@pytest.mark.unit
 async def test_non_json_bytes_returns_validation_error_envelope_and_responds(svc):
     """Verify raw unparseable or non-UTF8 bytes respond with validation error envelope."""
     msg = _MockMsg("envelope_svc.rpc.plain", None)
@@ -175,7 +166,6 @@ async def test_non_json_bytes_returns_validation_error_envelope_and_responds(svc
     assert "details" in msg.response
 
 
-@pytest.mark.unit
 async def test_bare_exception_fallback_returns_class_name(svc):
     """Verify that bare exceptions without message fallback to exception class name."""
 
@@ -200,7 +190,6 @@ async def test_bare_exception_fallback_returns_class_name(svc):
     assert "traceback" in opt_msg.response
 
 
-@pytest.mark.unit
 async def test_bare_exception_fallback_in_describe(svc, monkeypatch):
     """Verify describe error handler falls back to class name when exception has no message."""
     import cliffracer.introspect

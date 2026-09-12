@@ -13,6 +13,8 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
 
+pytestmark = pytest.mark.unit
+
 
 class MockRpcMsg:
     """Mock NATS message for driving RPC dispatch."""
@@ -54,7 +56,6 @@ class CrashyService(CliffracerService):
         return a // b
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_traceback_sanitized_by_default() -> None:
     """By default, expose_internal_errors is False: wire response contains no traceback."""
@@ -82,7 +83,6 @@ async def test_rpc_traceback_sanitized_by_default() -> None:
     assert "timestamp" in reply
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_custom_exception_sanitized_by_default() -> None:
     """Custom exceptions are also sanitized to correlation_id message without traceback."""
@@ -108,7 +108,6 @@ async def test_rpc_custom_exception_sanitized_by_default() -> None:
     assert reply["correlation_id"] == "corr-custom-999"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_zero_division_sanitized_by_default() -> None:
     """ZeroDivisionError is sanitized when expose_internal_errors is False."""
@@ -133,7 +132,6 @@ async def test_rpc_zero_division_sanitized_by_default() -> None:
     assert reply["correlation_id"] == "corr-div-0"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_traceback_included_when_opted_in() -> None:
     """When expose_internal_errors=True, wire response includes traceback and original error."""
@@ -162,7 +160,6 @@ async def test_rpc_traceback_included_when_opted_in() -> None:
     assert "timestamp" in reply
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_logs_full_traceback_server_side(monkeypatch: pytest.MonkeyPatch) -> None:
     """Server-side logger logs the exception and traceback regardless of wire setting."""

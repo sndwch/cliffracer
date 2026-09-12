@@ -5,8 +5,9 @@ from pydantic import ValidationError
 
 from cliffracer import ServiceConfig
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 @pytest.mark.parametrize(
     "valid_name", ["orders", "order_service", "orders-eu", "orders.eu", "svc1"]
 )
@@ -15,7 +16,6 @@ def test_valid_service_name_accepted(valid_name):
     assert cfg.name == valid_name
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     ("bad_name", "expected_err"),
     [

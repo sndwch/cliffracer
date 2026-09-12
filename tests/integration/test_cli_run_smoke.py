@@ -11,6 +11,7 @@ from tests.conftest import broker_url
 
 pytestmark = [pytest.mark.integration, pytest.mark.nats_required, pytest.mark.slow]
 
+
 MOD = "tests.unit.cli_fixtures.sample_services"
 
 # Pass broker URL explicitly via --nats-url so the subprocess connects to the test broker.

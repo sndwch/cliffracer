@@ -21,6 +21,8 @@ from cliffracer import (
 from cliffracer.core.container import DispatchOutcome
 from cliffracer.core.correlation import CorrelationContext
 
+pytestmark = pytest.mark.unit
+
 
 class OrderCreated(BaseModel):
     order_id: str
@@ -41,7 +43,6 @@ class MockMsg:
         self.reply = reply
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_publish_event_emits_canonical_envelope_by_default() -> None:
     """publish_event wraps domain kwargs into canonical event wire envelope by default."""
@@ -80,7 +81,6 @@ async def test_publish_event_emits_canonical_envelope_by_default() -> None:
         CorrelationContext.clear()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_publish_event_envelope_false_emits_flat_payload() -> None:
     """publish_event with envelope=False emits a flat payload for legacy compatibility."""
@@ -101,7 +101,6 @@ async def test_publish_event_envelope_false_emits_flat_payload() -> None:
     assert payload["correlation_id"] == "cid-flat"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_publish_event_with_prepackaged_data() -> None:
     """publish_event with data={...} wraps without double-nesting."""
@@ -123,7 +122,6 @@ async def test_publish_event_with_prepackaged_data() -> None:
     assert envelope["correlation_id"] == "cid-prepack"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_validated_listener_unwraps_canonical_event_envelope() -> None:
     """@validated_listener unwraps data['data'] before schema validation."""
@@ -159,7 +157,6 @@ async def test_validated_listener_unwraps_canonical_event_envelope() -> None:
     assert cid == "corr-evt-001"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_validated_listener_supports_legacy_flat_payload() -> None:
     """@validated_listener maintains backward compatibility for legacy flat payloads."""
@@ -185,7 +182,6 @@ async def test_validated_listener_supports_legacy_flat_payload() -> None:
     assert received[0].order_id == "ord-flat-1"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_unvalidated_listener_unwraps_canonical_envelope_kwargs() -> None:
     """Unvalidated @listener receives domain fields as kwargs from canonical envelope."""
@@ -219,7 +215,6 @@ async def test_unvalidated_listener_unwraps_canonical_envelope_kwargs() -> None:
     assert received[0] == ("ord-200", 88.0, "corr-raw-1")
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_unvalidated_listener_with_data_parameter() -> None:
     """If @listener handler signature specifies 'data', it receives domain_payload."""
@@ -256,7 +251,6 @@ async def test_unvalidated_listener_with_data_parameter() -> None:
     assert subj_arg == "events.generic"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_broadcast_message_reaches_validated_listener_cleanly() -> None:
     """Messages emitted via broadcast_message unwrap cleanly at @validated_listener."""

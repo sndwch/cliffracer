@@ -41,7 +41,7 @@ is checked rather than assumed: with all ten extensions installed and all eight
 of their third-party dependencies importable, `import cliffracer` leaves every
 one of them absent from `sys.modules` — aioconsole, croniter, fastapi, jwt,
 psutil, starlette, uvicorn, yaml, and the ten `cliffracer_*` packages
-themselves. `tests/unit/test_core_imports_no_web_stack.py` contains the web stack
+themselves. `tests/repo/test_core_imports_no_web_stack.py` contains the web stack
 of that list to it on every run, in a fresh interpreter so the answer does not
 depend on test order.
 
@@ -266,7 +266,7 @@ class SecureService(CliffracerService):
 so the guard has to sit between it and your function body.
 
 What pins this, if you want to read the behaviour rather than trust it:
-`packages/cliffracer-auth/tests/test_auth_context_reaches_the_handler.py`. Its
+`packages/cliffracer-auth/tests/test_auth_context_propagation.py`. Its
 tests drive a real dispatch with a real token and no hand-set contextvar, which
 is what makes them evidence about the extension.
 `test_auth_decorators.py` sets the contextvar itself, so it says nothing about
@@ -571,7 +571,7 @@ In one sentence: *a member needs `readme = "README.md"` in its pyproject and a
 copy of `LICENSE` beside it; the licence needs no declaration and the readme is
 useless without one.*
 
-Guarded by `tests/unit/test_member_wheels_carry_metadata.py`, which reads the
+Guarded by `tests/repo/test_member_wheels_carry_metadata.py`, which reads the
 built artefacts rather than the source tree — the wheel's `METADATA` for a
 non-empty description and `dist-info/licenses/` for the licence, and the sdist
 separately, because the symlink defect appears only there.

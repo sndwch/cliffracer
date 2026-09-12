@@ -13,6 +13,8 @@ from cliffracer.core.container import Container
 from cliffracer.core.correlation import correlation_id_var
 from cliffracer.core.decorators import listener, rpc
 
+pytestmark = pytest.mark.unit
+
 
 class MockNatsMessage:
     """Mock NATS message simulating wire payload and response."""
@@ -107,7 +109,6 @@ async def test_mock_cleanup_and_class_restoration_across_tests() -> None:
     assert not isinstance(Container._safe_ack, AsyncMock)
 
 
-@pytest.mark.unit
 def test_correlation_id_context_cleanliness() -> None:
     """Verify correlation_id_var context is None between tests."""
     current = correlation_id_var.get()

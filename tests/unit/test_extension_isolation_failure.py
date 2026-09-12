@@ -21,6 +21,8 @@ from cliffracer.core.extension import (
     _safe_clone_arg,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class UncopyableObject:
     """An object that explicitly refuses deepcopy."""
@@ -37,7 +39,6 @@ class StateExtension(Extension):
         self.items = items if items is not None else []
 
 
-@pytest.mark.unit
 def test_extension_isolation_error_hierarchy() -> None:
     """ExtensionIsolationError must inherit from CliffracerError."""
     assert issubclass(ExtensionIsolationError, CliffracerError)
@@ -45,7 +46,6 @@ def test_extension_isolation_error_hierarchy() -> None:
     assert isinstance(err, CliffracerError)
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_uncopyable_lock_raises() -> None:
     """Passing a threading.Lock directly raises ExtensionIsolationError."""
     lock = threading.Lock()
@@ -58,7 +58,6 @@ def test_safe_clone_arg_uncopyable_lock_raises() -> None:
     assert "SharedDependency" in msg
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_uncopyable_custom_object_raises() -> None:
     """Passing custom uncopyable object directly raises ExtensionIsolationError."""
     obj = UncopyableObject()
@@ -70,7 +69,6 @@ def test_safe_clone_arg_uncopyable_custom_object_raises() -> None:
     assert "SharedDependency" in msg
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_tuple_with_uncopyable_raises() -> None:
     """Nested tuple with uncopyable item propagates ExtensionIsolationError."""
     nested = (1, "ok", threading.Lock())
@@ -78,7 +76,6 @@ def test_safe_clone_arg_tuple_with_uncopyable_raises() -> None:
         _safe_clone_arg(nested)
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_shared_dependency_unwraps() -> None:
     """Wrapping uncopyable state in SharedDependency returns the identical object."""
     lock = threading.Lock()
@@ -92,7 +89,6 @@ def test_safe_clone_arg_shared_dependency_unwraps() -> None:
     assert result is lock
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_nested_shared_dependency_in_tuple() -> None:
     """Nested tuple with SharedDependency unwraps correctly."""
     lock = threading.Lock()
@@ -103,7 +99,6 @@ def test_safe_clone_arg_nested_shared_dependency_in_tuple() -> None:
     assert cloned[1] is lock
 
 
-@pytest.mark.unit
 def test_extension_bind_with_uncopyable_raises_isolation_error() -> None:
     """Binding an extension declaration with uncopyable state fails fast."""
     lock = threading.Lock()
@@ -115,7 +110,6 @@ def test_extension_bind_with_uncopyable_raises_isolation_error() -> None:
     assert "Cannot isolate extension argument" in str(exc_info.value)
 
 
-@pytest.mark.unit
 def test_extension_bind_with_shared_dependency_succeeds_and_shares() -> None:
     """Binding an extension declaration with SharedDependency succeeds and shares state."""
     lock = threading.Lock()
@@ -141,7 +135,6 @@ def test_extension_bind_with_shared_dependency_succeeds_and_shares() -> None:
     assert "mutation_a" not in svcB.state.items
 
 
-@pytest.mark.unit
 def test_extension_create_instance_isolates_copyable_mutables() -> None:
     """Regular lists and dicts are deep-copied independently across instances."""
     items = ["item1", "item2"]
@@ -158,7 +151,6 @@ def test_extension_create_instance_isolates_copyable_mutables() -> None:
     assert inst2.items == ["item1", "item2"]
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_uncopyable_sqlite_connection_raises() -> None:
     """Passing an uncopyable sqlite3.Connection directly raises ExtensionIsolationError."""
     conn = sqlite3.connect(":memory:")
@@ -171,7 +163,6 @@ def test_safe_clone_arg_uncopyable_sqlite_connection_raises() -> None:
     assert "SharedDependency" in msg
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_shared_sqlite_connection_unwraps() -> None:
     """Wrapping sqlite3.Connection in SharedDependency unwraps without copying."""
     conn = sqlite3.connect(":memory:")
@@ -185,7 +176,6 @@ def test_safe_clone_arg_shared_sqlite_connection_unwraps() -> None:
     assert result is conn
 
 
-@pytest.mark.unit
 def test_extension_bind_with_uncopyable_sqlite_raises_isolation_error() -> None:
     """Binding an extension with raw sqlite3.Connection raises ExtensionIsolationError."""
     conn = sqlite3.connect(":memory:")
@@ -203,7 +193,6 @@ def test_extension_bind_with_uncopyable_sqlite_raises_isolation_error() -> None:
     assert "Cannot isolate extension argument" in str(exc_info.value)
 
 
-@pytest.mark.unit
 def test_extension_bind_with_shared_sqlite_shares_identity() -> None:
     """Binding an extension with SharedDependency(sqlite3.Connection) succeeds and shares identity."""
     conn = sqlite3.connect(":memory:")
@@ -227,7 +216,6 @@ def test_extension_bind_with_shared_sqlite_shares_identity() -> None:
     assert svcA.db.db is svcB.db.db
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_callable_uncopyable_raises() -> None:
     """A callable object requiring arguments that cannot be copied raises ExtensionIsolationError."""
 
@@ -245,7 +233,6 @@ def test_safe_clone_arg_callable_uncopyable_raises() -> None:
     assert "Cannot isolate extension argument" in str(exc_info.value)
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_callable_zero_arg_factory_produces_isolated_instances() -> None:
     """Zero-argument callable factories generate fresh instances per clone."""
 
@@ -260,7 +247,6 @@ def test_safe_clone_arg_callable_zero_arg_factory_produces_isolated_instances() 
     assert inst1 is not inst2
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_standard_function_preserved() -> None:
     """Standard functions (which succeed in copy.deepcopy) are preserved."""
 

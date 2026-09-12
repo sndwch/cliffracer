@@ -14,6 +14,8 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, listener
 
+pytestmark = pytest.mark.unit
+
 
 class _MockMsg:
     def __init__(self, subject: str, data: dict):
@@ -22,7 +24,6 @@ class _MockMsg:
         self.headers = None
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_overlapping_listeners_execute_once_per_callback():
     """Each subscription callback dispatches only to its bound pattern handler."""
@@ -61,7 +62,6 @@ async def test_overlapping_listeners_execute_once_per_callback():
     assert orders_created_count == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_unbound_dispatch_matches_all():
     """Calling _dispatch_event without a pattern preserves broadcast fallback."""
@@ -89,7 +89,6 @@ async def test_unbound_dispatch_matches_all():
     assert orders_created_count == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_setup_subscriptions_binds_distinct_callbacks():
     """setup_subscriptions passes distinct callbacks bound to each pattern to nc.subscribe."""

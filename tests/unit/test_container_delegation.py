@@ -6,8 +6,9 @@ from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.container import Container
 from tests.conftest import declared
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 def test_the_service_owns_a_container_and_delegates_state():
     svc = CliffracerService(ServiceConfig(name="s"))
     assert isinstance(svc.container, Container)
@@ -27,7 +28,6 @@ def test_the_service_owns_a_container_and_delegates_state():
     assert svc.container._entrypoint_kinds is svc.container._entrypoint_kinds
 
 
-@pytest.mark.unit
 def test_the_container_exists_before_extensions_bind():
     """Verify container is initialized before extension collection occurs."""
     svc = CliffracerService(ServiceConfig(name="s"))
@@ -35,7 +35,6 @@ def test_the_container_exists_before_extensions_bind():
     assert declared(svc) == []
 
 
-@pytest.mark.unit
 def test_handlers_registered_through_the_service_land_in_the_container():
     """Ensure handlers registered through the service land in the container."""
     from cliffracer import rpc

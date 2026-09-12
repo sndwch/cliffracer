@@ -9,6 +9,8 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, listener, rpc
 
+pytestmark = pytest.mark.unit
+
 
 class TestNatsService:
     """Test base NatsService class"""

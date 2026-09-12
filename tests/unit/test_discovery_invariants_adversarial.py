@@ -16,6 +16,8 @@ from cliffracer.core.decorators import validated_listener
 from cliffracer.core.discovery import HandlerDiscovery
 from cliffracer.core.jetstream import StreamDeclarationError, StreamSpec
 
+pytestmark = pytest.mark.unit
+
 
 class OrderPayload(BaseModel):
     order_id: str
@@ -27,7 +29,6 @@ class OrderPayload(BaseModel):
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_fanout_and_durable_conflict_with_jetstream_enabled_raises() -> None:
     """Listener specifying both fanout=True and durable raises ConfigurationError when JetStream is on."""
 
@@ -50,7 +51,6 @@ def test_fanout_and_durable_conflict_with_jetstream_enabled_raises() -> None:
     assert "orders.created" in msg
 
 
-@pytest.mark.unit
 def test_fanout_and_durable_conflict_with_jetstream_disabled_is_permitted() -> None:
     """When jetstream_enabled=False, fanout=True + durable is permitted per commit 7b6da13."""
 
@@ -68,7 +68,6 @@ def test_fanout_and_durable_conflict_with_jetstream_disabled_is_permitted() -> N
     assert "orders.created" in reg.event_fanout
 
 
-@pytest.mark.unit
 def test_validated_listener_fanout_and_durable_conflict_raises() -> None:
     """Validated listener specifying both fanout=True and durable raises ConfigurationError."""
 
@@ -94,7 +93,6 @@ def test_validated_listener_fanout_and_durable_conflict_raises() -> None:
     assert "declare(s) BOTH a durable and fanout=True" in str(exc_info.value)
 
 
-@pytest.mark.unit
 def test_broadcast_and_durable_on_same_subject_conflict_raises() -> None:
     """Declaring @broadcast and @listener(durable=...) on the same subject conflicts and raises."""
 
@@ -121,7 +119,6 @@ def test_broadcast_and_durable_on_same_subject_conflict_raises() -> None:
     ) or "Duplicate event listener declared on subject 'alerts.general'" in str(exc_info.value)
 
 
-@pytest.mark.unit
 def test_unspecified_listener_semantics_raises_configuration_error() -> None:
     """Listener declaring neither fanout=True nor durable name raises ConfigurationError."""
 
@@ -140,7 +137,6 @@ def test_unspecified_listener_semantics_raises_configuration_error() -> None:
     assert "events.naked" in msg
 
 
-@pytest.mark.unit
 def test_durable_with_jetstream_disabled_raises_inert_configuration_error() -> None:
     """Listener declaring durable with jetstream_enabled=False raises ConfigurationError."""
 
@@ -164,7 +160,6 @@ def test_durable_with_jetstream_disabled_raises_inert_configuration_error() -> N
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_duplicate_durable_across_different_subjects_raises() -> None:
     """Two handlers on distinct subjects sharing the same durable name raise ConfigurationError."""
 
@@ -192,7 +187,6 @@ def test_duplicate_durable_across_different_subjects_raises() -> None:
     assert "orders.shipped" in msg
 
 
-@pytest.mark.unit
 def test_duplicate_listener_on_same_subject_raises_configuration_error() -> None:
     """Multiple handlers on the SAME subject raise ConfigurationError."""
 
@@ -219,7 +213,6 @@ def test_duplicate_listener_on_same_subject_raises_configuration_error() -> None
     assert "Duplicate event listener declared on subject 'orders.created'" in msg
 
 
-@pytest.mark.unit
 def test_duplicate_durable_with_cross_namespace_subject_collision_raises() -> None:
     """Cross-namespace subject and namespaced subject sharing a durable raise ConfigurationError."""
 
@@ -248,7 +241,6 @@ def test_duplicate_durable_with_cross_namespace_subject_collision_raises() -> No
     assert "billing.events.ping" in msg
 
 
-@pytest.mark.unit
 def test_duplicate_durable_between_standard_and_validated_listener_raises() -> None:
     """Standard listener and validated listener sharing a durable raise ConfigurationError."""
 
@@ -278,7 +270,6 @@ def test_duplicate_durable_between_standard_and_validated_listener_raises() -> N
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_pull_consumer_without_durable_raises() -> None:
     """Pull consumer with pull=True but no durable raises ConfigurationError."""
 
@@ -299,7 +290,6 @@ def test_pull_consumer_without_durable_raises() -> None:
     assert "declares pull=True with no durable" in str(exc_info.value)
 
 
-@pytest.mark.unit
 def test_pull_consumer_with_fanout_raises() -> None:
     """Pull consumer declaring both pull=True and fanout=True raises ConfigurationError."""
 
@@ -320,7 +310,6 @@ def test_pull_consumer_with_fanout_raises() -> None:
     assert "declares both pull=True and fanout=True" in str(exc_info.value)
 
 
-@pytest.mark.unit
 def test_pull_consumer_with_jetstream_disabled_raises() -> None:
     """Pull consumer with jetstream_enabled=False raises ConfigurationError."""
 
@@ -337,7 +326,6 @@ def test_pull_consumer_with_jetstream_disabled_raises() -> None:
     assert "declares pull=True but this service has jetstream_enabled=False" in str(exc_info.value)
 
 
-@pytest.mark.unit
 def test_pull_consumer_subject_not_validated_against_stream_specs_gap() -> None:
     """ARCHITECTURAL GAP: HandlerDiscovery does NOT assert pull consumer subjects match declared streams.
 
@@ -372,7 +360,6 @@ def test_pull_consumer_subject_not_validated_against_stream_specs_gap() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_dlq_coverage_missing_raises_stream_declaration_error() -> None:
     """Active JetStream configuration without stream coverage for DLQ subject raises StreamDeclarationError."""
     cfg = ServiceConfig(
@@ -389,7 +376,6 @@ def test_dlq_coverage_missing_raises_stream_declaration_error() -> None:
     assert "orders.*" in msg
 
 
-@pytest.mark.unit
 def test_dlq_coverage_with_wildcard_stream_matches() -> None:
     """DLQ subject is covered by root 'dlq.*' or 'dlq.>' stream."""
     for pattern in ["dlq.*", "dlq.>"]:
@@ -403,7 +389,6 @@ def test_dlq_coverage_with_wildcard_stream_matches() -> None:
         HandlerDiscovery.validate_dlq_coverage(cfg)
 
 
-@pytest.mark.unit
 def test_dlq_coverage_namespaced_template_alignment() -> None:
     """DLQ template with {namespace} correctly matches namespaced stream, rejects mismatched stream."""
     # Matched case
@@ -428,7 +413,6 @@ def test_dlq_coverage_namespaced_template_alignment() -> None:
         HandlerDiscovery.validate_dlq_coverage(cfg_mismatched)
 
 
-@pytest.mark.unit
 def test_dlq_coverage_skipped_when_jetstream_disabled() -> None:
     """When jetstream_enabled=False, validate_dlq_coverage is a no-op even with empty streams."""
     cfg = ServiceConfig(
@@ -441,7 +425,6 @@ def test_dlq_coverage_skipped_when_jetstream_disabled() -> None:
     HandlerDiscovery.validate_dlq_coverage(cfg)
 
 
-@pytest.mark.unit
 def test_validate_subject_type_refuses_non_string_subjects() -> None:
     """HandlerDiscovery._validate_subject_type raises TypeError if a non-string subject is supplied."""
     cfg = ServiceConfig(name="test_svc")

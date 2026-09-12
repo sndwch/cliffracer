@@ -23,6 +23,8 @@ from fastapi.testclient import TestClient
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.extension import ExtensionSetupContext
 
+pytestmark = pytest.mark.unit
+
 
 def _simulate_service_state(
     svc: CliffracerService,

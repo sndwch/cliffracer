@@ -10,6 +10,8 @@ from cliffracer.core.service import CliffracerService
 from cliffracer.core.service_config import ServiceConfig
 from cliffracer.testing import MockMessage, ServiceTestHarness
 
+pytestmark = pytest.mark.unit
+
 
 class CalculatorService(CliffracerService):
     def __init__(self, config: ServiceConfig) -> None:
@@ -31,7 +33,6 @@ class CalculatorService(CliffracerService):
         self.received_events.append({"action": action})
 
 
-@pytest.mark.unit
 async def test_harness_rpc_call_success():
     """ServiceTestHarness executes typed RPC calls and returns decoded TestResponse."""
     async with ServiceTestHarness(CalculatorService) as harness:
@@ -42,7 +43,6 @@ async def test_harness_rpc_call_success():
         assert resp.headers.get("Content-Type") == "application/json"
 
 
-@pytest.mark.unit
 async def test_harness_rpc_validation_error():
     """ServiceTestHarness handles invalid payloads and captures validation errors."""
     async with ServiceTestHarness(CalculatorService) as harness:
@@ -52,7 +52,6 @@ async def test_harness_rpc_validation_error():
         assert "validation" in resp.error.lower() or "input" in resp.error.lower()
 
 
-@pytest.mark.unit
 async def test_harness_emit_event():
     """ServiceTestHarness delivers events through container dispatch pipeline."""
     async with ServiceTestHarness(CalculatorService) as harness:
@@ -64,7 +63,6 @@ async def test_harness_emit_event():
         assert svc.received_events[0] == {"action": "reset"}
 
 
-@pytest.mark.unit
 async def test_harness_describe():
     """ServiceTestHarness queries service describe endpoint."""
     async with ServiceTestHarness(CalculatorService) as harness:
@@ -75,7 +73,6 @@ async def test_harness_describe():
         assert any(m["name"] == "divide" for m in desc["methods"])
 
 
-@pytest.mark.unit
 async def test_mock_message_interaction():
     """MockMessage supports response, ack, nak, and term operations."""
     msg = MockMessage(subject="test.subject", data=b'{"hello": "world"}')
@@ -96,7 +93,6 @@ async def test_mock_message_interaction():
     assert msg.terminated is True
 
 
-@pytest.mark.unit
 async def test_delegations_removed_from_service():
     """Private delegation methods are removed from CliffracerService and raise AttributeError."""
     cfg = ServiceConfig(name="depr_svc", health_port=0)

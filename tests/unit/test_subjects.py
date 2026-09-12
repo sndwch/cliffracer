@@ -4,8 +4,9 @@ import pytest
 
 from cliffracer.core.subjects import subject_matches, subjects_overlap
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 class TestSubjectMatches:
     """Behaviour moved verbatim out of CliffracerService._subject_matches."""
 
@@ -44,7 +45,6 @@ class TestSubjectMatches:
         assert subject_matches("a.*.>", "a.b.c.d")
 
 
-@pytest.mark.unit
 class TestSubjectsOverlap:
     """Two streams may not claim the same subject, so declarations are compared pattern to pattern."""
 

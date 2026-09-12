@@ -18,6 +18,8 @@ import pytest
 
 from cliffracer.core.extension import Extension
 
+pytestmark = pytest.mark.unit
+
 
 class SampleStressExtension(Extension):
     """Extension featuring scalar and nested mutable state."""
@@ -29,7 +31,6 @@ class SampleStressExtension(Extension):
         self.tags: set[str] = {"tag_a", "tag_b"}
 
 
-@pytest.mark.unit
 def test_freeze_prevents_unfreezing_reassignment() -> None:
     """Verify that _spec_frozen cannot be reassigned to False or any falsy value."""
     spec = SampleStressExtension(seed=1)
@@ -55,7 +56,6 @@ def test_freeze_prevents_unfreezing_reassignment() -> None:
     assert spec._spec_frozen is True
 
 
-@pytest.mark.unit
 def test_freeze_prevents_mutating_identity_and_spec_attributes() -> None:
     """Verify that name, service, _origin, fails_closed, and spec args cannot be mutated."""
     spec = SampleStressExtension(seed=2)
@@ -103,7 +103,6 @@ def test_freeze_prevents_mutating_identity_and_spec_attributes() -> None:
         setattr(spec, "dynamic_attr", 123)  # noqa: B010
 
 
-@pytest.mark.unit
 def test_freeze_prevents_attribute_deletion() -> None:
     """Verify that __delattr__ blocks deletion of attributes on frozen specifications."""
     spec = SampleStressExtension(seed=3)
@@ -157,7 +156,6 @@ def test_freeze_prevents_attribute_deletion() -> None:
         delattr(spec, "non_existent_field")
 
 
-@pytest.mark.unit
 def test_bound_instances_retain_full_runtime_mutability() -> None:
     """Verify that bound instances are not frozen and can mutate, add, and delete attributes."""
     spec = SampleStressExtension(seed=4)
@@ -214,7 +212,6 @@ def test_bound_instances_retain_full_runtime_mutability() -> None:
     assert not hasattr(spec, "runtime_cache")
 
 
-@pytest.mark.unit
 def test_multi_bound_isolation_under_adversarial_mutations() -> None:
     """Verify multiple bound instances can mutate and delete attributes without interference."""
     spec = SampleStressExtension(seed=5)
@@ -275,7 +272,6 @@ def test_multi_bound_isolation_under_adversarial_mutations() -> None:
     assert not hasattr(spec, "custom_state")
 
 
-@pytest.mark.unit
 def test_freeze_idempotence_and_bound_freezing() -> None:
     """Test calling freeze() on already frozen spec and on bound instances."""
     spec = SampleStressExtension(seed=6)
