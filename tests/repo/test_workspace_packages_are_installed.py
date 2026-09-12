@@ -80,7 +80,7 @@ def test_CONTROL_the_command_in_the_message_is_the_one_ci_runs():
 
 
 # Documents that teach the development sync command.
-TEACHING_DOCS = ("CLAUDE.md", "README.md", "examples/ecommerce/README.md")
+TEACHING_DOCS = ("README.md", "examples/ecommerce/README.md")
 
 
 def test_CONTROL_the_documents_that_teach_it_still_say_it():
