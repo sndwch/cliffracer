@@ -15,6 +15,8 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
 
+pytestmark = pytest.mark.unit
+
 
 class _MockMsg:
     """Mock NATS message simulating RPC request-reply envelope."""
@@ -68,7 +70,6 @@ async def svc():
     return service
 
 
-@pytest.mark.unit
 def test_active_tasks_property_delegation(svc):
     """svc.container._active_tasks holds active tasks; delegation removed from service."""
     assert isinstance(svc.container._active_tasks, set)
@@ -76,7 +77,6 @@ def test_active_tasks_property_delegation(svc):
     assert not hasattr(svc, "_active_tasks")
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_setup_subscriptions_binds_on_rpc_request():
     """_setup_subscriptions binds cb=self.dispatcher.on_rpc_request for RPC."""
@@ -98,7 +98,6 @@ async def test_setup_subscriptions_binds_on_rpc_request():
     assert rpc_call.kwargs["queue"] == "test_bind_svc.rpc"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_dispatch_concurrency_via_barrier(svc):
     """Multiple concurrent RPC requests execute in parallel, proving no HOL blocking.
@@ -135,7 +134,6 @@ async def test_rpc_dispatch_concurrency_via_barrier(svc):
         assert msg.response["result"] == f"done_t_{i}"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_dispatch_concurrency_timing(svc):
     """5 concurrent calls with 0.05s sleep take ~0.05s (< 0.15s), not ~0.25s."""
@@ -167,7 +165,6 @@ async def test_rpc_dispatch_concurrency_timing(svc):
         assert msg.response["result"] == f"done_t_{i}"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_active_tasks_discard_on_done(svc):
     """Completed tasks are automatically discarded from _active_tasks."""

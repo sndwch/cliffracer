@@ -8,8 +8,9 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig, listener, rpc
 from cliffracer.core.jetstream import StreamSpec
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 @pytest.mark.asyncio
 async def test_supervised_task_retrieves_exception_eliminating_warning():
     """Uncaught exception in supervised task is retrieved and logged without event loop warning."""
@@ -31,7 +32,6 @@ async def test_supervised_task_retrieves_exception_eliminating_warning():
     assert isinstance(task.exception(), RuntimeError)
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_guarded_ack_suppresses_connection_closed():
     """Transport drop during msg.ack() is caught, logged, and does not crash background task."""
@@ -54,7 +54,6 @@ async def test_guarded_ack_suppresses_connection_closed():
     assert msg.ack.await_count == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_guarded_nak_term_and_in_progress_guard_transport_errors():
     """Safe broker methods guard against transport failures."""
@@ -69,7 +68,6 @@ async def test_guarded_nak_term_and_in_progress_guard_transport_errors():
     assert await svc.container._safe_in_progress(msg) is False
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_jetstream_in_progress_pulse_during_long_handler():
     """Handlers exceeding ack_wait / 2 pulse msg.in_progress() to prevent redelivery."""
@@ -102,7 +100,6 @@ async def test_jetstream_in_progress_pulse_during_long_handler():
     assert msg.ack.await_count == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_bounded_event_concurrency():
     """max_event_concurrency restricts simultaneous event executions."""
@@ -133,7 +130,6 @@ async def test_bounded_event_concurrency():
     assert max_active == 2
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_bounded_async_rpc_concurrency():
     """max_async_rpc_concurrency restricts simultaneous fire-and-forget RPC executions."""

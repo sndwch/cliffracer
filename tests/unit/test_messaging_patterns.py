@@ -20,6 +20,8 @@ from cliffracer import (
     rpc,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class TestMessagingPatterns:
     """Test various messaging patterns in the framework"""

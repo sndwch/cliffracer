@@ -1,6 +1,10 @@
 """Tests for ServiceConfig.nats_auth_kwargs authentication mapping."""
 
+import pytest
+
 from cliffracer import ServiceConfig
+
+pytestmark = pytest.mark.unit
 
 
 class TestServiceConfigAuthKwargs:

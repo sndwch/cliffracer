@@ -15,6 +15,8 @@ from cliffracer_auth import AuthConfig, AuthExtension, SimpleAuthService
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
 
+pytestmark = pytest.mark.unit
+
 # SimpleAuthService refuses a secret under 32 characters (simple_auth.py:96),
 # which is a guard worth having and worth not working around with a shorter
 # one in tests.
@@ -50,7 +52,6 @@ def _replies(msg) -> list[dict]:
     return [json.loads(c.args[0].decode()) for c in msg.respond.await_args_list]
 
 
-@pytest.mark.unit
 async def test_a_valid_token_reaches_the_handler():
     svc, auth = _service()
     await svc.container._setup_extensions()
@@ -67,7 +68,6 @@ async def test_a_valid_token_reaches_the_handler():
     assert replies[0].get("result") == "reached", replies[0]
 
 
-@pytest.mark.unit
 async def test_a_missing_token_gets_an_unauthenticated_error():
     svc, _auth = _service()
     await svc.container._setup_extensions()
@@ -83,7 +83,6 @@ async def test_a_missing_token_gets_an_unauthenticated_error():
     assert replies[0].get("result") != "reached", replies[0]
 
 
-@pytest.mark.unit
 async def test_a_garbage_token_is_also_unauthenticated():
     """CONTROL for the case above: without it, "the error says unauthenticated"
     would also pass on an extension that refused every message including valid

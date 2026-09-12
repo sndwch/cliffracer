@@ -7,6 +7,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.extension import Extension, entrypoint
 
+pytestmark = pytest.mark.unit
+
 
 class CustomState:
     """Non-collection state object to verify reference isolation across bound instances."""
@@ -57,7 +59,6 @@ class ParentExtension(Extension):
         self.parent_records: list[str] = []
 
 
-@pytest.mark.unit
 def test_mutable_attributes_in_init_are_isolated_across_bound_instances() -> None:
     """Verify mutable attributes created in __init__ are completely isolated."""
     spec = StatefulExtension()
@@ -97,7 +98,6 @@ def test_mutable_attributes_in_init_are_isolated_across_bound_instances() -> Non
     assert spec.state.value == 0
 
 
-@pytest.mark.unit
 def test_parameterized_declaration_arguments_are_isolated() -> None:
     """Verify mutable arguments passed at declaration time are cloned per instance."""
     spec = ParameterizedExtension(
@@ -134,7 +134,6 @@ def test_parameterized_declaration_arguments_are_isolated() -> None:
     assert spec.tuple_with_list == ([1, 2],)
 
 
-@pytest.mark.unit
 def test_nested_extensions_are_isolated() -> None:
     """Verify nested extension instances are isolated across bound copies."""
     child_spec = ChildExtension(name="shared_spec_child")
@@ -161,7 +160,6 @@ def test_nested_extensions_are_isolated() -> None:
     assert parent_spec.parent_records == []
 
 
-@pytest.mark.unit
 def test_nested_extension_created_in_init_is_isolated() -> None:
     """Verify nested extensions created inside __init__ are reconstructed per bind."""
     parent_spec = ParentExtension()
@@ -183,7 +181,6 @@ def test_nested_extension_created_in_init_is_isolated() -> None:
     assert parent_spec.child.events == []
 
 
-@pytest.mark.unit
 def test_extension_specification_immutability_enforced() -> None:
     """Verify freezing specification locks attribute mutations while bound copies mutate freely."""
     spec = StatefulExtension()
@@ -205,7 +202,6 @@ def test_extension_specification_immutability_enforced() -> None:
     assert bound.mapping == {"allowed": 1}
 
 
-@pytest.mark.unit
 def test_multiple_sequential_binds_produce_independent_instances() -> None:
     """Verify binding the same specification N times yields N distinct isolated instances."""
     spec = StatefulExtension()
@@ -240,7 +236,6 @@ class EntrypointExtension(Extension):
         return {"custom_gate": _binder}
 
 
-@pytest.mark.unit
 def test_entrypoint_resolution_preserves_spec_owner_identity() -> None:
     """Verify @entrypoint resolves class attribute owner to runtime bound extension."""
     gate_spec = EntrypointExtension()

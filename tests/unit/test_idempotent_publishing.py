@@ -16,6 +16,8 @@ from cliffracer import (
 )
 from cliffracer.core.idempotency import compute_payload_hash, format_nats_msg_id
 
+pytestmark = pytest.mark.unit
+
 
 class OrderRequest(BaseModel):
     order_id: str
@@ -26,7 +28,6 @@ class NestedOrder(BaseModel):
     data: OrderRequest
 
 
-@pytest.mark.unit
 class TestIdempotencyContext:
     def test_context_set_get_reset_clear(self):
         """IdempotencyContext tracks per-task key and cleans up via token or clear."""
@@ -44,7 +45,6 @@ class TestIdempotencyContext:
         assert IdempotencyContext.get() is None
 
 
-@pytest.mark.unit
 class TestComputePayloadHash:
     def test_dynamic_envelope_fields_excluded(self):
         """Timestamp, correlation_id, and source_service do not alter payload hash."""
@@ -105,7 +105,6 @@ class TestComputePayloadHash:
         assert len(h1) == 64
 
 
-@pytest.mark.unit
 class TestFormatNatsMsgId:
     def test_subject_scoping(self):
         """Keys are scoped with subject prefix: f'{subject}:{key}'."""
@@ -132,7 +131,6 @@ class TestFormatNatsMsgId:
         assert scoped.startswith("orders.created:")
 
 
-@pytest.mark.unit
 class TestIdempotentDecorator:
     @pytest.mark.asyncio
     async def test_decorator_extracts_param_name(self):
@@ -257,7 +255,6 @@ class TestIdempotentDecorator:
         assert IdempotencyContext.get() is None
 
 
-@pytest.mark.unit
 class TestStreamSpecDuplicateWindow:
     def test_duplicate_window_default(self):
         """StreamSpec duplicate_window_seconds defaults to 120.0."""
@@ -285,7 +282,6 @@ class TestStreamSpecDuplicateWindow:
         assert not spec.matches(drifted_cfg)
 
 
-@pytest.mark.unit
 class TestPublishEventIdempotency:
     @pytest.mark.asyncio
     async def test_explicit_idempotency_key_populates_header(self):
@@ -367,7 +363,6 @@ class TestPublishEventIdempotency:
         assert payload_hash in msg_id
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_live_jetstream_idempotent_deduplication():
     """Verify live NATS JetStream deduplication via Nats-Msg-Id within duplicate window."""

@@ -13,6 +13,7 @@ from tests.conftest import broker_url, configured_broker_url
 
 pytestmark = [pytest.mark.integration, pytest.mark.nats_required]
 
+
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLES = REPO / "examples"
 # Subprocess bootstrap setting sys.path and propagating broker configuration.

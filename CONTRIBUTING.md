@@ -77,24 +77,76 @@ Repository tests enforce that documentation contains:
 All pull requests must pass the complete test suite:
 
 ```bash
-# Run all unit and integration tests
+# Run everything
 uv run pytest
 
-# Run unit tests only
+# The library, in process
 uv run pytest tests/unit/
 
-# Run integration tests against a live broker
+# The library over an in-memory transport, no broker
+uv run pytest tests/transport/
+
+# Against a live broker
 uv run pytest tests/integration/
 
-# Run tests for a specific extension
+# Guards over the repository: docs, packaging, CI, the suite
+uv run pytest tests/repo/
+
+# One extension
 uv run pytest packages/cliffracer-http/tests/
 ```
 
-### Writing Tests
+### Where a test goes
 
-- Test names describe the architectural contract or behavior verified (e.g., `test_first_connect_is_bounded`, `test_duplicate_durables`).
-- Do not name tests after pull requests, issue numbers, milestones, or author handles.
+A test lives in the directory that matches what it exercises, and declares that
+directory's tier once, at module level:
+
+```python
+import pytest
+
+pytestmark = pytest.mark.unit
+```
+
+`docs/ARCHITECTURE.md` lists the directories and their tiers. `nats_required`
+and `slow` are separate flags and go on the individual tests that need them.
+
+### Naming
+
+- **A file names its subject**: `test_health_listener.py`, not
+  `test_the_health_listener_reports_503.py`. The functions inside it name the
+  behaviour, which is where a sentence belongs.
+- **Under `tests/repo/`, a file names the one invariant it enforces**:
+  `test_docs_carry_no_emoji.py` says exactly what it guards, where
+  `test_docs_emoji.py` would not.
+- **A filename does not repeat its directory**: no `_integration` suffix inside
+  `tests/integration/`.
+- **A qualifier goes at the end**: `test_rpc_concurrency_adversarial.py`, so
+  names sort and glob by subject. `adversarial` and `stress` are the qualifiers
+  in use.
+- Do not name tests after pull requests, issue numbers, milestones, or author
+  handles.
 - Add regression tests alongside any bug fix.
+
+`tests/repo/test_the_suite_follows_its_conventions.py` enforces the tier rule
+and the two mechanical filename rules.
+
+### Prove the test can fail
+
+A check that cannot go red is worse than no check, because it manufactures the
+appearance of a gate. Where a test sweeps the tree, parses source, or asserts
+that something is absent, pair it with a `test_CONTROL_` case that feeds the
+checker an input it must reject, and another that feeds it one it must accept:
+
+```python
+def test_CONTROL_the_detector_catches_an_emoji():
+    assert emoji_lines([fixture_with_an_emoji])
+
+
+def test_CONTROL_typography_and_prose_are_not_flagged():
+    assert not emoji_lines([fixture_with_only_prose])
+```
+
+The prefix is uppercase so these read as a distinct family in a run's output.
 
 ## Pull Request Workflow
 

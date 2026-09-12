@@ -5,8 +5,9 @@ from pydantic import ValidationError
 
 from cliffracer.core.service_config import ServiceConfig
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 def test_concurrency_bounds_reject_zero_and_negative() -> None:
     """Verify max_rpc_concurrency, max_event_concurrency, and max_async_rpc_concurrency require gt=0."""
     with pytest.raises(ValidationError):
@@ -35,7 +36,6 @@ def test_concurrency_bounds_reject_zero_and_negative() -> None:
     assert cfg2.max_rpc_concurrency is None
 
 
-@pytest.mark.unit
 def test_timeout_bounds_reject_zero_and_negative() -> None:
     """Verify connect_timeout, shutdown_timeout, and request_timeout require gt=0."""
     with pytest.raises(ValidationError):
@@ -62,7 +62,6 @@ def test_timeout_bounds_reject_zero_and_negative() -> None:
     assert cfg.request_timeout == 5.0
 
 
-@pytest.mark.unit
 def test_reconnect_and_restart_bounds() -> None:
     """Verify max_reconnect_attempts ge=-1, reconnect_time_wait ge=0, and restart_delay ge=0."""
     # -1 is valid (infinite reconnect)
@@ -83,7 +82,6 @@ def test_reconnect_and_restart_bounds() -> None:
     assert cfg_valid.restart_delay == 0.0
 
 
-@pytest.mark.unit
 def test_jetstream_tuning_bounds() -> None:
     """Verify JetStream delivery, batch, timeout, and backoff bounds."""
     with pytest.raises(ValidationError):
@@ -126,7 +124,6 @@ def test_jetstream_tuning_bounds() -> None:
     assert cfg.jetstream_max_deliver == 1
 
 
-@pytest.mark.unit
 def test_health_port_bounds() -> None:
     """Verify health_port must be in range [0, 65535]."""
     with pytest.raises(ValidationError):
@@ -142,7 +139,6 @@ def test_health_port_bounds() -> None:
     assert cfg_max.health_port == 65535
 
 
-@pytest.mark.unit
 def test_validate_assignment_rejects_invalid_mutations() -> None:
     """Verify runtime attribute mutations trigger ValidationError immediately."""
     cfg = ServiceConfig(name="valid_service", max_rpc_concurrency=10)

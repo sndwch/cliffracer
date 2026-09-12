@@ -7,6 +7,8 @@ from cliffracer import CliffracerService, ServiceConfig, listener, rpc
 from cliffracer.core.correlation import correlation_id_var
 from cliffracer.core.extension import Extension
 
+pytestmark = pytest.mark.unit
+
 
 class Spy(Extension):
     async def setup(self, ctx):
@@ -46,7 +48,6 @@ def _msg(subject, data):
     return m
 
 
-@pytest.mark.unit
 async def test_rpc_runs_setup_result_teardown_with_the_message_correlation_id():
     svc = Svc(ServiceConfig(name="s"))
     await svc.container._setup_extensions()
@@ -60,7 +61,6 @@ async def test_rpc_runs_setup_result_teardown_with_the_message_correlation_id():
     assert correlation_id_var.get() is None
 
 
-@pytest.mark.unit
 async def test_a_handler_exception_still_reaches_result_and_teardown():
     svc = Svc(ServiceConfig(name="s"))
     await svc.container._setup_extensions()
@@ -84,7 +84,6 @@ async def test_a_handler_exception_still_reaches_result_and_teardown():
     assert "traceback" in opt_body
 
 
-@pytest.mark.unit
 async def test_a_hook_exception_is_logged_and_does_not_change_the_result():
     class Bad(Extension):
         async def worker_setup(self, ctx):
@@ -101,7 +100,6 @@ async def test_a_hook_exception_is_logged_and_does_not_change_the_result():
     assert json.loads(msg.respond.call_args.args[0])["result"] == "x"
 
 
-@pytest.mark.unit
 async def test_events_run_the_chain_per_handler():
     svc = Svc(ServiceConfig(name="s"))
     await svc.container._setup_extensions()
@@ -140,7 +138,6 @@ class OrderSvc(CliffracerService):
         return value
 
 
-@pytest.mark.unit
 async def test_result_and_teardown_hooks_run_in_reverse_declaration_order():
     """Ensure setup hooks run in declaration order, and result and teardown hooks run in reverse order."""
     svc = OrderSvc(ServiceConfig(name="s"))
@@ -162,7 +159,6 @@ async def test_result_and_teardown_hooks_run_in_reverse_declaration_order():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.unit
 async def test_async_rpc_runs_the_chain():
     svc = Svc(ServiceConfig(name="s"))
     await svc.container._setup_extensions()
@@ -178,7 +174,6 @@ async def test_async_rpc_runs_the_chain():
     assert correlation_id_var.get() is None
 
 
-@pytest.mark.unit
 async def test_jetstream_events_run_the_chain_and_ack():
     """Verify JetStream event execution triggers extension hook chain and message ack."""
     svc = Svc(ServiceConfig(name="s"))
@@ -195,7 +190,6 @@ async def test_jetstream_events_run_the_chain_and_ack():
     assert correlation_id_var.get() is None
 
 
-@pytest.mark.unit
 async def test_a_failing_jetstream_handler_still_reaches_result_and_teardown():
     """A nak path must not skip the hooks: an extension that only ran on success
     would report timings and metrics for the happy path alone."""
@@ -220,7 +214,6 @@ async def test_a_failing_jetstream_handler_still_reaches_result_and_teardown():
     msg.ack.assert_not_awaited()
 
 
-@pytest.mark.unit
 async def test_describe_runs_the_chain():
     """The fifth callback. `{service}.describe` publishes the whole API
     surface, so it is the last entry point that should be invisible to
@@ -243,7 +236,6 @@ async def test_describe_runs_the_chain():
     assert [m["name"] for m in body["methods"]] == ["boom", "echo"]
 
 
-@pytest.mark.unit
 async def test_a_refused_describe_answers_rather_than_hanging_the_caller():
     """RejectMessage from worker_setup is how an extension refuses. The caller
     is waiting on a reply, so a refusal that answered nothing would read as a

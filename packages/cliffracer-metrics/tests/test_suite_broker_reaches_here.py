@@ -6,9 +6,9 @@ import pytest
 
 from cliffracer import ServiceConfig
 
-BROKER_ENV = "CLIFFRACER_TEST_NATS_URL"
-
 pytestmark = pytest.mark.unit
+
+BROKER_ENV = "CLIFFRACER_TEST_NATS_URL"
 
 
 def test_a_service_built_under_packages_dials_the_configured_broker():

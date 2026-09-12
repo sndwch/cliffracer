@@ -15,6 +15,8 @@ from cliffracer_auth.simple_auth import SimpleAuthService
 
 from cliffracer import CliffracerService, ServiceConfig, timer
 
+pytestmark = pytest.mark.unit
+
 SECRET = "test-secret-not-a-real-one-0123456789abcdef"
 
 
@@ -30,7 +32,6 @@ def auth_service():
     return auth
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_timer_allowed_by_default_without_token(auth_service):
     """By default, allow_timers=True allows timer execution without authentication headers."""
@@ -55,7 +56,6 @@ async def test_timer_allowed_by_default_without_token(auth_service):
     assert executed is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_timer_rejected_when_allow_timers_is_false(auth_service):
     """When allow_timers=False, timer execution without token raises AuthenticationError."""
@@ -82,7 +82,6 @@ async def test_timer_rejected_when_allow_timers_is_false(auth_service):
     assert executed is False
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_timer_with_default_timer_user_populates_context_and_roles(auth_service):
     """default_timer_user populates AuthContext allowing @requires_roles to pass."""
@@ -118,7 +117,6 @@ async def test_timer_with_default_timer_user_populates_context_and_roles(auth_se
     assert seen_context.is_valid is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_timer_with_default_timer_user_fails_missing_role(auth_service):
     """default_timer_user without required role raises AuthorizationError."""
@@ -150,7 +148,6 @@ async def test_timer_with_default_timer_user_fails_missing_role(auth_service):
     assert executed is False
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_timer_with_static_headers(auth_service):
     """Timer configured with headers={"authorization": ...} authenticates against AuthExtension."""
@@ -181,7 +178,6 @@ async def test_timer_with_static_headers(auth_service):
     assert "scheduler" in seen_context.user.roles
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_timer_with_token_factory(auth_service):
     """Timer configured with token_factory generates token dynamically for AuthExtension."""

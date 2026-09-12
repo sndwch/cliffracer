@@ -26,6 +26,8 @@ from cliffracer import (
     with_correlation_id,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class TestCorrelationContext:
     """Test the CorrelationContext functionality"""

@@ -9,6 +9,8 @@ from pydantic import BaseModel
 
 from cliffracer import CliffracerService, RpcProxy, ServiceConfig, rpc
 
+pytestmark = pytest.mark.integration
+
 
 class Availability(BaseModel):
     product_id: str
@@ -223,7 +225,6 @@ class TestRpcProxy:
         assert order_service1.inventory._service_name == order_service2.inventory._service_name
 
 
-@pytest.mark.unit
 class TestRpcProxyUnit:
     """Unit tests for RpcProxy without NATS"""
 

@@ -246,7 +246,7 @@ What a caller gets back:
 | expired or revoked token | the same `refused: unauthenticated` — not "forbidden": the caller has not established who they are |
 | the issuer raises or is unreachable | `refused: unauthenticated`. It fails closed, so *a handler that reaches its body has been authenticated* is unconditionally true |
 
-Pinned by `packages/cliffracer-auth/tests/test_auth_context_reaches_the_handler.py::test_a_requires_roles_handler_runs_for_a_caller_with_the_role`
+Pinned by `packages/cliffracer-auth/tests/test_auth_context_propagation.py::test_a_requires_roles_handler_runs_for_a_caller_with_the_role`
 and its negative in the same file, both driving a real dispatch with a real
 token. `test_auth_decorators.py` sets the contextvar itself, so do not read it
 as evidence about the extension.

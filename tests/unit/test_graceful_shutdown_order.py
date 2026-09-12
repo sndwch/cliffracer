@@ -17,6 +17,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig, rpc
 from cliffracer.core.extension import Extension
 
+pytestmark = pytest.mark.unit
+
 
 class DatabaseExtension(Extension):
     """Simulates a stateful extension providing a database connection pool."""
@@ -58,7 +60,6 @@ class _MockMsg:
         self.response = json.loads(payload.decode())
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_active_rpc_finishes_before_extensions_are_stopped() -> None:
     """Verify active in-flight RPC finishes before extensions are stopped."""
@@ -117,7 +118,6 @@ async def test_active_rpc_finishes_before_extensions_are_stopped() -> None:
         assert timeline.index("rpc_queried_extension") < timeline.index("on_shutdown")
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_handle_rpc_request_drains_before_extension_teardown() -> None:
     """Verify _handle_rpc_request in _active_tasks finishes before extensions stop."""
@@ -181,7 +181,6 @@ async def test_handle_rpc_request_drains_before_extension_teardown() -> None:
         ]
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_shutdown_sequence_comprehensive_order() -> None:
     """Verify shutdown sequence order: timers, listener, subs, tasks, hooks, extensions, NATS."""
@@ -248,7 +247,6 @@ async def test_shutdown_sequence_comprehensive_order() -> None:
         assert events == expected
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_shutdown_without_active_tasks_is_clean() -> None:
     """When no active tasks are present, shutdown executes cleanly."""
@@ -267,7 +265,6 @@ async def test_shutdown_without_active_tasks_is_clean() -> None:
         assert svc._running is False
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_active_task_exception_during_drain_does_not_abort_teardown() -> None:
     """If an active in-flight task raises an exception during drain,

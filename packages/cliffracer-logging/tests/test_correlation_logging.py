@@ -4,6 +4,8 @@ import pytest
 
 from cliffracer import CorrelationContext, set_correlation_id
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.asyncio
 async def test_correlation_logging():

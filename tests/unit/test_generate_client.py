@@ -20,6 +20,8 @@ from cliffracer.generate_client.emitter import (
 )
 from cliffracer.introspect import Description
 
+pytestmark = pytest.mark.unit
+
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE_DESCRIPTION = REPO / "tests" / "fixtures" / "typed_client" / "description.json"
 
@@ -86,7 +88,6 @@ def _load(src: str, tmp_path, name: str = "orders_client"):
     return mod, path
 
 
-@pytest.mark.unit
 def test_emit_is_deterministic():
     out1 = emit(Description.from_dict(DESC))
     out2 = emit(Description.from_dict(DESC))
@@ -95,7 +96,6 @@ def test_emit_is_deterministic():
     assert out1 == out2
 
 
-@pytest.mark.unit
 def test_annotation_text_for_every_kind():
     assert annotation_text({"kind": "scalar", "name": "none"}) == "None"
     assert (
@@ -109,7 +109,6 @@ def test_annotation_text_for_every_kind():
     assert annotation_text({"kind": "model", "module": "m.n", "qualname": "X.Y"}) == "NX.Y"
 
 
-@pytest.mark.unit
 def test_the_generated_module_imports_and_has_typed_methods(tmp_path):
     """The annotations are the real classes, imported from where DESC says.
 
@@ -135,7 +134,6 @@ def test_the_generated_module_imports_and_has_typed_methods(tmp_path):
     assert mod.OrdersClient.DESCRIPTION_HASH == "sha256:abc"
 
 
-@pytest.mark.unit
 def test_the_generated_file_is_already_formatted_for_ruffs_defaults(tmp_path):
     """Otherwise every generated client is a diff the first time anyone runs
     the formatter, and the file that is supposed to be checked in and forgotten
@@ -182,7 +180,6 @@ def test_the_generated_file_is_already_formatted_for_ruffs_defaults(tmp_path):
         assert long_lines.returncode == 0, long_lines.stdout + long_lines.stderr
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("where", ["repo", "elsewhere"])
 def test_the_generated_file_passes_lint_under_either_configuration(tmp_path, where):
     """Verify generated client passes linter checks regardless of working directory configuration."""
@@ -198,7 +195,6 @@ def test_the_generated_file_passes_lint_under_either_configuration(tmp_path, whe
     assert lint.returncode == 0, lint.stdout + lint.stderr
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("source", ["hand-written", "captured"])
 def test_no_emitted_line_is_longer_than_the_target(source):
     """Verify emitted code contains no line exceeding the target length limit."""
@@ -215,7 +211,6 @@ def test_no_emitted_line_is_longer_than_the_target(source):
     assert not too_long, too_long
 
 
-@pytest.mark.unit
 def test_a_private_model_module_cannot_be_emitted():
     bad = {
         **DESC,
@@ -230,7 +225,6 @@ def test_a_private_model_module_cannot_be_emitted():
         emit(Description.from_dict(bad))
 
 
-@pytest.mark.unit
 def test_no_timestamps_or_environment_in_the_output():
     src = emit(Description.from_dict(DESC))
     assert "GENERATED_AT" not in src and "202" not in src.split("\n", 3)[0]
@@ -239,7 +233,6 @@ def test_no_timestamps_or_environment_in_the_output():
 # --- the committed fixture description, and the emitter over a REAL one -------
 
 
-@pytest.mark.unit
 def test_the_committed_description_matches_the_class():
     """The fixture cannot drift from the service it describes.
 
@@ -254,7 +247,6 @@ def test_the_committed_description_matches_the_class():
     assert FIXTURE_DESCRIPTION.read_text() == current() + "\n"
 
 
-@pytest.mark.unit
 def test_a_real_description_emits_a_formatted_importable_client(tmp_path):
     """The hand-written DESC above covers the type kinds; this covers a
     description nobody wrote by hand -- nested models, a list return, an
@@ -289,7 +281,6 @@ class _FixtureNum(int, enum.Enum):
     TWO = 2
 
 
-@pytest.mark.unit
 def test_service_version_cannot_escape_docstring(tmp_path):
     # Verify version with triple quotes does not execute code on import.
     evil_version = 'sha256:x"""\nMARKER = "escaped"\n"""'
@@ -315,7 +306,6 @@ def test_service_version_cannot_escape_docstring(tmp_path):
     assert mod.OrdersClient.VERSION == evil_version
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("bad_service", ["order.service", "123", "order service", "", "service"])
 def test_invalid_service_names_are_refused(bad_service):
     # Refuse service names that cannot form valid class identifiers.
@@ -326,7 +316,6 @@ def test_invalid_service_names_are_refused(bad_service):
     assert "cannot generate a client for" in str(exc_info.value)
 
 
-@pytest.mark.unit
 def test_annotation_text_handles_empty_and_enum_literals():
     # Verify emitter handles empty and enum literal values.
     assert annotation_text({"kind": "literal", "values": []}) == "Literal[()]"
@@ -336,7 +325,6 @@ def test_annotation_text_handles_empty_and_enum_literals():
     )
 
 
-@pytest.mark.unit
 def test_keyword_only_parameter_ordering_emits_valid_ast():
     """Verify non-default parameter following default parameter emits keyword-only asterisk."""
     from cliffracer.introspect import Method, Param
@@ -368,7 +356,6 @@ def test_keyword_only_parameter_ordering_emits_valid_ast():
     ast.parse(code)
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     "method_name", ["verify", "close", "SERVICE", "VERSION", "DESCRIPTION_HASH", "SIGNATURES"]
 )
@@ -395,7 +382,6 @@ def test_reserved_method_names_refused_by_emitter(method_name):
     assert method_name in str(exc.value)
 
 
-@pytest.mark.unit
 def test_leading_underscore_param_refused_by_emitter():
     """Verify parameters with leading underscore are refused by emitter."""
     from cliffracer.introspect import Method, Param

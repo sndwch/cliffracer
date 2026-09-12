@@ -18,6 +18,8 @@ from cliffracer.core.extension import (
     entrypoint,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class SubNode:
     """Nested state node to verify deep copying and instance isolation."""
@@ -73,7 +75,6 @@ class ParentWithNestedExtension(Extension):
         self.parent_log: list[str] = []
 
 
-@pytest.mark.unit
 def test_massive_multithreaded_concurrent_bind_and_mutation() -> None:
     """Stress-test extension state isolation across 100 concurrent worker threads."""
     spec = HighlyConcurrentExtension(
@@ -187,7 +188,6 @@ def _run_freeze_race_iteration(iteration: int) -> None:
         assert bound.tag_list[1].startswith("worker_")
 
 
-@pytest.mark.unit
 def test_concurrent_bind_racing_with_dynamic_freeze() -> None:
     """Stress-test concurrent bind() calls racing against freeze() execution."""
     for iteration in range(5):
@@ -243,7 +243,6 @@ async def test_multitask_asyncio_concurrent_hook_execution_stress() -> None:
     assert spec.history == []
 
 
-@pytest.mark.unit
 def test_unfrozen_spec_concurrent_bind_preserves_spec_arguments() -> None:
     """Verify that an unfrozen specification preserves its declaration arguments under concurrent bind."""
     spec = HighlyConcurrentExtension(
@@ -272,7 +271,6 @@ def test_unfrozen_spec_concurrent_bind_preserves_spec_arguments() -> None:
     assert len(spec.tag_list) == 1
 
 
-@pytest.mark.unit
 def test_nested_extension_cloning_isolation_under_concurrency() -> None:
     """Verify nested extensions passed as constructor arguments are cloned independently."""
     child_spec = NestedChildExtension(prefix="shared_inner")
@@ -305,7 +303,6 @@ def test_nested_extension_cloning_isolation_under_concurrency() -> None:
     assert child_spec.child_log == []
 
 
-@pytest.mark.unit
 def test_safe_clone_arg_edge_cases() -> None:
     """Verify _safe_clone_arg handles deeply nested and edge-case argument types."""
     # 1. Tuple containing nested lists
@@ -339,7 +336,6 @@ def test_safe_clone_arg_edge_cases() -> None:
     assert _safe_clone_arg(None) is None
 
 
-@pytest.mark.unit
 def test_entrypoint_discovery_thread_safety_stress() -> None:
     """Verify concurrent instantiation and discovery across multiple CliffracerService classes."""
 

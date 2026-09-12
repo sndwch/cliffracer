@@ -25,6 +25,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.extension import Extension
 
+pytestmark = pytest.mark.unit
+
 
 class Recorder:
     """A stand-in for `nc` that records what the send paths hand it."""
@@ -93,7 +95,6 @@ def loop():
 # --- every path runs the pair -----------------------------------------------
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     "call, kind",
     [
@@ -113,7 +114,6 @@ def test_each_send_path_runs_before_and_after_once(loop, call, kind):
     assert {c[1] for c in bound_spy.calls} == {kind}
 
 
-@pytest.mark.unit
 def test_a_broadcast_fires_one_pair_not_two(loop):
     """The regression the split exists for: `broadcast` must not nest `publish_event`.
 
@@ -134,7 +134,6 @@ def test_a_broadcast_fires_one_pair_not_two(loop):
 # --- what a hook sees --------------------------------------------------------
 
 
-@pytest.mark.unit
 def test_a_hook_sees_the_namespaced_subject_and_the_real_payload(loop):
     """Asserted against what the RECORDER got, not against what the test passed.
 
@@ -152,7 +151,6 @@ def test_a_hook_sees_the_namespaced_subject_and_the_real_payload(loop):
     assert bound_spy.seen_payloads[0]["x"] == 1
 
 
-@pytest.mark.unit
 def test_after_call_receives_the_result(loop):
     spy = Spy()
     svc = _service(spy)
@@ -164,7 +162,6 @@ def test_after_call_receives_the_result(loop):
     assert bound_spy.excs[-1] is None
 
 
-@pytest.mark.unit
 def test_after_call_runs_when_the_send_raises_and_sees_the_exception(loop):
     spy = Spy()
     svc = _service(spy)
@@ -184,7 +181,6 @@ def test_after_call_runs_when_the_send_raises_and_sees_the_exception(loop):
 # --- ordering ----------------------------------------------------------------
 
 
-@pytest.mark.unit
 def test_before_in_declaration_order_after_in_reverse(loop):
     order: list[str] = []
 
@@ -206,7 +202,6 @@ def test_before_in_declaration_order_after_in_reverse(loop):
 # --- headers are the one mutable thing ---------------------------------------
 
 
-@pytest.mark.unit
 def test_a_header_added_in_before_call_reaches_the_wire(loop):
     """Verify headers modified in before_call are transmitted on the wire."""
     spy = Spy(label="bearer-xyz", header="authorization")
@@ -217,7 +212,6 @@ def test_a_header_added_in_before_call_reaches_the_wire(loop):
     assert "correlation_id" in headers
 
 
-@pytest.mark.unit
 def test_a_hook_cannot_change_the_payload(loop):
     """The contract is enforced by a copy, not described in a docstring."""
 
@@ -237,7 +231,6 @@ def test_a_hook_cannot_change_the_payload(loop):
 # --- a bad hook cannot break the send ----------------------------------------
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("hook", ["before_call", "after_call"])
 def test_a_raising_hook_is_swallowed_and_the_call_still_returns(loop, hook):
     """Verify exceptions raised in send-side hooks do not disrupt the RPC call."""

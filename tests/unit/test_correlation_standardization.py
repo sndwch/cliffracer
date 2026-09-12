@@ -19,8 +19,9 @@ from cliffracer.core.correlation import (
 from cliffracer.core.correlation_extension import CorrelationExtension
 from cliffracer.core.extension import WorkerContext
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 def test_extract_from_headers_case_insensitivity() -> None:
     """extract_from_headers matches canonical header regardless of casing."""
     cases = [
@@ -33,7 +34,6 @@ def test_extract_from_headers_case_insensitivity() -> None:
         assert CorrelationContext.extract_from_headers(headers) == "corr-123"
 
 
-@pytest.mark.unit
 def test_extract_from_headers_candidate_priority() -> None:
     """Precedence: x-correlation-id > x-request-id > x-trace-id > correlation-id > correlation_id."""
     headers = {
@@ -58,14 +58,12 @@ def test_extract_from_headers_candidate_priority() -> None:
     assert CorrelationContext.extract_from_headers(headers) == "underscore-lowest"
 
 
-@pytest.mark.unit
 def test_extract_from_headers_legacy_underscore() -> None:
     """Legacy correlation_id header key is recognized and extracted."""
     headers = {"correlation_id": "legacy-corr-001"}
     assert CorrelationContext.extract_from_headers(headers) == "legacy-corr-001"
 
 
-@pytest.mark.unit
 def test_extract_from_headers_edge_cases() -> None:
     """Gracefully handles None, non-dict, empty dict, and whitespace/empty values."""
     assert CorrelationContext.extract_from_headers(None) is None
@@ -84,7 +82,6 @@ def test_extract_from_headers_edge_cases() -> None:
     assert CorrelationContext.extract_from_headers({"X-Correlation-ID": 12345}) == "12345"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_correlation_extension_extracts_x_correlation_id() -> None:
     """CorrelationExtension.worker_setup extracts canonical X-Correlation-ID from ctx.headers."""
@@ -106,7 +103,6 @@ async def test_correlation_extension_extracts_x_correlation_id() -> None:
     assert correlation_id_var.get() is None
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_correlation_extension_header_precedence_over_payload() -> None:
     """Headers take precedence over payload.correlation_id per wire protocol §4.2."""
@@ -126,7 +122,6 @@ async def test_correlation_extension_header_precedence_over_payload() -> None:
         await ext.worker_teardown(ctx)
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_correlation_extension_payload_fallback() -> None:
     """If headers lack correlation ID, worker_setup falls back to payload.correlation_id."""
@@ -146,7 +141,6 @@ async def test_correlation_extension_payload_fallback() -> None:
         await ext.worker_teardown(ctx)
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_correlation_extension_generates_new_id_when_missing() -> None:
     """Generates fresh corr_<hex16> when neither header nor payload contains one."""
@@ -168,7 +162,6 @@ async def test_correlation_extension_generates_new_id_when_missing() -> None:
         await ext.worker_teardown(ctx)
 
 
-@pytest.mark.unit
 def test_client_headers_for_send_injects_canonical_and_legacy() -> None:
     """ServiceClient._headers_for_send injects X-Correlation-ID and dual-emits correlation_id."""
     client = ServiceClient(headers={"authorization": "bearer xyz"})
@@ -181,7 +174,6 @@ def test_client_headers_for_send_injects_canonical_and_legacy() -> None:
     assert headers["authorization"] == "bearer xyz"
 
 
-@pytest.mark.unit
 def test_container_send_context_injects_canonical_and_legacy() -> None:
     """Container._send_context injects X-Correlation-ID and dual-emits correlation_id."""
     cfg = ServiceConfig(name="test_svc", version="1.0.0")
@@ -194,7 +186,6 @@ def test_container_send_context_injects_canonical_and_legacy() -> None:
     assert ctx.headers["Content-Type"] == "application/json"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_container_publish_dlq_injects_correlation_headers() -> None:
     """Container._publish_dlq injects X-Correlation-ID and correlation_id into DLQ message headers."""

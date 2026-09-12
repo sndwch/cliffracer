@@ -2,8 +2,12 @@
 Unit tests for ServiceConfig
 """
 
+import pytest
+
 from cliffracer import ServiceConfig
 from tests.conftest import broker_url
+
+pytestmark = pytest.mark.unit
 
 
 class TestServiceConfig:

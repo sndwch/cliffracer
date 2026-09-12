@@ -15,6 +15,8 @@ from cliffracer_kv import KvExtension
 from cliffracer import CliffracerService, ServiceConfig, StreamSpec
 from cliffracer.core.exceptions import ConfigurationError
 
+pytestmark = pytest.mark.unit
+
 
 class FakeKVEntry:
     def __init__(self, key: str, value: bytes, revision: int = 1):
@@ -82,7 +84,6 @@ class FakeKvExtension:
         return self.bucket_handle
 
 
-@pytest.mark.unit
 class TestDistributedCronKeyValidation:
     def test_key_sanitization_removes_colons_and_spaces(self):
         """NATS KV keys must match ^[-/_=\\.a-zA-Z0-9]+$; colons and spaces are sanitized."""
@@ -104,7 +105,6 @@ class TestDistributedCronKeyValidation:
         assert re.match(r"^[-/_=\.a-zA-Z0-9]+$", key) is not None
 
 
-@pytest.mark.unit
 class TestDistributedCronStartupValidation:
     def test_discovery_fails_when_service_lacks_kv_extension(self):
         """Fast startup validation: raising ConfigurationError at discovery if no KvExtension."""
@@ -154,7 +154,6 @@ class TestDistributedCronStartupValidation:
             await timer.start(DummyService())
 
 
-@pytest.mark.unit
 class TestDistributedCronCompetition:
     @pytest.mark.asyncio
     async def test_single_winner_among_multiple_replicas(self):
@@ -298,7 +297,6 @@ class TestDistributedCronCompetition:
         assert executed_intervals == ["interval_1", "interval_3"]
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_live_nats_jetstream_distributed_cron():
     """Verify distributed cron leader election with real NATS JetStream KV store."""

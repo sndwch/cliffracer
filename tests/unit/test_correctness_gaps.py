@@ -10,6 +10,8 @@ from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.correlation import CorrelationContext
 from cliffracer.core.exceptions import RPCError, RPCTimeoutError
 
+pytestmark = pytest.mark.unit
+
 
 def _caller(namespace=None):
     svc = CliffracerService(ServiceConfig(name="caller", namespace=namespace))
@@ -23,7 +25,6 @@ def _resp(payload: dict):
     return r
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_call_rpc_raises_rpc_error_with_details():
     svc = _caller()
@@ -40,7 +41,6 @@ async def test_call_rpc_raises_rpc_error_with_details():
     assert "validation failed" in str(exc.value)
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_call_rpc_timeout_raises_rpc_timeout_error():
     # nats raises nats.errors.TimeoutError on request timeout (what call_rpc catches)
@@ -52,7 +52,6 @@ async def test_call_rpc_timeout_raises_rpc_timeout_error():
         await svc.call_rpc("user_service", "get_user")
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_call_rpc_success_returns_result():
     svc = _caller()
@@ -60,7 +59,6 @@ async def test_call_rpc_success_returns_result():
     assert await svc.call_rpc("user_service", "get_user") == {"id": "u1"}
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_call_rpc_sets_correlation_header():
     svc = _caller()
@@ -70,7 +68,6 @@ async def test_call_rpc_sets_correlation_header():
     assert svc.nc.request.call_args.kwargs["headers"]["correlation_id"] == "trace-abc"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_publish_event_sets_correlation_header():
     svc = _caller()
@@ -79,7 +76,6 @@ async def test_publish_event_sets_correlation_header():
     assert svc.nc.publish.call_args.kwargs["headers"]["correlation_id"] == "trace-xyz"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_correlation_propagates_into_spawned_task():
     """Regression lock-in: asyncio.create_task inherits the correlation contextvar

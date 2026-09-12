@@ -29,6 +29,8 @@ from cliffracer.core.decorators import (
 )
 from cliffracer.core.typed_rpc import build_handler_spec
 
+pytestmark = pytest.mark.unit
+
 
 class _Echoed(BaseModel):
     """The shape test_method returns: a str and an int, so not a dict[str, T]."""

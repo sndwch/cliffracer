@@ -7,6 +7,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.jetstream import StreamDeclarationError, StreamSpec
 
+pytestmark = pytest.mark.unit
+
 
 def _svc(**overrides):
     svc = CliffracerService(ServiceConfig(name="jorbo", **overrides))
@@ -15,7 +17,6 @@ def _svc(**overrides):
     return svc
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_covered_subject_publishes_through_jetstream():
     svc = _svc(
@@ -34,7 +35,6 @@ async def test_covered_subject_publishes_through_jetstream():
     assert "correlation_id" in svc.js.publish.call_args.kwargs["headers"]
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_the_store_ack_is_returned_to_the_caller():
     svc = _svc(
@@ -49,7 +49,6 @@ async def test_the_store_ack_is_returned_to_the_caller():
     assert result == "puback-sentinel"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_uncovered_subject_raises_rather_than_falling_back():
     """A silent fallback to nc.publish makes 'did this get an ack?' invisible."""
@@ -65,7 +64,6 @@ async def test_uncovered_subject_raises_rather_than_falling_back():
     assert svc.nc.publish.await_count == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_a_failed_store_ack_propagates():
     svc = _svc(

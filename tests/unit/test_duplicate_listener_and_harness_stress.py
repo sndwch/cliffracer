@@ -36,6 +36,8 @@ from cliffracer.core.service import CliffracerService
 from cliffracer.core.service_config import ServiceConfig
 from cliffracer.testing import ServiceTestHarness
 
+pytestmark = pytest.mark.unit
+
 
 class ItemPayload(BaseModel):
     item_id: str = Field(min_length=1)
@@ -47,7 +49,6 @@ class ItemPayload(BaseModel):
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_duplicate_listener_exact_subject_without_namespace_raises() -> None:
     """Two distinct methods listening on the exact same subject raise ConfigurationError."""
 
@@ -70,7 +71,6 @@ def test_duplicate_listener_exact_subject_without_namespace_raises() -> None:
     assert "on_created_second" in err or "on_created_first" in err
 
 
-@pytest.mark.unit
 def test_duplicate_listener_exact_subject_with_namespace_raises() -> None:
     """Two methods on the same subject under a service namespace raise ConfigurationError."""
 
@@ -92,7 +92,6 @@ def test_duplicate_listener_exact_subject_with_namespace_raises() -> None:
     assert "Duplicate event listener declared on subject 'production.orders.created'" in err
 
 
-@pytest.mark.unit
 def test_duplicate_listener_multi_decorator_same_method_raises() -> None:
     """A single method decorated twice with the same subject raises ConfigurationError."""
 
@@ -112,7 +111,6 @@ def test_duplicate_listener_multi_decorator_same_method_raises() -> None:
     assert "handle_orders" in err
 
 
-@pytest.mark.unit
 def test_cross_decorator_standard_and_validated_listener_collision_raises() -> None:
     """Collision between standard @listener and @validated_listener on identical subject raises."""
 
@@ -134,7 +132,6 @@ def test_cross_decorator_standard_and_validated_listener_collision_raises() -> N
     assert "Duplicate event listener declared on subject 'inventory.updated'" in err
 
 
-@pytest.mark.unit
 def test_cross_decorator_broadcast_and_standard_listener_collision_raises() -> None:
     """Collision between @broadcast and @listener on identical subject raises ConfigurationError."""
 
@@ -156,7 +153,6 @@ def test_cross_decorator_broadcast_and_standard_listener_collision_raises() -> N
     assert "Duplicate event listener declared on subject 'system.alerts'" in err
 
 
-@pytest.mark.unit
 def test_cross_namespace_subject_collision_raises() -> None:
     """Cross-namespace subject collision (*.events vs pattern matching *.events) raises."""
 
@@ -183,7 +179,6 @@ def test_cross_namespace_subject_collision_raises() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_wildcard_and_exact_listeners_coexist_without_error() -> None:
     """Wildcard (orders.*) and exact (orders.created) are distinct subscription patterns and coexist."""
 
@@ -210,7 +205,6 @@ def test_wildcard_and_exact_listeners_coexist_without_error() -> None:
     assert len(reg.event_handlers) == 3
 
 
-@pytest.mark.unit
 async def test_wildcard_and_exact_listeners_dispatch_isolation() -> None:
     """When dispatching via harness, wildcard and exact handlers execute independently."""
     wildcard_calls: list[dict[str, Any]] = []
@@ -252,7 +246,6 @@ async def test_wildcard_and_exact_listeners_dispatch_isolation() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_inherited_class_distinct_methods_same_subject_raises() -> None:
     """Subclass with a new method on the same subject as base class raises ConfigurationError."""
 
@@ -276,7 +269,6 @@ def test_inherited_class_distinct_methods_same_subject_raises() -> None:
     assert "on_derived_payment" in err or "on_base_payment" in err
 
 
-@pytest.mark.unit
 def test_inherited_class_overridden_method_is_registered_once() -> None:
     """Subclass overriding base method with same name replaces handler without duplicate collision."""
     calls: list[str] = []
@@ -300,7 +292,6 @@ def test_inherited_class_overridden_method_is_registered_once() -> None:
     assert reg.event_handler_names["payments.processed"] == "on_payment"
 
 
-@pytest.mark.unit
 def test_inherited_class_override_without_decorator_removes_listener() -> None:
     """Subclass overriding base method without decorator suppresses listener registration."""
 
@@ -321,7 +312,6 @@ def test_inherited_class_override_without_decorator_removes_listener() -> None:
     assert len(reg.event_handlers) == 0
 
 
-@pytest.mark.unit
 def test_multiple_inheritance_listener_collision_raises() -> None:
     """Multiple base mixins declaring handlers for the same subject raise ConfigurationError."""
 
@@ -352,7 +342,6 @@ def test_multiple_inheritance_listener_collision_raises() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_listeners_with_different_durables_on_same_subject_raises_duplicate_error() -> None:
     """Two handlers with distinct durable names on the SAME subject raise duplicate listener error."""
 
@@ -378,7 +367,6 @@ def test_listeners_with_different_durables_on_same_subject_raises_duplicate_erro
     assert "Duplicate event listener declared on subject 'events.queue'" in err
 
 
-@pytest.mark.unit
 def test_listeners_with_same_durable_on_different_subjects_raises_durable_conflict() -> None:
     """Two handlers sharing the same durable on different subjects raise unique durable error."""
 
@@ -429,7 +417,6 @@ class HarnessAuditService(CliffracerService):
         pass
 
 
-@pytest.mark.unit
 async def test_harness_publish_exact_alias_identity() -> None:
     """ServiceTestHarness.publish is identical in function reference to emit_event."""
     async with ServiceTestHarness(HarnessAuditService) as harness:
@@ -437,7 +424,6 @@ async def test_harness_publish_exact_alias_identity() -> None:
         assert harness.publish.__func__ is harness.emit_event.__func__  # type: ignore[attr-defined]
 
 
-@pytest.mark.unit
 async def test_harness_publish_payload_parity() -> None:
     """publish and emit_event behave identically across dict, kwargs, primitive, and model payloads."""
     async with ServiceTestHarness(HarnessAuditService) as harness:
@@ -476,7 +462,6 @@ async def test_harness_publish_payload_parity() -> None:
         assert invalid_out_emit == DispatchOutcome.INVALID
 
 
-@pytest.mark.unit
 async def test_harness_publish_headers_and_content_type_parity() -> None:
     """publish preserves headers, custom correlation ID, and format encoding."""
     received_headers: list[dict[str, str]] = []
@@ -552,7 +537,6 @@ class AsyncHazardService(CliffracerService):
         return {"status": "spawned_failing"}
 
 
-@pytest.mark.unit
 async def test_harness_publish_error_isolation() -> None:
     """Listener exception during publish does not crash harness and returns DispatchOutcome.OK."""
     async with ServiceTestHarness(AsyncHazardService) as harness:
@@ -562,7 +546,6 @@ async def test_harness_publish_error_isolation() -> None:
         assert svc.crashed is True
 
 
-@pytest.mark.unit
 async def test_harness_teardown_drains_and_prevents_task_leaks() -> None:
     """Teardown terminates running background tasks when is_running becomes False."""
     async with ServiceTestHarness(AsyncHazardService) as harness:
@@ -576,7 +559,6 @@ async def test_harness_teardown_drains_and_prevents_task_leaks() -> None:
     assert len(harness.container.lifecycle.active_tasks) == 0
 
 
-@pytest.mark.unit
 async def test_harness_teardown_handles_failing_supervised_tasks() -> None:
     """Teardown cleanly drains tasks that raise exceptions without propagating errors to caller."""
     async with ServiceTestHarness(AsyncHazardService) as harness:

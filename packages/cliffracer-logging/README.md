@@ -39,7 +39,7 @@ today, and each appears as the first word of the log line: `rpc`, `async_rpc`,
 `event` and `timer`.
 
 The container runs the chain for every dispatch, so new dispatch paths are 
-timed automatically. This is verified by `tests/unit/test_instrumentation_coverage.py`.
+timed automatically. This is verified by `tests/repo/test_instrumentation_coverage.py`.
 
 Outbound calls are logged by core itself: `call_rpc`, `call_async` and
 `broadcast_message` each write their own line. `connect` and `disconnect` are

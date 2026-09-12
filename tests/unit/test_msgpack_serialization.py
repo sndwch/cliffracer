@@ -22,6 +22,8 @@ from cliffracer.core.validation import (
     unpack_msgpack,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class SubItem(BaseModel):
     label: str
@@ -89,7 +91,6 @@ class _MockMsg:
 
 
 # 1. ServiceConfig tests
-@pytest.mark.unit
 def test_service_config_serialization_format():
     # Default is "json"
     cfg_default = ServiceConfig(name="svc")
@@ -112,7 +113,6 @@ def test_service_config_serialization_format():
 
 
 # 2. Primitives roundtrip
-@pytest.mark.unit
 def test_pack_and_unpack_msgpack_primitives():
     primitives = {
         "int": 42,
@@ -132,7 +132,6 @@ def test_pack_and_unpack_msgpack_primitives():
 
 
 # 3. Complex types & Pydantic models roundtrip
-@pytest.mark.unit
 def test_pack_and_unpack_complex_pydantic_model():
     model = ComplexModel(
         item_id=uuid.uuid4(),
@@ -156,7 +155,6 @@ def test_pack_and_unpack_complex_pydantic_model():
 
 
 # 4. serialize_payload and deserialize_payload tests
-@pytest.mark.unit
 def test_serialize_payload():
     data = {"hello": "world", "num": 1}
 
@@ -182,7 +180,6 @@ def test_serialize_payload():
         serialize_payload(data, format="protobuf")
 
 
-@pytest.mark.unit
 def test_deserialize_payload_edge_cases():
     data = {"key": "value", "id": 99}
     raw_mp = pack_msgpack(data)
@@ -235,7 +232,6 @@ async def msgpack_svc():
     return service
 
 
-@pytest.mark.unit
 async def test_inbound_rpc_msgpack_request_and_response(json_svc):
     """A service configured for JSON receives MsgPack and replies in MsgPack."""
     req_payload = {"request": {"message": "hello msgpack", "count": 2}}
@@ -256,7 +252,6 @@ async def test_inbound_rpc_msgpack_request_and_response(json_svc):
     assert resp["result"] == {"echoed": "hello msgpack", "count": 2}
 
 
-@pytest.mark.unit
 async def test_inbound_rpc_json_request_to_msgpack_service(msgpack_svc):
     """A service configured for MsgPack receives JSON and replies in JSON."""
     req_payload = {"request": {"message": "hello json", "count": 3}}
@@ -277,7 +272,6 @@ async def test_inbound_rpc_json_request_to_msgpack_service(msgpack_svc):
     assert resp["result"] == {"echoed": "hello json", "count": 3}
 
 
-@pytest.mark.unit
 async def test_inbound_rpc_untyped_json_request_to_msgpack_service(msgpack_svc):
     """A legacy client without Content-Type header sends JSON to a msgpack service."""
     req_payload = {"request": {"message": "untyped json", "count": 1}}
@@ -298,7 +292,6 @@ async def test_inbound_rpc_untyped_json_request_to_msgpack_service(msgpack_svc):
     assert resp["result"] == {"echoed": "untyped json", "count": 1}
 
 
-@pytest.mark.unit
 async def test_inbound_rpc_msgpack_validation_failure_envelope(json_svc):
     """Validation failure on MsgPack payload returns structured error envelope in MsgPack."""
     invalid_payload = {
@@ -322,7 +315,6 @@ async def test_inbound_rpc_msgpack_validation_failure_envelope(json_svc):
     assert "details" in resp
 
 
-@pytest.mark.unit
 async def test_inbound_rpc_corrupted_msgpack_bytes(json_svc):
     """Corrupted binary bytes with MsgPack header returns validation error envelope."""
     corrupted_bytes = b"\xc1\xff\x00\xee\x12"
@@ -343,7 +335,6 @@ async def test_inbound_rpc_corrupted_msgpack_bytes(json_svc):
     assert resp["details"][0]["loc"] == ["__root__"]
 
 
-@pytest.mark.unit
 async def test_inbound_rpc_unknown_method_msgpack(json_svc):
     """Unknown method request with MsgPack Content-Type replies in MsgPack."""
     msg = _MockMsg(
@@ -361,7 +352,6 @@ async def test_inbound_rpc_unknown_method_msgpack(json_svc):
     assert "Unknown method" in resp["error"]
 
 
-@pytest.mark.unit
 async def test_inbound_rpc_handler_exception_msgpack(json_svc):
     """Handler exception with MsgPack Content-Type replies in MsgPack."""
     msg = _MockMsg(
@@ -395,7 +385,6 @@ async def test_inbound_rpc_handler_exception_msgpack(json_svc):
 
 
 # 6. Outbound RPC & Event calls
-@pytest.mark.unit
 async def test_outbound_call_rpc_msgpack(msgpack_svc):
     """Outbound call_rpc sends MsgPack and attaches Content-Type header."""
     mock_nc = MagicMock()
@@ -424,7 +413,6 @@ async def test_outbound_call_rpc_msgpack(msgpack_svc):
     assert sent_headers["Content-Type"] == CONTENT_TYPE_MSGPACK
 
 
-@pytest.mark.unit
 async def test_outbound_call_rpc_json_svc_decodes_msgpack_reply(json_svc):
     """A service configured for JSON handles a MsgPack reply seamlessly."""
     mock_nc = MagicMock()
@@ -442,7 +430,6 @@ async def test_outbound_call_rpc_json_svc_decodes_msgpack_reply(json_svc):
     assert result == "msgpack response"
 
 
-@pytest.mark.unit
 async def test_outbound_call_rpc_raises_rpc_error(msgpack_svc):
     mock_nc = MagicMock()
     mock_reply = MagicMock()
@@ -457,7 +444,6 @@ async def test_outbound_call_rpc_raises_rpc_error(msgpack_svc):
     assert exc_info.value.details == [{"msg": "err"}]
 
 
-@pytest.mark.unit
 async def test_outbound_call_async_and_no_wait_msgpack(msgpack_svc):
     mock_nc = MagicMock()
     mock_nc.publish = AsyncMock()
@@ -479,7 +465,6 @@ async def test_outbound_call_async_and_no_wait_msgpack(msgpack_svc):
     assert headers["Content-Type"] == CONTENT_TYPE_MSGPACK
 
 
-@pytest.mark.unit
 async def test_outbound_publish_event_msgpack(msgpack_svc):
     mock_nc = MagicMock()
     mock_nc.publish = AsyncMock()
@@ -495,7 +480,6 @@ async def test_outbound_publish_event_msgpack(msgpack_svc):
 
 
 # 7. Inbound async and event handlers with MsgPack
-@pytest.mark.unit
 async def test_inbound_async_request_msgpack(msgpack_svc):
     msg = _MockMsg(
         subject="test_svc.async.async_action",
@@ -507,7 +491,6 @@ async def test_inbound_async_request_msgpack(msgpack_svc):
     assert msgpack_svc.received_async == "apple"
 
 
-@pytest.mark.unit
 async def test_inbound_event_dispatch_msgpack(msgpack_svc):
     msg = _MockMsg(
         subject="test.event",
@@ -521,7 +504,6 @@ async def test_inbound_event_dispatch_msgpack(msgpack_svc):
 
 
 # 8. CliffracerClient content negotiation
-@pytest.mark.unit
 async def test_client_content_type_negotiation():
     client = ServiceClient(service="test_svc", nats_url="nats://localhost:4222", verify=False)
     client._verified = True

@@ -10,6 +10,8 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, async_rpc, rpc
 
+pytestmark = pytest.mark.unit
+
 
 class TestAsyncRPC:
     """Test async RPC calling patterns"""

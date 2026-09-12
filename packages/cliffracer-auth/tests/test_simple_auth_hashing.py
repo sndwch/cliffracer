@@ -5,6 +5,8 @@ import hashlib
 import pytest
 from cliffracer_auth.simple_auth import AuthConfig, AuthUser, SimpleAuthService
 
+pytestmark = pytest.mark.unit
+
 SECRET = "x" * 40
 
 
@@ -12,7 +14,6 @@ def _service(**overrides):
     return SimpleAuthService(AuthConfig(secret_key=SECRET, **overrides))
 
 
-@pytest.mark.unit
 class TestEncodedHash:
     def test_hash_has_the_encoded_shape(self):
         svc = _service()
@@ -52,7 +53,6 @@ class TestEncodedHash:
         assert high.verify_password("pw", h)
 
 
-@pytest.mark.unit
 class TestSecretKeyIndependence:
     def test_rotating_the_secret_key_does_not_invalidate_hashes(self):
         """Verify rotating the secret key does not invalidate password hashes."""
@@ -65,7 +65,6 @@ class TestSecretKeyIndependence:
         assert rotated.verify_password("shared-password", stored)
 
 
-@pytest.mark.unit
 class TestLegacyHashes:
     def _legacy(self, password, secret=SECRET):
         """Reproduce the pre-1.4.0 algorithm exactly."""
@@ -92,7 +91,6 @@ class TestLegacyHashes:
         assert svc.verify_password("legacy-password", legacy)
 
 
-@pytest.mark.unit
 class TestMalformedInput:
     @pytest.mark.parametrize(
         "bad",
@@ -122,7 +120,6 @@ _TRIPWIRE_MESSAGE = (
 )
 
 
-@pytest.mark.unit
 class TestUserStoreIsNotPersistent:
     """Verify that default SimpleAuthService user store is ephemeral across service instantiations."""
 
@@ -143,7 +140,6 @@ class TestUserStoreIsNotPersistent:
         assert restarted.authenticate("tripwire", password) is None, _TRIPWIRE_MESSAGE
 
 
-@pytest.mark.unit
 class TestLegacyPasswordRehashing:
     """Verify that authenticating with a legacy hash upgrades it to modern PBKDF2 (#339)."""
 
@@ -221,7 +217,6 @@ class TestLegacyPasswordRehashing:
         assert svc._users["modern"]["password_hash"] == original_hash
 
 
-@pytest.mark.unit
 class TestAuthConfigCleanups:
     """Verify pruning of vestigial fields from AuthConfig (#338)."""
 

@@ -53,6 +53,8 @@ from cliffracer.core.service import CliffracerService
 from cliffracer.core.service_config import ServiceConfig
 from cliffracer.core.typed_rpc import UntypedHandler
 
+pytestmark = pytest.mark.unit
+
 
 class UserCreated(BaseModel):
     user_id: str
@@ -64,7 +66,6 @@ class UserCreated(BaseModel):
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_unannotated_parameter_fails_startup_with_untyped_handler() -> None:
     """Refuse unannotated event parameters during discovery."""
 
@@ -86,7 +87,6 @@ def test_unannotated_parameter_fails_startup_with_untyped_handler() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 def test_positional_only_arg_fails_startup_with_untyped_handler() -> None:
     """Refuse positional-only event parameters during discovery."""
 
@@ -100,7 +100,6 @@ def test_positional_only_arg_fails_startup_with_untyped_handler() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 def test_var_positional_args_fails_startup_with_untyped_handler() -> None:
     """Refuse *args in event handlers during discovery."""
 
@@ -114,7 +113,6 @@ def test_var_positional_args_fails_startup_with_untyped_handler() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 def test_var_keyword_kwargs_fails_startup_with_untyped_handler() -> None:
     """Refuse **kwargs in event handlers during discovery."""
 
@@ -128,7 +126,6 @@ def test_var_keyword_kwargs_fails_startup_with_untyped_handler() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 def test_var_keyword_data_fails_startup_with_untyped_handler() -> None:
     """Refuse **data in event handlers during discovery."""
 
@@ -142,7 +139,6 @@ def test_var_keyword_data_fails_startup_with_untyped_handler() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 def test_bare_dict_fails_startup_with_untyped_handler() -> None:
     """Refuse bare dict parameters during discovery."""
 
@@ -156,7 +152,6 @@ def test_bare_dict_fails_startup_with_untyped_handler() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 def test_bare_list_fails_startup_with_untyped_handler() -> None:
     """Refuse bare list parameters during discovery."""
 
@@ -170,7 +165,6 @@ def test_bare_list_fails_startup_with_untyped_handler() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 def test_bare_any_fails_startup_with_untyped_handler() -> None:
     """Refuse bare Any parameters during discovery."""
 
@@ -184,7 +178,6 @@ def test_bare_any_fails_startup_with_untyped_handler() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 def test_broadcast_handler_strict_typing_enforced() -> None:
     """Refuse untyped parameters and bare containers on @broadcast handlers."""
 
@@ -198,7 +191,6 @@ def test_broadcast_handler_strict_typing_enforced() -> None:
         svc.container.discover_handlers()
 
 
-@pytest.mark.unit
 def test_reserved_and_private_names_fail_startup() -> None:
     """Refuse private parameter names and reserved BaseModel attributes."""
 
@@ -221,7 +213,6 @@ def test_reserved_and_private_names_fail_startup() -> None:
         svc_res.container.discover_handlers()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_invalid_payload_routes_to_dlq_and_calls_safe_term() -> None:
     """Route invalid payload to DLQ, invoke safe_term(msg), and return INVALID without crash."""
@@ -277,7 +268,6 @@ async def test_invalid_payload_routes_to_dlq_and_calls_safe_term() -> None:
     assert invoked is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_safe_term_survives_missing_or_failing_term() -> None:
     """Verify safe_term does not crash if msg has no term method or if term raises."""
@@ -324,7 +314,6 @@ async def test_safe_term_survives_missing_or_failing_term() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_issubclass_client_error_rpc_error() -> None:
     """Verify issubclass(ClientError, RpcError) and all RPC error hierarchy relationships."""
     assert issubclass(ClientError, RpcError)
@@ -345,7 +334,6 @@ def test_issubclass_client_error_rpc_error() -> None:
     assert not issubclass(RpcError, ServiceError)
 
 
-@pytest.mark.unit
 def test_try_except_rpc_error_catches_all_client_and_server_errors() -> None:
     """Verify try: ... except RpcError catches both client-side and server-side errors."""
     client_and_server_exceptions: list[RpcError] = [
@@ -378,7 +366,6 @@ def test_try_except_rpc_error_catches_all_client_and_server_errors() -> None:
         assert caught is True, f"Failed to catch {exc.__class__.__name__} under RpcError"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_resilience_circuit_breaker_trips_on_rpc_error_and_subclasses() -> None:
     """Verify cliffracer-resilience CircuitBreaker trips on RpcError and its subclasses."""
@@ -418,7 +405,6 @@ async def test_resilience_circuit_breaker_trips_on_rpc_error_and_subclasses() ->
     assert called is False
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_resilience_circuit_breaker_ignores_non_monitored_exceptions() -> None:
     """Verify CircuitBreaker does not increment failure count on non-monitored exceptions."""
@@ -442,7 +428,6 @@ async def test_resilience_circuit_breaker_ignores_non_monitored_exceptions() -> 
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_container_encapsulation_and_no_magic_setattr() -> None:
     """Verify svc._container is encapsulated and attributes do not magically sync via __setattr__."""
 
@@ -474,7 +459,6 @@ def test_container_encapsulation_and_no_magic_setattr() -> None:
     assert svc.service_attribute == "service_value"
 
 
-@pytest.mark.unit
 def test_service_lifecycle_properties_reflect_container_state() -> None:
     """Verify CliffracerService lifecycle properties reflect container.lifecycle state."""
 
@@ -498,7 +482,6 @@ def test_service_lifecycle_properties_reflect_container_state() -> None:
     assert svc._running is False
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_clean_lifecycle_state_transitions_without_reverse_delegations() -> None:
     """Verify deterministic startup and shutdown lifecycle transitions without reverse delegations."""

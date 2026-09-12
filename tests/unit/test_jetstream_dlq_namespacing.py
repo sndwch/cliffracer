@@ -7,8 +7,9 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.jetstream import StreamDeclarationError, StreamSpec
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 def test_namespaced_service_dlq_covered_by_root_stream():
     """Namespaced service DLQ is covered by root 'dlq.*' JetStream stream."""
     svc = CliffracerService(
@@ -24,7 +25,6 @@ def test_namespaced_service_dlq_covered_by_root_stream():
     svc.container._assert_dlq_covered()
 
 
-@pytest.mark.unit
 def test_namespaced_service_dlq_covered_by_gt_stream():
     """Namespaced service DLQ is covered by root 'dlq.>' JetStream stream."""
     svc = CliffracerService(
@@ -39,7 +39,6 @@ def test_namespaced_service_dlq_covered_by_gt_stream():
     svc.container._assert_dlq_covered()
 
 
-@pytest.mark.unit
 def test_custom_dlq_template_with_namespace():
     """Custom dlq_subject formatting supports both {namespace} and {service}."""
     svc = CliffracerService(
@@ -70,7 +69,6 @@ def test_custom_dlq_template_with_namespace():
         svc_bad_stream.container._assert_dlq_covered()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_publish_dlq_publishes_verbatim_root_subject():
     """_publish_dlq emits directly to raw subject without namespace prefixing."""
@@ -89,7 +87,6 @@ async def test_publish_dlq_publishes_verbatim_root_subject():
     assert "prod.dlq.orders" != call_args.args[0]
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_publish_dlq_bypasses_send_hooks():
     """_publish_dlq does not invoke application extension send hooks."""

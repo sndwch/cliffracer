@@ -6,6 +6,8 @@ import jwt
 import pytest
 from cliffracer_auth.simple_auth import AuthConfig, SimpleAuthService
 
+pytestmark = pytest.mark.unit
+
 SECRET = "x" * 40
 
 
@@ -19,7 +21,6 @@ def _decode(svc, token):
     return jwt.decode(token, SECRET, algorithms=[svc.config.algorithm])
 
 
-@pytest.mark.unit
 class TestRefreshSucceeds:
     def test_a_valid_token_refreshes(self):
         """Verify that a valid token can be refreshed."""
@@ -58,7 +59,6 @@ class TestRefreshSucceeds:
         assert not any("invalid password" in str(m).lower() for m in messages)
 
 
-@pytest.mark.unit
 class TestRefreshRefuses:
     def test_an_invalid_token_returns_none(self):
         svc = _service()
@@ -78,7 +78,6 @@ class TestRefreshRefuses:
         assert svc.refresh_token(token) is None
 
 
-@pytest.mark.unit
 class TestRefreshReadsCurrentState:
     def test_role_changes_since_login_are_reflected(self):
         """Re-signing a stale snapshot would silently extend revoked access."""
@@ -90,7 +89,6 @@ class TestRefreshReadsCurrentState:
         assert set(_decode(svc, refreshed)["roles"]) == {"admin"}
 
 
-@pytest.mark.unit
 class TestLifetimeCap:
     def test_unbounded_by_default(self):
         svc = _service()
@@ -136,7 +134,6 @@ class TestLifetimeCap:
         assert svc.refresh_token(legacy) is not None
 
 
-@pytest.mark.unit
 def test_the_unused_refresh_token_map_is_gone():
     """Dead state named as if it backed the refresh flow, next to a refresh flow
     that now works, is worse than the status quo where nothing worked."""

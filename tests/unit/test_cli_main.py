@@ -3,10 +3,11 @@ import pytest
 from cliffracer.cli.main import build_orchestrator, build_parser, flag_overrides_from_args
 from tests.unit.cli_fixtures.sample_services import AlphaService
 
+pytestmark = pytest.mark.unit
+
 MOD = "tests.unit.cli_fixtures.sample_services"
 
 
-@pytest.mark.unit
 def test_parser_run_accepts_targets_and_flags():
     parser = build_parser()
     args = parser.parse_args(
@@ -18,14 +19,12 @@ def test_parser_run_accepts_targets_and_flags():
     assert args.log_level == "DEBUG"
 
 
-@pytest.mark.unit
 def test_flag_overrides_only_includes_set_flags():
     parser = build_parser()
     args = parser.parse_args(["run", f"{MOD}:AlphaService"])
     assert flag_overrides_from_args(args) == {}
 
 
-@pytest.mark.unit
 def test_build_orchestrator_resolves_targets_and_carries_overrides():
     """What the two removed backdoor tests also proved, minus the backdoor.
 
@@ -45,7 +44,6 @@ def test_build_orchestrator_resolves_targets_and_carries_overrides():
     assert runner.overrides["nats_url"] == "nats://x:4222"
 
 
-@pytest.mark.unit
 def test_build_orchestrator_expands_a_module_target_to_every_service():
     orch = build_orchestrator([MOD], nats_url=None, log_level=None, config_path=None)
     assert len(orch.runners) == 2

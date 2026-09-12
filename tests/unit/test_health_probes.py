@@ -18,6 +18,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.health_listener import HealthListener
 
+pytestmark = pytest.mark.unit
+
 
 async def _request(port: int, path: str, method: str = "GET") -> tuple[int, dict[str, Any]]:
     """Execute raw HTTP request against HealthListener over loopback TCP socket."""
@@ -62,7 +64,6 @@ def _simulate_running_service(svc: CliffracerService, *, broker_connected: bool 
         )()
 
 
-@pytest.mark.unit
 async def test_live_probe_succeeds_when_dependencies_fail_while_ready_returns_503():
     """Verify /live remains 200 OK during dependency outages while /ready returns 503."""
     svc = CliffracerService(ServiceConfig(name="orders_svc", health_port=0))
@@ -102,7 +103,6 @@ async def test_live_probe_succeeds_when_dependencies_fail_while_ready_returns_50
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_live_probe_succeeds_when_dependency_raises_exception():
     """Verify /live remains 200 OK even if dependency probe raises an unhandled error."""
     svc = CliffracerService(ServiceConfig(name="payments_svc", health_port=0))
@@ -129,7 +129,6 @@ async def test_live_probe_succeeds_when_dependency_raises_exception():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_live_probe_succeeds_when_broker_is_disconnected():
     """Verify /live returns 200 when broker drops, preventing pod restart storms."""
     svc = CliffracerService(ServiceConfig(name="broker_test_svc", health_port=0))
@@ -156,7 +155,6 @@ async def test_live_probe_succeeds_when_broker_is_disconnected():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_live_probe_succeeds_when_broker_is_connecting():
     """Verify /live returns 200 when broker is connecting, while /ready returns 503."""
     svc = CliffracerService(ServiceConfig(name="connecting_svc", health_port=0))
@@ -186,7 +184,6 @@ async def test_live_probe_succeeds_when_broker_is_connecting():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_all_probes_return_503_when_service_is_stopped():
     """Verify /live, /ready, and /health return 503 when service is stopped."""
     svc = CliffracerService(ServiceConfig(name="stopped_svc", health_port=0))
@@ -211,7 +208,6 @@ async def test_all_probes_return_503_when_service_is_stopped():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_all_probes_return_200_when_fully_healthy():
     """Verify /live, /ready, and /health return 200 when all systems pass."""
     svc = CliffracerService(ServiceConfig(name="healthy_svc", health_port=0))
@@ -243,7 +239,6 @@ async def test_all_probes_return_200_when_fully_healthy():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_health_listener_method_not_allowed_and_not_found():
     """Verify HTTP method and path routing enforcement."""
     svc = CliffracerService(ServiceConfig(name="routing_svc", health_port=0))
@@ -271,7 +266,6 @@ async def test_health_listener_method_not_allowed_and_not_found():
         await hl.stop()
 
 
-@pytest.mark.unit
 def test_direct_service_liveness_helpers():
     """Verify CliffracerService.liveness_check() and is_live() directly."""
     svc = CliffracerService(ServiceConfig(name="direct_svc"))
@@ -295,7 +289,6 @@ def test_direct_service_liveness_helpers():
     assert "timestamp" in alias_check
 
 
-@pytest.mark.unit
 async def test_health_listener_port_conflict_fails_fast(monkeypatch):
     """Verify attempting to start two HealthListeners on the same port raises OSError."""
     monkeypatch.setattr(HealthListener, "_test_port_override", None)

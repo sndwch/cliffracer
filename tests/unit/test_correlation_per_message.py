@@ -2,7 +2,11 @@
 
 import asyncio
 
+import pytest
+
 from cliffracer.core.correlation import CorrelationContext, correlation_id_var
+
+pytestmark = pytest.mark.unit
 
 
 def test_new_id_unless_given_ignores_the_ambient_context():

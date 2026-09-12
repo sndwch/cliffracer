@@ -23,6 +23,8 @@ from cliffracer.core.extension import ExtensionSetupContext
 from cliffracer.core.service_config import ServiceConfig
 from cliffracer.introspect import describe
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Models and Service Fixtures
 # ---------------------------------------------------------------------------

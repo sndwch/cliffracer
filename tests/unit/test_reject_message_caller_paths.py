@@ -14,6 +14,8 @@ from cliffracer import CliffracerService, ServiceConfig, async_rpc, listener, ti
 from cliffracer.core.extension import Extension, RejectMessage
 from cliffracer.core.jetstream import StreamSpec
 
+pytestmark = pytest.mark.unit
+
 
 class Refuser(Extension):
     async def setup(self, ctx):
@@ -56,7 +58,6 @@ def _js_config():
     )
 
 
-@pytest.mark.unit
 async def test_a_refused_jetstream_event_is_acked_and_never_naked_or_terminated():
     svc = _EventSvc(_js_config())
     await svc.container._setup_extensions()
@@ -73,7 +74,6 @@ async def test_a_refused_jetstream_event_is_acked_and_never_naked_or_terminated(
     msg.term.assert_not_awaited()
 
 
-@pytest.mark.unit
 async def test_a_refused_core_nats_event_does_not_reach_the_handler():
     """The core-NATS path has no ack; the property is only that it is dropped
     quietly rather than raising out of the callback."""
@@ -100,7 +100,6 @@ class _AsyncSvc(CliffracerService):
         self.handled.append(note)
 
 
-@pytest.mark.unit
 async def test_a_refused_async_request_is_dropped_without_a_reply():
     svc = _AsyncSvc(ServiceConfig(name="s"))
     await svc.container._setup_extensions()
@@ -128,7 +127,6 @@ class _TimerSvc(CliffracerService):
         self.firings += 1
 
 
-@pytest.mark.unit
 async def test_a_refused_timer_firing_is_logged_and_the_next_one_still_runs(caplog):
     svc = _TimerSvc(ServiceConfig(name="s"))
     await svc.container._setup_extensions()

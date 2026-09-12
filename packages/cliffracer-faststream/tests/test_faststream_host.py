@@ -22,6 +22,8 @@ from cliffracer.core.extension import ExtensionSetupContext, SharedDependency
 from cliffracer.core.extension import RejectMessage as CliffracerRejectMessage
 from cliffracer.core.service_config import ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 def _make_mock_nats_client(is_connected: bool = True) -> MagicMock:
     """Create a mock NATS client compatible with FastStream and Cliffracer."""
@@ -80,7 +82,6 @@ def _make_mock_service(name: str = "test_svc") -> MagicMock:
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_broker_initial_state() -> None:
     """Hosted broker begins in an unattached, disconnected state."""
     broker = CliffracerHostedNatsBroker()
@@ -88,7 +89,6 @@ def test_broker_initial_state() -> None:
     assert broker._connection is None
 
 
-@pytest.mark.unit
 async def test_direct_connect_without_attachment_raises() -> None:
     """Calling connect() before Cliffracer attaches connection raises RuntimeError."""
     broker = CliffracerHostedNatsBroker()
@@ -96,7 +96,6 @@ async def test_direct_connect_without_attachment_raises() -> None:
         await broker.connect()
 
 
-@pytest.mark.unit
 async def test_setup_does_not_require_connection() -> None:
     """Extension setup() prepares broker and routes without accessing uninitialized transport."""
     router = NatsRouter()
@@ -122,7 +121,6 @@ async def test_setup_does_not_require_connection() -> None:
     assert len(ext.hosted_broker.subscribers) == 1
 
 
-@pytest.mark.unit
 async def test_start_attaches_connection_and_starts_broker() -> None:
     """Extension start() attaches Cliffracer's connected NATS client."""
     ext = FastStreamExtension()
@@ -142,7 +140,6 @@ async def test_start_attaches_connection_and_starts_broker() -> None:
     assert ext.hosted_broker._connection is service.container.nc
 
 
-@pytest.mark.unit
 async def test_start_fails_if_nats_disconnected() -> None:
     """Extension start() raises ServiceLifecycleError if NATS client is uninitialized or disconnected."""
     ext = FastStreamExtension()
@@ -163,7 +160,6 @@ async def test_start_fails_if_nats_disconnected() -> None:
         await ext.start()
 
 
-@pytest.mark.unit
 async def test_stop_does_not_drain_nats_transport() -> None:
     """Extension stop() halts subscribers while strictly shielding transport from drain."""
     ext = FastStreamExtension()
@@ -187,7 +183,6 @@ async def test_stop_does_not_drain_nats_transport() -> None:
     assert ext.hosted_broker._attached is False
 
 
-@pytest.mark.unit
 def test_stream_declaration_suppressed() -> None:
     """Autonomous stream declarations on router streams are shielded (declare=False)."""
     broker = CliffracerHostedNatsBroker()
@@ -212,7 +207,6 @@ def test_stream_declaration_suppressed() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 async def test_inflight_handler_registered_in_active_tasks() -> None:
     """In-flight worker task is tracked in container._active_tasks during handler execution."""
     service = _make_mock_service()
@@ -239,7 +233,6 @@ async def test_inflight_handler_registered_in_active_tasks() -> None:
     assert len(container._active_tasks) == 0
 
 
-@pytest.mark.unit
 async def test_drain_hook_unsubscribes_consumers() -> None:
     """Extension drain() unsubscribes consumer subscriptions to halt incoming traffic."""
     ext = FastStreamExtension()
@@ -270,7 +263,6 @@ async def test_drain_hook_unsubscribes_consumers() -> None:
     assert sub_mock.running is False
 
 
-@pytest.mark.unit
 async def test_drain_handles_exceptions_gracefully() -> None:
     """Unsubscribe failures during drain() are swallowed and do not interrupt shutdown."""
     ext = FastStreamExtension()
@@ -297,7 +289,6 @@ async def test_drain_handles_exceptions_gracefully() -> None:
     assert sub_mock.running is False
 
 
-@pytest.mark.unit
 async def test_core_nats_message_bypasses_ack_logic_and_tracks_tasks() -> None:
     """Non-JetStream (Core NATS) messages bypass ack/nak/term while tracking tasks."""
     service = _make_mock_service()
@@ -328,7 +319,6 @@ async def test_core_nats_message_bypasses_ack_logic_and_tracks_tasks() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_subscribers_enforced_manual_ack_policy() -> None:
     """Mounted subscribers have AckPolicy.MANUAL enforced to remove default REJECT_ON_ERROR."""
     broker = CliffracerHostedNatsBroker()
@@ -344,7 +334,6 @@ def test_subscribers_enforced_manual_ack_policy() -> None:
         assert getattr(sub, "_SubscriberUsecase__auto_ack_disabled", False) is True
 
 
-@pytest.mark.unit
 async def test_successful_handler_acks_message() -> None:
     """Successful JetStream message execution triggers _safe_ack()."""
     service = _make_mock_service()
@@ -364,7 +353,6 @@ async def test_successful_handler_acks_message() -> None:
     service.container._safe_term.assert_not_called()
 
 
-@pytest.mark.unit
 async def test_transient_error_naks_with_exponential_backoff() -> None:
     """Transient errors trigger _safe_nak() with exponential backoff based on num_delivered."""
     service = _make_mock_service()
@@ -395,7 +383,6 @@ async def test_transient_error_naks_with_exponential_backoff() -> None:
     service.container._safe_nak.assert_awaited_with(msg4, delay=12.0)
 
 
-@pytest.mark.unit
 async def test_delivery_exhaustion_routes_to_dlq_and_terms() -> None:
     """Exhausted deliveries (num_delivered >= max_deliver) publish to DLQ and execute _safe_term()."""
     service = _make_mock_service("order_svc")
@@ -420,7 +407,6 @@ async def test_delivery_exhaustion_routes_to_dlq_and_terms() -> None:
     service.container._safe_ack.assert_not_called()
 
 
-@pytest.mark.unit
 async def test_dlq_failure_still_terminates_message() -> None:
     """Failure during DLQ publication does not prevent _safe_term() to avoid redelivery loops."""
     service = _make_mock_service("order_svc")
@@ -444,7 +430,6 @@ async def test_dlq_failure_still_terminates_message() -> None:
     service.container._safe_term.assert_awaited_once_with(msg)
 
 
-@pytest.mark.unit
 async def test_malformed_payload_dlqs_and_terms_immediately() -> None:
     """Malformed or invalid message payloads route to DLQ immediately without retrying."""
     service = _make_mock_service("order_svc")
@@ -465,7 +450,6 @@ async def test_malformed_payload_dlqs_and_terms_immediately() -> None:
     service.container._safe_nak.assert_not_called()
 
 
-@pytest.mark.unit
 async def test_policy_refusal_acks_immediately() -> None:
     """Policy refusals (RejectMessage) acknowledge immediately per Cliffracer invariants."""
     service = _make_mock_service()
@@ -496,7 +480,6 @@ async def test_policy_refusal_acks_immediately() -> None:
     service.container._safe_ack.assert_awaited_with(msg2)
 
 
-@pytest.mark.unit
 async def test_heartbeat_pulses_during_long_execution() -> None:
     """In-progress heartbeat pulses active JetStream messages during execution."""
     service = _make_mock_service()
@@ -522,7 +505,6 @@ async def test_heartbeat_pulses_during_long_execution() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 async def test_context_repo_injection_service_container_config() -> None:
     """Extension start() surfaces service, container, config, KV, and resilience into ContextRepo."""
     ext = FastStreamExtension()
@@ -551,7 +533,6 @@ async def test_context_repo_injection_service_container_config() -> None:
     assert context.get("resilience") is resilience_mock
 
 
-@pytest.mark.unit
 async def test_context_repo_cleanup_on_stop() -> None:
     """Extension stop() cleanly resets global dependencies from ContextRepo."""
     ext = FastStreamExtension()
@@ -580,7 +561,6 @@ async def test_context_repo_cleanup_on_stop() -> None:
     assert context.get("resilience") is None
 
 
-@pytest.mark.unit
 async def test_health_details_reflects_broker_state() -> None:
     """health_details() accurately reflects broker status, subscriber counts, and active routes."""
     router = NatsRouter()
@@ -627,7 +607,6 @@ async def test_health_details_reflects_broker_state() -> None:
     assert health_stopped["status"] == "stopped"
 
 
-@pytest.mark.unit
 async def test_info_details_lists_mounted_routes_and_subscribers() -> None:
     """info_details() surfaces structured subscriber route and queue introspection."""
     router = NatsRouter()

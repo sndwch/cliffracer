@@ -20,6 +20,7 @@ from tests.fixtures.typed_client.models import Line, Order, Receipt
 
 pytestmark = [pytest.mark.integration, pytest.mark.nats_required]
 
+
 SERVICE = "warehouse_e2e"
 REPO = Path(__file__).resolve().parents[2]
 

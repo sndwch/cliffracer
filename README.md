@@ -723,6 +723,8 @@ packages/                     the extension distributions
 ```bash
 uv run pytest                                   # everything; NATS-marked tests need a broker
 uv run pytest tests/unit                        # no broker required
+uv run pytest tests/transport                   # no broker required
+uv run pytest tests/repo                        # no broker required
 uv run pytest tests/integration                 # needs NATS_URL
 uv run pytest --cov=src/cliffracer --cov-report=html
 ```

@@ -13,6 +13,8 @@ from pydantic import BaseModel
 from cliffracer import CliffracerService, ServiceConfig, StreamSpec, listener, validated_listener
 from tests.conftest import broker_url
 
+pytestmark = pytest.mark.integration
+
 
 class Ping(BaseModel):
     seq: int
@@ -53,7 +55,6 @@ async def _clean_streams():
     await _purge()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_event_published_while_subscriber_is_down_is_delivered_on_restart():
@@ -91,7 +92,6 @@ async def test_event_published_while_subscriber_is_down_is_delivered_on_restart(
         await sub2.stop()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_the_durable_consumer_survives_a_service_stop():
@@ -118,7 +118,6 @@ async def test_the_durable_consumer_survives_a_service_stop():
         await nc.close()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_a_raising_handler_redelivers_then_lands_on_the_dlq():
@@ -163,7 +162,6 @@ async def test_a_raising_handler_redelivers_then_lands_on_the_dlq():
         await svc.stop()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_a_namespaced_service_dead_letters_an_invalid_message_for_real():
@@ -212,7 +210,6 @@ async def test_a_namespaced_service_dead_letters_an_invalid_message_for_real():
         await svc.stop()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_two_replicas_share_one_durable_consumer():
@@ -241,7 +238,6 @@ async def test_two_replicas_share_one_durable_consumer():
         await b.stop()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_an_identical_stream_declaration_from_two_services_is_a_no_op():
@@ -256,7 +252,6 @@ async def test_an_identical_stream_declaration_from_two_services_is_a_no_op():
         await a.stop()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_a_conflicting_stream_declaration_fails_startup_with_a_named_error():

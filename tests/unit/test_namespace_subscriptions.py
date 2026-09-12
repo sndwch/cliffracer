@@ -6,6 +6,8 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, listener
 
+pytestmark = pytest.mark.unit
+
 
 def _svc(namespace=None):
     class S(CliffracerService):
@@ -20,7 +22,6 @@ def _svc(namespace=None):
     return svc
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_async_subscriptions_namespaced_and_queued():
     svc = _svc(namespace="app1")
@@ -32,7 +33,6 @@ async def test_rpc_async_subscriptions_namespaced_and_queued():
     assert calls["app1.user_service.async.*"]["queue"] == "app1.user_service.async"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_event_subscription_has_no_queue_group():
     svc = _svc(namespace="app1")
@@ -44,7 +44,6 @@ async def test_event_subscription_has_no_queue_group():
         assert "queue" not in c.kwargs
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_backcompat_no_namespace_subjects_unchanged():
     svc = _svc(namespace=None)

@@ -6,6 +6,8 @@ from cliffracer_cron import CronTimer
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.correlation import CorrelationContext
 
+pytestmark = pytest.mark.unit
+
 
 class _Recorder:
     """Record correlation IDs across invocations."""

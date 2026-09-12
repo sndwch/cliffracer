@@ -33,12 +33,13 @@ from cliffracer.core.service import CliffracerService
 from cliffracer.core.service_config import ServiceConfig
 from cliffracer.testing.messages import MockMessage
 
+pytestmark = pytest.mark.unit
+
 # ==============================================================================
 # 1. Module Boundaries and Subsystem Isolation
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_registry_pure_data_repository_isolation() -> None:
     """ServiceRegistry is a pure data repository with no network or transport dependencies."""
     reg = ServiceRegistry()
@@ -68,7 +69,6 @@ def test_registry_pure_data_repository_isolation() -> None:
     assert len(reg.event_pull) == 0
 
 
-@pytest.mark.unit
 def test_discovery_stateless_inspection_and_validation() -> None:
     """HandlerDiscovery inspects class methods and populates registry without service mutation."""
 
@@ -104,7 +104,6 @@ def test_discovery_stateless_inspection_and_validation() -> None:
     assert reg.dependencies[0].name == "postgres"
 
 
-@pytest.mark.unit
 def test_discovery_validates_semantic_invariants() -> None:
     """HandlerDiscovery enforces strict topological constraints and raises ConfigurationError."""
 
@@ -158,7 +157,6 @@ def test_discovery_validates_semantic_invariants() -> None:
         HandlerDiscovery.validate_dlq_coverage(cfg_no_dlq)
 
 
-@pytest.mark.unit
 def test_connection_manager_state_machine_and_redaction() -> None:
     """ConnectionManager isolates broker dialing, URL redaction, and transport states."""
     cfg = ServiceConfig(name="conn_svc", nats_url="nats://user:secret@nats.internal:4222")
@@ -185,7 +183,6 @@ def test_connection_manager_state_machine_and_redaction() -> None:
     assert conn.is_broker_connected
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_dispatcher_executes_rpc_and_envelopes() -> None:
     """MessageDispatcher validates schema, invokes handlers, and formats response envelopes."""
@@ -218,7 +215,6 @@ async def test_dispatcher_executes_rpc_and_envelopes() -> None:
     assert payload["result"] == 35
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_lifecycle_manager_supervision_and_drain() -> None:
     """LifecycleManager tracks active background tasks and drains them on shutdown."""
@@ -244,7 +240,6 @@ async def test_lifecycle_manager_supervision_and_drain() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_complete_absence_of_deprecated_delegation_methods_on_service() -> None:
     """Verify all 26 deprecated delegation methods are completely removed from CliffracerService."""
     deprecated_methods = [
@@ -292,7 +287,6 @@ def test_complete_absence_of_deprecated_delegation_methods_on_service() -> None:
         )
 
 
-@pytest.mark.unit
 def test_complete_absence_of_deprecated_delegation_properties_on_service() -> None:
     """Verify deprecated private properties are completely removed from CliffracerService."""
     deprecated_properties = [
@@ -321,7 +315,6 @@ def test_complete_absence_of_deprecated_delegation_properties_on_service() -> No
         )
 
 
-@pytest.mark.unit
 def test_service_preserves_clean_public_api() -> None:
     """Verify CliffracerService preserves its clean public façade methods and properties."""
     svc = CliffracerService(ServiceConfig(name="façade_svc"))
@@ -356,7 +349,6 @@ def test_service_preserves_clean_public_api() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_direct_dispatcher_subscription_routing_without_service_bounce() -> None:
     """NATS subscriptions bind directly to Container/Dispatcher callbacks, bypassing CliffracerService."""
@@ -397,7 +389,6 @@ async def test_direct_dispatcher_subscription_routing_without_service_bounce() -
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_phased_startup_and_shutdown_sequence() -> None:
     """Startup and shutdown follow deterministic, phased order across extensions and subsystems."""
@@ -477,7 +468,6 @@ async def test_phased_startup_and_shutdown_sequence() -> None:
     assert svc.container.lifecycle.is_stopped is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_abortive_startup_cleans_up_and_reraises() -> None:
     """If a startup step fails, partial resources are cleanly torn down and the original exception is re-raised."""

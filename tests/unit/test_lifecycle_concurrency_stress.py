@@ -29,6 +29,8 @@ from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.container import Container
 from cliffracer.core.exceptions import ServiceLifecycleError
 
+pytestmark = pytest.mark.unit
+
 # ============================================================================
 # Section 1: Concurrent start() and stop() calls under load & cancellation
 # ============================================================================
@@ -98,7 +100,6 @@ class LifecycleInstrumentedService(CliffracerService):
         self.stop_timers_calls += 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_concurrent_start_stampede():
     """Stress test: 100 concurrent tasks calling start() on the same service.
@@ -133,7 +134,6 @@ async def test_concurrent_start_stampede():
     assert svc.on_shutdown_calls == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_concurrent_stop_stampede():
     """Stress test: 100 concurrent tasks calling stop() on a running service.
@@ -162,7 +162,6 @@ async def test_concurrent_stop_stampede():
     assert svc.disconnect_calls == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rapid_cancellation_during_startup_stages():
     """Stress test: cancel start() at multiple distinct async suspension points.
@@ -226,7 +225,6 @@ async def test_rapid_cancellation_during_startup_stages():
         assert svc.on_shutdown_calls == expected_shutdown_calls
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_interleaved_start_stop_high_concurrency_race():
     """Adversarial race test: 50 tasks randomly alternating start() and stop().
@@ -274,7 +272,6 @@ async def test_interleaved_start_stop_high_concurrency_race():
 # ============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_abortive_startup_at_all_failure_points():
     """Verify that exceptions at any startup step abort cleanly without resource leaks."""
@@ -330,7 +327,6 @@ async def test_abortive_startup_at_all_failure_points():
 # ============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_pull_loop_cpu_yield_on_zero_messages():
     """Empirically measure CPU time and loop iterations when no messages exist.
@@ -378,7 +374,6 @@ async def test_pull_loop_cpu_yield_on_zero_messages():
     )
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_pull_loop_immediate_processing_when_messages_present():
     """When messages are returned, _pull_loop processes immediately without sleep(0.05)."""
@@ -422,7 +417,6 @@ async def test_pull_loop_immediate_processing_when_messages_present():
 # ============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_batch_processor_shutdown_concurrent_task_mutation_stress():
     """Stress test: 500 tasks completing concurrently while shutdown() executes.
@@ -459,7 +453,6 @@ async def test_batch_processor_shutdown_concurrent_task_mutation_stress():
         assert len(processor._batch_futures) == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_batch_processor_shutdown_with_faulty_batch_tasks():
     """Verify shutdown() succeeds even if tracked batch tasks raise exceptions."""
@@ -491,7 +484,6 @@ async def test_batch_processor_shutdown_with_faulty_batch_tasks():
 # ============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_resilient_method_proxy_call_async_coroutine_inspection():
     """Verify call_async returns an awaitable coroutine object when CLOSED."""
@@ -520,7 +512,6 @@ async def test_resilient_method_proxy_call_async_coroutine_inspection():
     )
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_resilient_method_proxy_call_async_open_circuit_fast_fail():
     """Verify call_async raises RpcCircuitOpenError fast when OPEN without coroutine leak."""
@@ -545,7 +536,6 @@ async def test_resilient_method_proxy_call_async_open_circuit_fast_fail():
     svc.call_rpc_no_wait.assert_not_called()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_resilient_method_proxy_call_async_circuit_transitions():
     """Verify call_async behavior across CLOSED -> OPEN -> HALF_OPEN states."""
@@ -593,7 +583,6 @@ async def test_resilient_method_proxy_call_async_circuit_transitions():
     assert len(dispatched_calls) == 2
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_concurrent_stop_during_abortive_cleanup_causes_resource_leak():
     """Demonstrates that calling stop() while abortive start() is in _stop_internal
@@ -636,7 +625,6 @@ async def test_concurrent_stop_during_abortive_cleanup_causes_resource_leak():
     )
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_concurrent_stop_during_slow_shutdown():
     """Stress test: 50 concurrent stop() calls arriving while on_shutdown is slow."""

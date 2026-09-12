@@ -10,6 +10,8 @@ import cliffracer.core.decorators as decorators_module
 import cliffracer.core.extension as extension_module
 from cliffracer import CliffracerService, ServiceConfig, listener, rpc
 
+pytestmark = pytest.mark.unit
+
 
 class _Svc(CliffracerService):
     """One of each handler kind, so discovery has something real to find."""
@@ -27,7 +29,6 @@ def _config(**overrides):
     return ServiceConfig(name="svc", namespace="app1", **overrides)
 
 
-@pytest.mark.unit
 def test_a_mock_attached_before_discovery_is_not_registered():
     """The original defect: an AsyncMock on self answered every hasattr."""
     svc = _Svc(_config())
@@ -46,7 +47,6 @@ def test_a_mock_attached_before_discovery_is_not_registered():
     )
 
 
-@pytest.mark.unit
 def test_an_arbitrary_marked_object_on_self_is_not_registered():
     """Not just Mocks -- nothing assigned to self is a candidate at all."""
 
@@ -64,7 +64,6 @@ def test_an_arbitrary_marked_object_on_self_is_not_registered():
     assert set(svc.container.registry.event_handlers) == {"app1.orders.created"}
 
 
-@pytest.mark.unit
 def test_discovery_is_order_independent():
     """Verify attaching transport mocks before or after discovery produces identical registration."""
     before = _Svc(_config())
@@ -84,7 +83,6 @@ def test_discovery_is_order_independent():
     )
 
 
-@pytest.mark.unit
 def test_a_public_property_is_not_evaluated_during_discovery():
     """Verify public properties on service classes are not evaluated during discovery."""
     evaluated = []
@@ -102,7 +100,6 @@ def test_a_public_property_is_not_evaluated_during_discovery():
     assert set(svc.container.registry.rpc_handlers) == {"do_thing"}
 
 
-@pytest.mark.unit
 def test_handlers_defined_on_base_classes_are_still_found():
     """Class scanning must walk the MRO, not just the leaf class."""
 
@@ -123,7 +120,6 @@ def test_handlers_defined_on_base_classes_are_still_found():
     assert "app1.orders.created" in svc.container.registry.event_handlers
 
 
-@pytest.mark.unit
 def test_a_subclass_override_wins_over_the_base_definition():
     """Overriding a handler must register the subclass's implementation."""
 
@@ -138,7 +134,6 @@ def test_a_subclass_override_wins_over_the_base_definition():
     assert svc.container.registry.rpc_handlers["do_thing"].__func__ is Child.do_thing
 
 
-@pytest.mark.unit
 def test_every_marker_producer_uses_the_discovered_prefix():
     """Guard against drift between the marker PRODUCERS and the discovery gate.
 
@@ -174,7 +169,6 @@ def test_every_marker_producer_uses_the_discovered_prefix():
     )
 
 
-@pytest.mark.unit
 def test_a_non_string_event_subject_is_refused_at_registration():
     """Verify non-string event subject raises TypeError at registration time."""
     svc = _Svc(_config())
@@ -190,7 +184,6 @@ def test_a_non_string_event_subject_is_refused_at_registration():
 from cliffracer.core.typed_rpc import UntypedHandler  # noqa: E402
 
 
-@pytest.mark.unit
 def test_discovery_builds_a_spec_per_rpc_handler():
     class Svc(CliffracerService):
         @rpc
@@ -203,7 +196,6 @@ def test_discovery_builds_a_spec_per_rpc_handler():
     assert [p.name for p in svc.container.registry.rpc_specs["echo"].params] == ["text"]
 
 
-@pytest.mark.unit
 def test_an_unannotated_handler_makes_discovery_refuse_by_name():
     class Svc(CliffracerService):
         @rpc
@@ -215,7 +207,6 @@ def test_an_unannotated_handler_makes_discovery_refuse_by_name():
         svc._discover_handlers()
 
 
-@pytest.mark.unit
 async def test_start_raises_before_connecting_on_an_untyped_handler(monkeypatch):
     class Svc(CliffracerService):
         @rpc

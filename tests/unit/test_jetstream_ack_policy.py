@@ -10,6 +10,8 @@ from pydantic import BaseModel
 from cliffracer import CliffracerService, ServiceConfig, listener, validated_listener
 from cliffracer.core.jetstream import StreamSpec, nak_delay
 
+pytestmark = pytest.mark.unit
+
 
 class Ping(BaseModel):
     seq: int
@@ -62,7 +64,6 @@ def _mocked(svc):
     return svc
 
 
-@pytest.mark.unit
 class TestNakDelay:
     def test_first_delivery_waits_the_base_delay(self):
         assert nak_delay(1, _config()) == 1.0
@@ -75,7 +76,6 @@ class TestNakDelay:
         assert nak_delay(20, _config(jetstream_max_backoff=10.0)) == 10.0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_successful_handler_acks():
     svc = _Svc(_config())
@@ -90,7 +90,6 @@ async def test_successful_handler_acks():
     assert svc.seen == [{"seq": 1}]
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_raising_handler_naks_with_backoff():
     svc = _Svc(_config(), fail=True)
@@ -105,7 +104,6 @@ async def test_raising_handler_naks_with_backoff():
     assert msg.nak.call_args.kwargs["delay"] == 2.0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_exhausted_deliveries_dead_letter_then_terminate():
     svc = _Svc(_config(), fail=True)
@@ -120,7 +118,6 @@ async def test_exhausted_deliveries_dead_letter_then_terminate():
     assert "dlq.pinger" in dlq_subjects
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_a_failing_dead_letter_still_terminates():
     """Redelivering a message we cannot dead-letter forever is worse than losing it
@@ -135,7 +132,6 @@ async def test_a_failing_dead_letter_still_terminates():
     assert msg.term.await_count == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_invalid_payload_terminates_without_nak():
     """Redelivering something that does not parse can never succeed."""
@@ -150,7 +146,6 @@ async def test_invalid_payload_terminates_without_nak():
     assert msg.ack.await_count == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_durable_listener_binds_a_jetstream_consumer_with_a_deliver_group():
     svc = _Svc(_config())
@@ -171,7 +166,6 @@ async def test_durable_listener_binds_a_jetstream_consumer_with_a_deliver_group(
     assert call.kwargs["config"].ack_policy is AckPolicy.EXPLICIT
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_a_listener_without_durable_stays_on_core_nats():
     """A JetStream-enabled service can mix both. durable= is the only switch."""
@@ -195,7 +189,6 @@ async def test_a_listener_without_durable_stays_on_core_nats():
     assert "events.pong" in core_subjects
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_durable_is_keyed_by_the_effective_subject():
     """cross_namespace resolves to *.pattern, and the consumer must filter on that."""

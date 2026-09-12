@@ -23,6 +23,8 @@ from cliffracer_resilience import (
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
 
+pytestmark = pytest.mark.unit
+
 
 def _rpc_msg(subject: str, data: dict, headers: dict | None = None) -> AsyncMock:
     """Helper to build a mock incoming NATS message."""
@@ -39,7 +41,6 @@ def _get_replies(msg: AsyncMock) -> list[dict]:
     return [json.loads(c.args[0].decode()) for c in msg.respond.await_args_list]
 
 
-@pytest.mark.unit
 async def test_rate_limiter_not_shared_across_service_instances():
     """Verify that 2 service instances of a class with ResilienceExtension do not share
 
@@ -101,7 +102,6 @@ async def test_rate_limiter_not_shared_across_service_instances():
     assert rep4[0].get("error") == "refused: rate limit exceeded"
 
 
-@pytest.mark.unit
 async def test_custom_rate_limiter_preserved_when_explicitly_configured():
     """Verify that if a custom RateLimiter is explicitly provided to ResilienceExtension,
 
@@ -130,7 +130,6 @@ async def test_custom_rate_limiter_preserved_when_explicitly_configured():
     assert s1.resilience.limiter is s2.resilience.limiter
 
 
-@pytest.mark.unit
 def test_resilient_rpc_proxy_circuit_breaker_isolation_across_instances():
     """Verify that ResilientRpcProxy creates per-instance CircuitBreaker instances."""
 
@@ -154,7 +153,6 @@ def test_resilient_rpc_proxy_circuit_breaker_isolation_across_instances():
     assert cb2.is_closed is True
 
 
-@pytest.mark.unit
 def test_resilient_rpc_proxy_custom_circuit_breaker_preserved():
     """Verify that explicitly passing a custom CircuitBreaker to ResilientRpcProxy is preserved."""
     shared_cb = CircuitBreaker("custom_downstream")

@@ -24,6 +24,8 @@ from cliffracer import (
 )
 from tests.conftest import broker_url
 
+pytestmark = pytest.mark.integration
+
 SECRET = "live-test-secret-at-least-32-chars-long-9876543210"
 
 
@@ -48,7 +50,6 @@ async def _cleanup_streams():
     await nc.close()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_live_nats_overlapping_listeners_burst():
@@ -119,7 +120,6 @@ async def test_live_nats_overlapping_listeners_burst():
         await svc.stop()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_live_jetstream_pull_consumer_malformed_json_dlq():
@@ -182,7 +182,6 @@ async def test_live_jetstream_pull_consumer_malformed_json_dlq():
         await svc.stop()
 
 
-@pytest.mark.integration
 @pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_live_nats_auth_timer_concurrent_with_rpc():

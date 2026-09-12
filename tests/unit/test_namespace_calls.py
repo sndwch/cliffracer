@@ -8,13 +8,14 @@ from pydantic import BaseModel
 
 from cliffracer import CliffracerService, RpcProxy, ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 class _Order(BaseModel):
     order_id: str
     amount: float
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_dead_letter_subject_is_single_prefixed():
     """A namespaced service dead-letters to dlq.{service} by default without namespace prefixing."""
@@ -44,7 +45,6 @@ def _svc(namespace=None):
     return svc
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_call_rpc_uses_caller_namespace():
     svc = _svc(namespace="app1")
@@ -52,7 +52,6 @@ async def test_call_rpc_uses_caller_namespace():
     assert svc.nc.request.call_args.args[0] == "app1.user_service.rpc.get_user"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_call_rpc_explicit_namespace_override():
     svc = _svc(namespace="app1")
@@ -60,7 +59,6 @@ async def test_call_rpc_explicit_namespace_override():
     assert svc.nc.request.call_args.args[0] == "app2.user_service.rpc.get_user"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_call_rpc_no_namespace_unchanged():
     svc = _svc(namespace=None)
@@ -68,7 +66,6 @@ async def test_call_rpc_no_namespace_unchanged():
     assert svc.nc.request.call_args.args[0] == "user_service.rpc.get_user"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_publish_event_namespaced():
     svc = _svc(namespace="app1")
@@ -76,7 +73,6 @@ async def test_publish_event_namespaced():
     assert svc.nc.publish.call_args.args[0] == "app1.orders.created"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_proxy_threads_namespace():
     class _Holder(CliffracerService):
@@ -91,7 +87,6 @@ async def test_rpc_proxy_threads_namespace():
     assert holder.nc.request.call_args.args[0] == "app2.user_service.rpc.get_user"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_call_rpc_positional_payload_rejected():
     svc = _svc(namespace="app1")
@@ -99,7 +94,6 @@ async def test_call_rpc_positional_payload_rejected():
         await svc.call_rpc("user_service", "get_user", {"payload": 1})
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_call_rpc_no_wait_positional_payload_rejected():
     svc = _svc(namespace="app1")
@@ -107,7 +101,6 @@ async def test_call_rpc_no_wait_positional_payload_rejected():
         await svc.call_rpc_no_wait("user_service", "get_user", {"payload": 1})
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_call_rpc_whitespace_subject_raises_before_wire():
     svc = _svc(namespace="app1")

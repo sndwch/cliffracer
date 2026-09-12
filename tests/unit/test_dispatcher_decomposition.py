@@ -26,6 +26,8 @@ from cliffracer.core.registry import ServiceRegistry
 from cliffracer.core.service_config import ServiceConfig
 from cliffracer.core.typed_rpc import build_handler_spec
 
+pytestmark = pytest.mark.unit
+
 
 class DummyMsg:
     def __init__(
@@ -66,7 +68,6 @@ class DummyMsg:
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_extension_pipeline_execution_order_and_hooks() -> None:
     events: list[str] = []
@@ -124,7 +125,6 @@ async def test_extension_pipeline_execution_order_and_hooks() -> None:
     assert events == ["ext1:before", "ext2:before", "called", "ext2:after", "ext1:after"]
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_extension_pipeline_fails_closed() -> None:
     class FailingExt(Extension):
@@ -145,7 +145,6 @@ async def test_extension_pipeline_fails_closed() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_dead_letter_publisher_subject_formatting_and_publishing() -> None:
     cfg = ServiceConfig(name="test_svc", dlq_subject="dlq.{service}")
@@ -168,7 +167,6 @@ async def test_dead_letter_publisher_subject_formatting_and_publishing() -> None
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_dispatcher_execution_and_error_envelopes() -> None:
     reg = ServiceRegistry()
@@ -205,7 +203,6 @@ async def test_rpc_dispatcher_execution_and_error_envelopes() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_event_dispatcher_routing_and_schema_validation() -> None:
     reg = ServiceRegistry()
@@ -244,7 +241,6 @@ async def test_event_dispatcher_routing_and_schema_validation() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_jetstream_dispatcher_transport_protections_and_acks() -> None:
     cfg = ServiceConfig(name="js_svc", jetstream_max_deliver=3)
@@ -273,7 +269,6 @@ async def test_jetstream_dispatcher_transport_protections_and_acks() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_outbound_dispatcher_context_and_send_hooks() -> None:
     cfg = ServiceConfig(name="out_svc")
@@ -301,7 +296,6 @@ async def test_outbound_dispatcher_context_and_send_hooks() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 def test_all_dispatcher_classes_under_statement_ceiling() -> None:
     """Verify that every class in cliffracer.core.dispatcher and submodules has <= 500 statements."""
     from cliffracer.core import dispatcher as dispatcher_module
@@ -326,7 +320,6 @@ def test_all_dispatcher_classes_under_statement_ceiling() -> None:
                 )
 
 
-@pytest.mark.unit
 def test_zero_circular_container_dict_checks_in_core() -> None:
     """Verify that circular duck-typing checks into container.__dict__ are eliminated."""
     core_dir = Path("src/cliffracer/core")
@@ -340,7 +333,6 @@ def test_zero_circular_container_dict_checks_in_core() -> None:
         ), f"Found circular service.container.__dict__ check in {py_file}"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_message_dispatcher_facade_composition_and_delegation() -> None:
     """Verify MessageDispatcher facade composes all 6 collaborators and delegates cleanly."""

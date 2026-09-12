@@ -8,6 +8,8 @@ import pytest
 from cliffracer import CliffracerService, ConfigurationError, ServiceConfig, listener
 from cliffracer.core.jetstream import StreamSpec
 
+pytestmark = pytest.mark.unit
+
 
 def _config(**overrides):
     return ServiceConfig(
@@ -30,7 +32,6 @@ def _msg(subject="events.ping", data=b'{"seq": 1}'):
     return msg
 
 
-@pytest.mark.unit
 def test_pull_requires_a_durable():
     """A pull consumer requires an explicit durable consumer name."""
 
@@ -46,7 +47,6 @@ def test_pull_requires_a_durable():
     assert "A pull consumer IS a durable consumer" in str(exc.value)
 
 
-@pytest.mark.unit
 def test_pull_requires_jetstream():
     """Pull consumers require jetstream_enabled=True."""
 
@@ -62,7 +62,6 @@ def test_pull_requires_jetstream():
     assert "Core NATS has no pull consumers" in str(exc.value)
 
 
-@pytest.mark.unit
 def test_pull_and_fanout_are_exclusive():
     class S(CliffracerService):
         @listener("events.ping", durable="pinger", pull=True, fanout=True)
@@ -75,7 +74,6 @@ def test_pull_and_fanout_are_exclusive():
     assert "declares both pull=True and fanout=True" in str(exc.value)
 
 
-@pytest.mark.unit
 def test_a_pull_listener_binds_a_pull_subscription_not_a_push_one():
     class S(CliffracerService):
         @listener("events.ping", durable="pinger", pull=True)
@@ -97,7 +95,6 @@ def test_a_pull_listener_binds_a_pull_subscription_not_a_push_one():
     assert kwargs["durable"] == "pinger"
 
 
-@pytest.mark.unit
 def test_the_pull_consumer_is_bounded_per_replica():
     """max_ack_pending is the per-replica in-flight bound, and it is what makes
     a busy replica stop taking work."""
@@ -120,7 +117,6 @@ def test_the_pull_consumer_is_bounded_per_replica():
     assert config.max_ack_pending == 7
 
 
-@pytest.mark.unit
 def test_fetched_messages_go_through_the_same_ack_and_dlq_path():
     """Verify fetched messages route through the shared handler and ack/dlq logic."""
 

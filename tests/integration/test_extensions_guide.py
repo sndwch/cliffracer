@@ -11,6 +11,7 @@ from cliffracer.core.extension import Extension, RejectMessage, WorkerContext
 
 pytestmark = [pytest.mark.integration, pytest.mark.nats_required]
 
+
 REPO = Path(__file__).resolve().parents[2]
 DOC = REPO / "docs" / "extensions.md"
 # Built by concatenation so these two lines do not themselves contain the

@@ -2,14 +2,14 @@ import pytest
 
 from cliffracer.cli.config import ConfigError, build_overrides, load_yaml_config
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 def test_load_yaml_none_returns_empty_sections():
     cfg = load_yaml_config(None)
     assert cfg == {"global": {}, "services": {}}
 
 
-@pytest.mark.unit
 def test_load_yaml_parses_sections(tmp_path):
     p = tmp_path / "deploy.yaml"
     p.write_text(
@@ -20,7 +20,6 @@ def test_load_yaml_parses_sections(tmp_path):
     assert cfg["services"]["alpha_service"]["auto_restart"] is False
 
 
-@pytest.mark.unit
 def test_load_yaml_unknown_field_raises(tmp_path):
     p = tmp_path / "bad.yaml"
     p.write_text("global:\n  bogus_field: 1\n")
@@ -28,7 +27,6 @@ def test_load_yaml_unknown_field_raises(tmp_path):
         load_yaml_config(str(p))
 
 
-@pytest.mark.unit
 def test_build_overrides_precedence():
     yaml_config = {
         "global": {"nats_url": "nats://g:4222", "log_level": "INFO"},
@@ -40,12 +38,10 @@ def test_build_overrides_precedence():
     assert result["log_level"] == "DEBUG"  # flag beats per-service beats global
 
 
-@pytest.mark.unit
 def test_build_overrides_no_sources_is_empty():
     assert build_overrides("alpha_service", {"global": {}, "services": {}}, {}) == {}
 
 
-@pytest.mark.unit
 def test_load_yaml_unknown_field_in_service_raises(tmp_path):
     p = tmp_path / "bad.yaml"
     p.write_text("services:\n  alpha_service:\n    bogus_field: 1\n")
@@ -53,13 +49,11 @@ def test_load_yaml_unknown_field_in_service_raises(tmp_path):
         load_yaml_config(str(p))
 
 
-@pytest.mark.unit
 def test_load_yaml_missing_file_raises_config_error():
     with pytest.raises(ConfigError, match="could not read"):
         load_yaml_config("/nonexistent/path/does_not_exist.yaml")
 
 
-@pytest.mark.unit
 def test_load_yaml_malformed_yaml_raises_config_error(tmp_path):
     p = tmp_path / "bad.yaml"
     p.write_text(": bad: yaml: [unterminated")
@@ -67,7 +61,6 @@ def test_load_yaml_malformed_yaml_raises_config_error(tmp_path):
         load_yaml_config(str(p))
 
 
-@pytest.mark.unit
 def test_load_yaml_non_dict_service_section_raises(tmp_path):
     p = tmp_path / "bad.yaml"
     p.write_text("services:\n  alpha_service: 42\n")

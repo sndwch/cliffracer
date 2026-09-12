@@ -27,6 +27,8 @@ from cliffracer import CliffracerService, ServiceConfig, listener, rpc, validate
 from cliffracer.core.container import _JetStreamHeartbeat
 from cliffracer.core.jetstream import StreamDeclarationError, StreamSpec
 
+pytestmark = pytest.mark.unit
+
 
 class CustomExplosionError(Exception):
     """Custom exception for error trapping tests."""
@@ -42,7 +44,6 @@ class OrderPayload(BaseModel):
 # ============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_supervised_task_exception_matrix():
     """Supervised background tasks trap diverse exceptions with zero 'never retrieved' warnings."""
@@ -93,7 +94,6 @@ async def test_adversarial_supervised_task_exception_matrix():
         assert len(unretrieved_warnings) == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_supervised_task_cancellation():
     """Cancelling supervised tasks leaves no dangling references and does not log errors."""
@@ -127,7 +127,6 @@ async def test_adversarial_supervised_task_cancellation():
 # ============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_jetstream_heartbeat_endurance():
     """JetStream heartbeat pulses in-progress repeatedly during handler duration > 3 * ack_wait."""
@@ -162,7 +161,6 @@ async def test_adversarial_jetstream_heartbeat_endurance():
     assert msg.ack.await_count == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_jetstream_heartbeat_broker_disconnect_suppression():
     """Heartbeat suppresses connection errors without interrupting the long-running handler."""
@@ -212,7 +210,6 @@ async def test_adversarial_jetstream_heartbeat_broker_disconnect_suppression():
     assert msg.ack.await_count == 1
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_jetstream_heartbeat_non_jetstream_message():
     """_JetStreamHeartbeat is a safe no-op on non-JetStream messages lacking in_progress."""
@@ -229,7 +226,6 @@ async def test_adversarial_jetstream_heartbeat_non_jetstream_message():
 # ============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_event_concurrency_flood_limit():
     """max_event_concurrency=3 strictly bounds concurrent event handlers under 50-message flood."""
@@ -274,7 +270,6 @@ async def test_adversarial_event_concurrency_flood_limit():
     assert sem._value == 3
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_async_rpc_concurrency_flood_limit():
     """max_async_rpc_concurrency=3 strictly bounds concurrent async RPC handlers under flood."""
@@ -319,7 +314,6 @@ async def test_adversarial_async_rpc_concurrency_flood_limit():
     assert sem._value == 3
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_concurrency_semaphore_leak_under_failures_and_cancellations():
     """Concurrency semaphores never leak permits under mixed successes, failures, and cancellations."""
@@ -386,7 +380,6 @@ async def test_adversarial_concurrency_semaphore_leak_under_failures_and_cancell
 # ============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_dlq_namespacing_malformed_and_validation():
     """Namespaced service DLQ publishes strictly to unnamespaced dlq.<service>."""
@@ -440,7 +433,6 @@ async def test_adversarial_dlq_namespacing_malformed_and_validation():
     invalid_schema_msg.term.assert_awaited_once()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_dlq_outbound_hooks_bypassed_strictly():
     """_publish_dlq never triggers application outbound send hooks."""
@@ -468,7 +460,6 @@ async def test_adversarial_dlq_outbound_hooks_bypassed_strictly():
     assert call_subject == "dlq.catalog"
 
 
-@pytest.mark.unit
 def test_adversarial_dlq_stream_coverage_matrix():
     """Stream coverage assertion verifies unnamespaced DLQ against configured streams."""
     # dlq_subject defaults to 'dlq.{service}'
@@ -504,7 +495,6 @@ def test_adversarial_dlq_stream_coverage_matrix():
 # ============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_resilience_proxy_call_async_coroutine():
     """ResilientMethodProxy.call_async returns an awaitable coroutine with zero warnings."""
@@ -546,7 +536,6 @@ async def test_adversarial_resilience_proxy_call_async_coroutine():
         assert len(coro_warnings) == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_resilience_proxy_half_open_state_and_probe_isolation():
     """Fire-and-forget call_async preserves HALF_OPEN state and does not consume probe quota."""
@@ -606,7 +595,6 @@ async def test_adversarial_resilience_proxy_half_open_state_and_probe_isolation(
     assert cb.state == CircuitState.CLOSED
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_max_rpc_concurrency_fallback_for_async_rpc():
     """max_async_rpc_concurrency falls back to max_rpc_concurrency when None."""
@@ -644,7 +632,6 @@ async def test_adversarial_max_rpc_concurrency_fallback_for_async_rpc():
     assert active_count == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_dlq_publish_failure_still_terminates_jetstream_msg():
     """When DLQ publishing fails, JetStream message is still safely terminated."""
@@ -679,7 +666,6 @@ async def test_adversarial_dlq_publish_failure_still_terminates_jetstream_msg():
     msg.term.assert_awaited_once()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_adversarial_jetstream_max_deliver_deadletter_and_term():
     """When delivery count reaches jetstream_max_deliver, message lands on DLQ and terminates."""
@@ -732,7 +718,6 @@ async def test_adversarial_jetstream_max_deliver_deadletter_and_term():
     assert "ops" not in dlq_subj
 
 
-@pytest.mark.unit
 def test_adversarial_resilience_method_proxy_weakref_gc():
     """ResilientMethodProxy raises RuntimeError if underlying service was garbage collected."""
     import gc

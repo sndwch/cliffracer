@@ -7,10 +7,11 @@ from zoneinfo import ZoneInfo
 import pytest
 from cliffracer_cron import CronTimer, cron
 
+pytestmark = pytest.mark.unit
+
 UTC = ZoneInfo("UTC")
 
 
-@pytest.mark.unit
 class TestCronDecorator:
     def test_decorator_registers_cron_timer(self):
         """@cron marks the method with a CronTimer in _cliffracer_timers."""
@@ -52,7 +53,6 @@ class TestCronDecorator:
         assert hourly._cliffracer_timers[0].expression == "@hourly"
 
 
-@pytest.mark.unit
 class TestCronSchedule:
     def test_seconds_until_next_utc(self):
         """0 9 * * * one hour before 9am UTC -> 3600s."""
@@ -75,7 +75,6 @@ class TestCronSchedule:
         assert timer._seconds_until_next(on_boundary) == pytest.approx(86400.0, abs=1.0)
 
 
-@pytest.mark.unit
 class TestCronExecution:
     @pytest.mark.asyncio
     async def test_eager_fires_immediately(self):
@@ -123,7 +122,6 @@ class TestCronExecution:
         assert stats["tz"] == "UTC"
 
 
-@pytest.mark.unit
 class TestCronDiscovery:
     def test_cron_handler_discovered_as_timer(self):
         """A @cron method on a real service is picked up by handler discovery,

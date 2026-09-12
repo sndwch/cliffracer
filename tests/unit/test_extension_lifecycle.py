@@ -4,6 +4,8 @@ from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.extension import Extension, entrypoint
 from tests.conftest import declared
 
+pytestmark = pytest.mark.unit
+
 
 class Rec(Extension):
     log: list[str]
@@ -36,7 +38,6 @@ class Svc(CliffracerService):
         super().__init__(config)
 
 
-@pytest.mark.unit
 def test_extensions_are_bound_per_instance_in_declaration_order():
     a = Svc(ServiceConfig(name="a"))
     b = Svc(ServiceConfig(name="b"))
@@ -45,7 +46,6 @@ def test_extensions_are_bound_per_instance_in_declaration_order():
     assert a.first.service is a
 
 
-@pytest.mark.unit
 async def test_setup_runs_first_in_start_then_start_and_stop_run_in_order(monkeypatch):
     """Verify setup runs at start before broker connection, followed by start and stop in order."""
     svc = Svc(ServiceConfig(name="a"))
@@ -64,7 +64,6 @@ async def test_setup_runs_first_in_start_then_start_and_stop_run_in_order(monkey
     assert svc.log[5:] == ["stop:second", "stop:first"]
 
 
-@pytest.mark.unit
 async def test_health_and_info_collect_contributions_under_the_extension_name(monkeypatch):
     svc = Svc(ServiceConfig(name="a"))
     health = await svc.health_check()
@@ -73,7 +72,6 @@ async def test_health_and_info_collect_contributions_under_the_extension_name(mo
     assert svc.get_service_info()["first"] == {"tag": "first"}
 
 
-@pytest.mark.unit
 async def test_a_raising_contribution_is_reported_under_its_name_and_does_not_change_status():
     class Bad(Extension):
         def health_details(self):
@@ -90,7 +88,6 @@ async def test_a_raising_contribution_is_reported_under_its_name_and_does_not_ch
     assert health["status"] == "stopped"
 
 
-@pytest.mark.unit
 def test_add_extension_binds_and_appends():
     svc = Svc(ServiceConfig(name="a"))
     third = svc.add_extension(Rec("third"), name="third")
@@ -98,7 +95,6 @@ def test_add_extension_binds_and_appends():
     assert declared(svc) == ["first", "second", "third"]
 
 
-@pytest.mark.unit
 def test_an_unknown_entrypoint_kind_is_an_error_at_discovery():
     class Owner(Extension):
         pass
@@ -115,7 +111,6 @@ def test_an_unknown_entrypoint_kind_is_an_error_at_discovery():
         svc._discover_handlers()
 
 
-@pytest.mark.unit
 def test_a_registered_kind_is_bound_through_its_owner():
     seen = []
 

@@ -6,13 +6,14 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 def _mock_nats():
     """Mock NATS connection without invoking callbacks."""
     return patch("cliffracer.core.container.nats.connect", new=AsyncMock(return_value=AsyncMock()))
 
 
-@pytest.mark.unit
 async def test_on_connect_fires_on_the_initial_connection():
     fired = []
 
@@ -26,7 +27,6 @@ async def test_on_connect_fires_on_the_initial_connection():
     assert fired == ["initial"], "on_connect did not fire on the initial connection"
 
 
-@pytest.mark.unit
 async def test_a_sync_on_connect_is_awaited_through_maybe_await():
     """Verify synchronous on_connect callbacks are properly awaited."""
     fired = []
@@ -41,7 +41,6 @@ async def test_a_sync_on_connect_is_awaited_through_maybe_await():
     assert fired == ["sync"]
 
 
-@pytest.mark.unit
 async def test_it_fires_once_per_connection_not_once_per_callback_path():
     """Verify on_connect fires exactly once per initial connection and reconnection."""
     fired = []
@@ -58,7 +57,6 @@ async def test_it_fires_once_per_connection_not_once_per_callback_path():
     assert fired == [0, 1]
 
 
-@pytest.mark.unit
 async def test_CONTROL_no_on_connect_still_connects():
     """Verify connection succeeds when no on_connect callback is specified."""
     svc = CliffracerService(ServiceConfig(name="a"))
@@ -70,7 +68,6 @@ async def test_CONTROL_no_on_connect_still_connects():
     assert svc.container.nc is not None
 
 
-@pytest.mark.unit
 async def test_CONTROL_the_mock_does_not_fire_the_callback_itself():
     """Verify the mocked NATS connection does not invoke the callback directly."""
     fired = []

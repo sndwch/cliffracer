@@ -9,6 +9,8 @@ from cliffracer.core.exceptions import ServiceLifecycleError
 from cliffracer.core.service import CliffracerService
 from cliffracer.core.service_config import ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 class SlowStartupService(CliffracerService):
     """Service with delayed startup hook to simulate concurrent stop() invocation."""
@@ -29,7 +31,6 @@ class SlowStartupService(CliffracerService):
         self.shutdown_called_count += 1
 
 
-@pytest.mark.unit
 async def test_stop_during_start_cancels_start_task():
     """Stopping a service while start() is running cancels the start task and cleans up."""
     cfg = ServiceConfig(name="race_svc", health_port=0)
@@ -70,7 +71,6 @@ async def test_stop_during_start_cancels_start_task():
         assert svc.shutdown_called_count == 0
 
 
-@pytest.mark.unit
 async def test_stop_idempotent_after_cancel():
     """Consecutive stop() calls after a cancelled start() are safe and idempotent."""
     cfg = ServiceConfig(name="race_idempotent_svc", health_port=0)
@@ -99,7 +99,6 @@ async def test_stop_idempotent_after_cancel():
         assert svc.shutdown_called_count == 0  # Not incremented again
 
 
-@pytest.mark.unit
 async def test_stop_called_from_within_on_startup():
     """A service that invokes stop() inside its own on_startup hook exits cleanly."""
 
@@ -134,7 +133,6 @@ async def test_stop_called_from_within_on_startup():
         mock_subs.assert_not_called()
 
 
-@pytest.mark.unit
 async def test_on_shutdown_not_called_if_on_startup_never_ran():
     """If start() fails before on_startup (e.g. connect fails), on_shutdown must not run."""
 
@@ -166,7 +164,6 @@ async def test_on_shutdown_not_called_if_on_startup_never_ran():
         assert svc._stopped is True
 
 
-@pytest.mark.unit
 async def test_abortive_startup_cleanup_and_idempotent_stop():
     """Defensive stop() call after an abortive start() is clean and idempotent."""
 
@@ -202,7 +199,6 @@ async def test_abortive_startup_cleanup_and_idempotent_stop():
         assert svc._stopped is True
 
 
-@pytest.mark.unit
 async def test_on_shutdown_invoked_when_startup_succeeded():
     """When start() completes successfully, stop() invokes on_shutdown()."""
 
@@ -237,7 +233,6 @@ async def test_on_shutdown_invoked_when_startup_succeeded():
         assert svc._stopped is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_queued_start_rejected_when_stop_cancels_inflight_start():
     """Verify that a start() coroutine waiting on _lock is rejected when stop() cancels startup."""
@@ -276,7 +271,6 @@ async def test_queued_start_rejected_when_stop_cancels_inflight_start():
         assert svc._stopped is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_abortive_cleanup_failure_allows_stop_retry():
     """Verify that if abortive cleanup fails, _stopped remains False and stop() retries teardown."""
@@ -310,7 +304,6 @@ async def test_abortive_cleanup_failure_allows_stop_retry():
     assert svc._stopped is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_shutdown_hook_invoked_on_failure_after_on_startup():
     """Verify on_shutdown() is invoked if startup fails after on_startup() completed."""
@@ -345,7 +338,6 @@ async def test_shutdown_hook_invoked_on_failure_after_on_startup():
     assert svc._stopped is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_shutdown_hook_skipped_on_failure_before_on_startup():
     """Verify on_shutdown() is skipped if startup fails before on_startup() executes."""

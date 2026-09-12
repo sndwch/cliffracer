@@ -19,6 +19,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.exceptions import ServiceLifecycleError
 
+pytestmark = pytest.mark.unit
+
 
 class InstrumentedLifecycleService(CliffracerService):
     """Service instrumented to record exact counts of lifecycle events."""
@@ -108,7 +110,6 @@ def assert_lifecycle_state(
         assert svc.container.lifecycle._startup_succeeded == startup_succeeded
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_continuous_rapid_cancellation_during_slow_abortive_cleanup():
     """Verify that hammering start() with 50 continuous cancellations during
@@ -174,7 +175,6 @@ async def test_continuous_rapid_cancellation_during_slow_abortive_cleanup():
     assert_lifecycle_state(svc, running=False, stopped=True, starting=False)
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_lock_contention_blocked_during_slow_abortive_cleanup_under_cancellation():
     """Verify that concurrent start() and stop() callers cannot acquire self._lock
@@ -253,7 +253,6 @@ async def test_lock_contention_blocked_during_slow_abortive_cleanup_under_cancel
     assert_lifecycle_state(svc, running=False, stopped=True, starting=False)
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_abortive_cleanup_exception_masking_under_continuous_cancellation():
     """Verify that exceptions in intermediate cleanup stages (timers, extensions, disconnect)
@@ -304,7 +303,6 @@ async def test_abortive_cleanup_exception_masking_under_continuous_cancellation(
     assert not svc.container.lifecycle.lock.locked()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_cancellation_bombardment_during_interleaved_start_stop():
     """50 concurrent start/stop tasks subject to random external cancellations.
@@ -347,7 +345,6 @@ async def test_cancellation_bombardment_during_interleaved_start_stop():
     assert svc.connect_count == svc.disconnect_count
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rapid_restart_loop_after_cancelled_abortive_cleanup():
     """Perform 25 rapid cycles alternating between a cancelled abortive startup
@@ -399,7 +396,6 @@ async def test_rapid_restart_loop_after_cancelled_abortive_cleanup():
     assert not svc.container.lifecycle.lock.locked()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_external_task_cancels_start_task_and_immediately_awaits_start():
     """Task A starts the service. Task B cancels Task A and immediately calls svc.start().

@@ -8,6 +8,8 @@ from nats.errors import NoServersError
 
 from cliffracer import CliffracerService, ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 def _cfg(**kw):
     return ServiceConfig(name="unreachable", nats_url="nats://127.0.0.1:14222", **kw)

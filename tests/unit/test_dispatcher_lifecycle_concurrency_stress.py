@@ -25,6 +25,8 @@ from cliffracer.core.service import CliffracerService
 from cliffracer.core.service_config import ServiceConfig
 from cliffracer.testing.messages import MockMessage, TestResponse
 
+pytestmark = pytest.mark.unit
+
 # ==============================================================================
 # Models for Typed RPC handlers
 # ==============================================================================
@@ -79,7 +81,6 @@ def make_rpc_message(
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_concurrency_stress_strict_semaphore_bound() -> None:
     """Simultaneous RPC requests exceeding semaphore capacity are queued without exceeding bound."""
@@ -143,7 +144,6 @@ async def test_rpc_concurrency_stress_strict_semaphore_bound() -> None:
     assert len(svc.container.lifecycle.active_tasks) == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_concurrency_correlation_inheritance_and_no_crosstalk() -> None:
     """Under heavy concurrency load, every request inherits and maintains its own correlation ID."""
@@ -209,7 +209,6 @@ async def test_rpc_concurrency_correlation_inheritance_and_no_crosstalk() -> Non
         assert resp.result["subtask_cid"] == expected_cid
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_concurrency_mixed_payloads_errors_and_zero_semaphore_leaks() -> None:
     """Fault injection under concurrency: malformed JSON, schema errors, and exceptions release permits."""
@@ -327,7 +326,6 @@ async def test_rpc_concurrency_mixed_payloads_errors_and_zero_semaphore_leaks() 
     assert isinstance(resp_opt.data, dict) and "traceback" in resp_opt.data
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rpc_concurrency_client_cancellation_during_semaphore_wait() -> None:
     """When callers cancel while awaiting the semaphore, permits and state remain uncorrupted."""
@@ -398,7 +396,6 @@ async def test_rpc_concurrency_client_cancellation_during_semaphore_wait() -> No
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rapid_serialized_start_stop_cycles() -> None:
     """Rapid succession of start() and stop() cycles cleanly initializes and reaps resources."""
@@ -457,7 +454,6 @@ async def test_rapid_serialized_start_stop_cycles() -> None:
     assert stop_count == cycles
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_rapid_abortive_startup_cycles_and_recovery() -> None:
     """Startup exceptions trigger internal abortive cleanup without corrupting mutex or state."""
@@ -516,7 +512,6 @@ async def test_rapid_abortive_startup_cycles_and_recovery() -> None:
     assert bool(svc.container.lifecycle.is_stopped) is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_concurrent_overlapping_start_and_stop_race() -> None:
     """Calling stop() while start() is in flight cancels startup cleanly without deadlocking."""
@@ -564,7 +559,6 @@ async def test_concurrent_overlapping_start_and_stop_race() -> None:
     assert not svc.container.lifecycle.lock.locked()
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_multiple_concurrent_stop_calls() -> None:
     """Multiple parallel stop() calls are idempotent and serialize under the lifecycle lock."""
@@ -604,7 +598,6 @@ async def test_multiple_concurrent_stop_calls() -> None:
     assert len(svc.container.lifecycle.active_tasks) == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_start_rejected_when_stop_requested() -> None:
     """start() rejects execution if stop has already been requested."""
@@ -626,7 +619,6 @@ async def test_start_rejected_when_stop_requested() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_in_flight_tasks_drained_cleanly_during_shutdown() -> None:
     """In-flight supervised tasks run to completion during graceful shutdown."""
@@ -657,7 +649,6 @@ async def test_in_flight_tasks_drained_cleanly_during_shutdown() -> None:
     assert bool(svc.container.lifecycle.is_stopped) is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_in_flight_tasks_raising_exceptions_drained_without_unretrieved_warnings() -> None:
     """Tasks raising unhandled exceptions during shutdown are drained and exceptions retrieved."""
@@ -690,7 +681,6 @@ async def test_in_flight_tasks_raising_exceptions_drained_without_unretrieved_wa
     assert bool(svc.container.lifecycle.is_stopped) is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_in_flight_hanging_tasks_cancelled_after_shutdown_timeout() -> None:
     """Tasks that hang indefinitely are cancelled when shutdown_timeout expires."""
@@ -728,7 +718,6 @@ async def test_in_flight_hanging_tasks_cancelled_after_shutdown_timeout() -> Non
     assert bool(svc.container.lifecycle.is_stopped) is True
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_shutdown_resilience_when_teardown_hooks_raise() -> None:
     """Failures in timers, subscriptions, or on_shutdown do not abort task draining or disconnect."""
@@ -781,7 +770,6 @@ async def test_shutdown_resilience_when_teardown_hooks_raise() -> None:
     assert len(svc.container.lifecycle.active_tasks) == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_in_flight_task_spawns_subtask_during_drain() -> None:
     """Sub-tasks spawned dynamically during shutdown draining are bounded and cleaned up."""
@@ -820,7 +808,6 @@ async def test_in_flight_task_spawns_subtask_during_drain() -> None:
 # ==============================================================================
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_event_concurrency_stress_strict_semaphore_bound() -> None:
     """Event callbacks strictly obey max_event_concurrency without leaking tasks."""
@@ -868,7 +855,6 @@ async def test_event_concurrency_stress_strict_semaphore_bound() -> None:
     assert len(svc.container.lifecycle.active_tasks) == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_async_rpc_concurrency_stress_strict_semaphore_bound() -> None:
     """Fire-and-forget async RPC calls obey max_async_rpc_concurrency bound."""
@@ -921,7 +907,6 @@ async def test_async_rpc_concurrency_stress_strict_semaphore_bound() -> None:
     assert len(svc.container.lifecycle.active_tasks) == 0
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_stop_cancelled_during_drain_ensures_critical_teardown() -> None:
     """If stop() is cancelled while draining active tasks, extensions and transport disconnect still execute."""
@@ -983,7 +968,6 @@ async def test_stop_cancelled_during_drain_ensures_critical_teardown() -> None:
     assert svc.container.connection.nc is None
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_fails_closed_extension_rejects_and_releases_semaphore() -> None:
     """Extensions failing closed reject messages and release semaphore permits under concurrency."""
@@ -1047,7 +1031,6 @@ async def test_fails_closed_extension_rejects_and_releases_semaphore() -> None:
     assert resp_after.result["status"] == "authorized"
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_dlq_publish_failure_under_concurrency_never_deadlocks() -> None:
     """If DLQ publish encounters transport error, dispatcher logs and terminates without deadlock."""

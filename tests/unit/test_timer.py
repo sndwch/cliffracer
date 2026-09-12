@@ -10,6 +10,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig, timer
 from cliffracer.core.timer import Timer
 
+pytestmark = pytest.mark.unit
+
 
 class TimerTestService(CliffracerService):
     """Test service with timer methods"""

@@ -11,6 +11,8 @@ from cliffracer_auth.simple_auth import AuthConfig, SimpleAuthService
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
 
+pytestmark = pytest.mark.unit
+
 SECRET = "x" * 40
 
 
@@ -20,7 +22,6 @@ def _service(**overrides):
     return svc
 
 
-@pytest.mark.unit
 class TestTokenRevocation:
     def test_minted_token_contains_unique_jti(self):
         svc = _service()

@@ -197,17 +197,25 @@ Extension settings come from the environment under their own prefixes —
 
 ## Testing
 
-Two suites, and the markers `pyproject.toml` declares:
+Every test module declares one tier marker, once, at module level. The tier is
+the directory it sits in:
 
-| | |
-|---|---|
-| `tests/unit/` | `unit`, no external dependencies |
-| `tests/integration/` | `integration`, and `nats_required` where a broker is needed |
+| | | |
+|---|---|---|
+| `tests/unit/` | `unit` | the library, in process |
+| `tests/transport/` | `unit` | the library over an in-memory transport |
+| `tests/integration/` | `integration` | against a live broker |
+| `tests/benchmark/` | `benchmark` | timings, not a correctness gate |
+| `tests/repo/` | `repo` | the repository: docs, packaging, CI, the suite |
+| `packages/*/tests/` | `unit` | an extension, alongside its own package |
 
-`slow` marks a long-running test in either. `$CLIFFRACER_TEST_NATS_URL` moves
-the broker the whole suite dials; without it, tests marked `nats_required` skip
-and the rest run. `load-testing/` contains locust scripts, which the suite does
-not run.
+`nats_required` and `slow` are orthogonal flags and may appear under any tier.
+`$CLIFFRACER_TEST_NATS_URL` moves the broker the whole suite dials; without it,
+tests marked `nats_required` skip and the rest run. `load-testing/` contains
+locust scripts, which the suite does not run.
+
+`tests/repo/test_the_suite_follows_its_conventions.py` enforces the tier rule
+and the two filename rules in CONTRIBUTING.md.
 
 ## Deployment
 

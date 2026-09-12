@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 
 from cliffracer import CliffracerService, ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 class Svc(CliffracerService):
     http = HttpExtension(port=0)
@@ -17,7 +19,6 @@ class Svc(CliffracerService):
         return {"ok": True}
 
 
-@pytest.mark.unit
 async def test_the_middleware_propagates_a_supplied_correlation_id():
     svc = Svc(ServiceConfig(name="http_test_service"))
     await svc.container._setup_extensions()
@@ -29,7 +30,6 @@ async def test_the_middleware_propagates_a_supplied_correlation_id():
     assert response.headers["X-Correlation-ID"] == "http_corr_123"
 
 
-@pytest.mark.unit
 async def test_the_middleware_mints_one_when_the_caller_sends_none():
     svc = Svc(ServiceConfig(name="http_test_service"))
     await svc.container._setup_extensions()
@@ -41,7 +41,6 @@ async def test_the_middleware_mints_one_when_the_caller_sends_none():
     assert response.headers["X-Correlation-ID"].startswith("corr_")
 
 
-@pytest.mark.unit
 def test_the_fastapi_dependency_sees_the_middleware_s_id():
     app = FastAPI()
     captured = None

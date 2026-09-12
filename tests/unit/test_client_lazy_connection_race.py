@@ -14,8 +14,9 @@ import pytest
 
 from cliffracer.client import ServiceClient
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 async def test_concurrent_connection_calls_open_single_connection():
     """Simultaneous connection requests must open exactly one connection."""
     connect_calls = 0
@@ -47,7 +48,6 @@ async def test_concurrent_connection_calls_open_single_connection():
     created_connections[0].drain.assert_awaited_once()
 
 
-@pytest.mark.unit
 async def test_subsequent_calls_reuse_existing_connection_without_lock_contention():
     """Once connected, _connection() returns the cached connection without calling connect."""
     mock_nc = AsyncMock()
@@ -66,7 +66,6 @@ async def test_subsequent_calls_reuse_existing_connection_without_lock_contentio
     assert c3 is mock_nc
 
 
-@pytest.mark.unit
 async def test_pre_supplied_connection_is_reused_without_connecting():
     """When a connection is provided to __init__, _connection() returns it immediately."""
     existing_nc = AsyncMock()
@@ -79,7 +78,6 @@ async def test_pre_supplied_connection_is_reused_without_connecting():
     assert all(c is existing_nc for c in conns)
 
 
-@pytest.mark.unit
 async def test_connection_failure_releases_lock_allowing_retry():
     """If nats.connect() fails, the lock is released so a future attempt can retry."""
     attempts = 0
@@ -108,7 +106,6 @@ async def test_connection_failure_releases_lock_allowing_retry():
     assert client._nc is nc
 
 
-@pytest.mark.unit
 async def test_concurrent_verify_calls_open_single_connection():
     """Concurrent public calls (like verify) that lazily connect must also share one connection."""
     connect_calls = 0

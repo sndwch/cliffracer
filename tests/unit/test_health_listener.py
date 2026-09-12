@@ -7,6 +7,8 @@ import pytest
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.health_listener import HealthListener
 
+pytestmark = pytest.mark.unit
+
 # Ensure container module is available before running tests that patch container methods.
 _HAS_CONTAINER = importlib.util.find_spec("cliffracer.core.container") is not None
 _needs_container = pytest.mark.skipif(
@@ -25,7 +27,6 @@ async def _get(port: int, path: str) -> tuple[int, dict]:
     return status, (json.loads(body) if body else {})
 
 
-@pytest.mark.unit
 async def test_health_and_info_are_served_as_json_on_an_ephemeral_port():
     svc = CliffracerService(ServiceConfig(name="h", health_port=0))
     hl = HealthListener(svc, "127.0.0.1", 0)
@@ -43,7 +44,6 @@ async def test_health_and_info_are_served_as_json_on_an_ephemeral_port():
         await hl.stop()
 
 
-@pytest.mark.unit
 async def test_health_status_code_is_503_when_not_healthy():
     svc = CliffracerService(ServiceConfig(name="h"))
     hl = HealthListener(svc, "127.0.0.1", 0)
@@ -55,7 +55,6 @@ async def test_health_status_code_is_503_when_not_healthy():
         await hl.stop()
 
 
-@pytest.mark.unit
 @_needs_container
 async def test_the_service_starts_and_stops_the_listener(monkeypatch):
     svc = CliffracerService(ServiceConfig(name="h", health_port=0))
@@ -78,7 +77,6 @@ async def test_the_service_starts_and_stops_the_listener(monkeypatch):
         await _get(svc.health_listener.port, "/health")
 
 
-@pytest.mark.unit
 @_needs_container
 async def test_a_disabled_listener_does_not_bind(monkeypatch):
     svc = CliffracerService(ServiceConfig(name="h", health_listener=False))

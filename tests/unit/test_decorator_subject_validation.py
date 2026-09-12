@@ -13,6 +13,8 @@ from cliffracer import (
     validated_listener,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class Evt(BaseModel):
     id: str
@@ -38,7 +40,6 @@ SUBJECTS_IN_USE = [
 ]
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("subject", SUBJECTS_IN_USE)
 def test_subjects_already_in_use_are_still_accepted(subject):
     listener(subject)
@@ -46,7 +47,6 @@ def test_subjects_already_in_use_are_still_accepted(subject):
     validated_listener(subject, Evt)
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     "decorator,call",
     [
@@ -66,7 +66,6 @@ def test_a_model_class_is_refused_and_points_at_validated_listener(decorator, ca
     assert "validated_listener" in message
 
 
-@pytest.mark.unit
 def test_a_message_subclass_is_refused_too():
     """BroadcastMessage is the class the original misuse actually passed."""
     with pytest.raises(ConfigurationError) as exc:
@@ -75,7 +74,6 @@ def test_a_message_subclass_is_refused_too():
     assert "BroadcastMessage" in str(exc.value)
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize("subject", [42, None, ["orders.created"], object()])
 def test_other_non_strings_are_refused(subject):
     with pytest.raises(ConfigurationError) as exc:
@@ -84,7 +82,6 @@ def test_other_non_strings_are_refused(subject):
     assert "subject string" in str(exc.value)
 
 
-@pytest.mark.unit
 @pytest.mark.parametrize(
     "subject,reason",
     [
@@ -106,7 +103,6 @@ def test_a_subject_nats_would_refuse_is_caught_here_instead(subject, reason):
     assert repr(subject) in message
 
 
-@pytest.mark.unit
 def test_the_error_arrives_at_class_definition_not_at_discovery():
     """Decoration time is where the mistake is; discovery is already too late."""
     with pytest.raises(ConfigurationError):
@@ -117,7 +113,6 @@ def test_the_error_arrives_at_class_definition_not_at_discovery():
                 pass
 
 
-@pytest.mark.unit
 def test_a_valid_service_still_builds_and_registers():
     """The guard must not disturb the ordinary path."""
 
@@ -137,7 +132,6 @@ def test_a_valid_service_still_builds_and_registers():
     assert all(isinstance(key, str) for key in svc.container.registry.event_handlers)
 
 
-@pytest.mark.unit
 def test_validation_does_not_reject_a_wildcard_only_subject():
     """The validator says nothing about wildcard placement, deliberately."""
     listener("*")

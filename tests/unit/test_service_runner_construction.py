@@ -3,6 +3,8 @@ import pytest
 from cliffracer.core import ServiceConfig
 from cliffracer.runners.orchestrator import ServiceRunner
 
+pytestmark = pytest.mark.unit
+
 
 class NoArgService:
     """Self-configuring service (the codebase convention)."""
@@ -18,7 +20,6 @@ class ConfigArgService:
         self.config = config
 
 
-@pytest.mark.unit
 def test_constructs_no_arg_service_and_keeps_its_config():
     runner = ServiceRunner(NoArgService)
     svc = runner._construct_service()
@@ -27,7 +28,6 @@ def test_constructs_no_arg_service_and_keeps_its_config():
     assert svc.config.nats_url == "nats://self:4222"
 
 
-@pytest.mark.unit
 def test_overrides_overlay_onto_self_built_config():
     runner = ServiceRunner(
         NoArgService, overrides={"nats_url": "nats://override:4222", "log_level": "DEBUG"}
@@ -39,7 +39,6 @@ def test_overrides_overlay_onto_self_built_config():
     assert svc.config.name == "noarg_service"
 
 
-@pytest.mark.unit
 def test_config_arg_constructor_receives_config():
     cfg = ServiceConfig(name="cfg_service", nats_url="nats://given:4222")
     runner = ServiceRunner(ConfigArgService, config=cfg)
@@ -48,7 +47,6 @@ def test_config_arg_constructor_receives_config():
     assert svc.config.nats_url == "nats://given:4222"
 
 
-@pytest.mark.unit
 def test_legacy_config_overlays_when_constructor_is_no_arg():
     # ecommerce-style call: pass a ServiceConfig to a no-arg service class.
     cfg = ServiceConfig(name="ignored_name", auto_restart=False, restart_delay=2.0)
@@ -60,7 +58,6 @@ def test_legacy_config_overlays_when_constructor_is_no_arg():
     assert svc.config.restart_delay == 2.0
 
 
-@pytest.mark.unit
 def test_legacy_overlay_applies_explicitly_set_default_value():
     # NoArgService self-configures nats_url to "nats://self:4222". A legacy config
     # that EXPLICITLY sets nats_url to the schema default ("nats://localhost:4222")
@@ -73,7 +70,6 @@ def test_legacy_overlay_applies_explicitly_set_default_value():
     assert svc.config.nats_url == "nats://localhost:4222"
 
 
-@pytest.mark.unit
 def test_unknown_override_key_raises():
     runner = ServiceRunner(NoArgService, overrides={"not_a_field": 1})
     with pytest.raises(ValueError, match="not_a_field"):
@@ -85,7 +81,6 @@ def test_unknown_override_key_raises():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
 def test_backoff_grows_across_crashes_and_resets_on_success():
     """Verify exponential backoff stepping and cap behavior."""
     from cliffracer.runners.orchestrator import _next_backoff

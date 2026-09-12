@@ -9,8 +9,9 @@ import pytest
 
 from cliffracer.client import ServiceClient
 
+pytestmark = pytest.mark.unit
 
-@pytest.mark.unit
+
 def test_client_init_defaults():
     client = ServiceClient(service="test_svc")
     assert client.service == "test_svc"
@@ -19,7 +20,6 @@ def test_client_init_defaults():
     assert isinstance(client._connect_lock, asyncio.Lock)
 
 
-@pytest.mark.unit
 def test_client_init_with_connection():
     mock_nc = MagicMock()
     client = ServiceClient(nc=mock_nc, service="test_svc")

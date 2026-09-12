@@ -9,6 +9,8 @@ from loguru import logger
 
 from cliffracer import CliffracerService, ServiceConfig
 
+pytestmark = pytest.mark.unit
+
 
 def _handler_ids() -> set[int]:
     """loguru keeps its handlers in a private dict; the ids are what add()
@@ -16,7 +18,6 @@ def _handler_ids() -> set[int]:
     return set(logger._core.handlers)
 
 
-@pytest.mark.unit
 async def test_no_sink_is_added_unless_asked_for():
     class Svc(CliffracerService):
         logging = LoggingExtension()
@@ -32,7 +33,6 @@ async def test_no_sink_is_added_unless_asked_for():
         await svc.logging.stop()
 
 
-@pytest.mark.unit
 async def test_the_sink_is_added_and_then_REMOVED():
     """Verify NATS sink handler is attached on start and detached on stop."""
 
@@ -54,7 +54,6 @@ async def test_the_sink_is_added_and_then_REMOVED():
     assert svc.logging.health_details() == {"to_nats": True, "streaming": False}
 
 
-@pytest.mark.unit
 async def test_start_stop_start_stop_does_not_accumulate_sinks():
     """Verify repeated start/stop cycles do not accumulate sink handlers."""
 
@@ -71,7 +70,6 @@ async def test_start_stop_start_stop_does_not_accumulate_sinks():
     assert _handler_ids() == before
 
 
-@pytest.mark.unit
 async def test_to_nats_without_a_connection_warns_rather_than_raising():
     class Svc(CliffracerService):
         logging = LoggingExtension(to_nats=True)
@@ -86,7 +84,6 @@ async def test_to_nats_without_a_connection_warns_rather_than_raising():
         await svc.logging.stop()
 
 
-@pytest.mark.unit
 async def test_two_services_do_not_share_sink_state():
     """bind() is a shallow copy, so per-instance state is created in setup()."""
 
@@ -109,7 +106,6 @@ async def test_two_services_do_not_share_sink_state():
         await a.logging.stop()
 
 
-@pytest.mark.unit
 async def test_timing_logs_one_line_per_dispatch_with_the_kind_and_subject():
     lines: list[str] = []
     sink = logger.add(lines.append, level="DEBUG", format="{message}")
@@ -139,7 +135,6 @@ async def test_timing_logs_one_line_per_dispatch_with_the_kind_and_subject():
     assert ms >= 10.0, f"slept 10ms, logged {ms}ms"
 
 
-@pytest.mark.unit
 async def test_timing_off_logs_nothing_and_leaves_no_key_behind():
     lines: list[str] = []
     sink = logger.add(lines.append, level="DEBUG", format="{message}")
@@ -164,7 +159,6 @@ async def test_timing_off_logs_nothing_and_leaves_no_key_behind():
     assert not [line for line in lines if "untimed.echo" in line]
 
 
-@pytest.mark.unit
 def test_structured_mode_actually_writes_parseable_json(tmp_path, monkeypatch):
     """Verify structured mode writes parseable JSON log records."""
     import json

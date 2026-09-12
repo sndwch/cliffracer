@@ -8,13 +8,14 @@ from cliffracer.core.extension import (
     entrypoint,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class Recorder(Extension):
     def __init__(self):
         self.calls: list[str] = []
 
 
-@pytest.mark.unit
 def test_bind_returns_a_copy_that_knows_its_service_and_name():
     ext = Recorder()
     bound = ext.bind(service="svc", name="rec")
@@ -25,7 +26,6 @@ def test_bind_returns_a_copy_that_knows_its_service_and_name():
     assert ext.service is None
 
 
-@pytest.mark.unit
 async def test_default_hooks_are_no_ops_and_details_are_none():
     ext = Recorder().bind(service=None, name="x")
     ctx = WorkerContext(kind="rpc", subject="s", headers={}, correlation_id=None, payload={})
@@ -40,7 +40,6 @@ async def test_default_hooks_are_no_ops_and_details_are_none():
     assert ext.entrypoint_kinds() == {}
 
 
-@pytest.mark.unit
 async def test_per_instance_state_created_in_setup_is_not_shared_between_services():
     """Verify mutable state initialized in setup() is isolated between service instances."""
 
@@ -56,7 +55,6 @@ async def test_per_instance_state_created_in_setup_is_not_shared_between_service
     assert b.seen == []
 
 
-@pytest.mark.unit
 def test_state_built_in_init_is_isolated_across_bound_instances():
     """Verify attributes initialized in __init__ are completely isolated per service."""
     origin = Recorder()
@@ -68,7 +66,6 @@ def test_state_built_in_init_is_isolated_across_bound_instances():
     assert a.calls is not origin.calls
 
 
-@pytest.mark.unit
 def test_extension_specification_is_immutable():
     """Verify attempting to mutate an extension specification after freeze raises AttributeError."""
     origin = Recorder()
@@ -77,7 +74,6 @@ def test_extension_specification_is_immutable():
         origin.calls = ["mutated"]
 
 
-@pytest.mark.unit
 def test_entrypoint_marker_records_kind_spec_and_owner():
     owner = Recorder()
 
@@ -88,7 +84,6 @@ def test_entrypoint_marker_records_kind_spec_and_owner():
     assert handler._cliffracer_entrypoints == [("thing", {"path": "/x"}, owner)]
 
 
-@pytest.mark.unit
 def test_arbitrary_object_dependencies_are_deepcopied_per_bound_instance():
     """Verify arbitrary object instances passed to extensions are isolated per service."""
 
@@ -116,7 +111,6 @@ def test_arbitrary_object_dependencies_are_deepcopied_per_bound_instance():
     assert shared_store.items == ["init"]
 
 
-@pytest.mark.unit
 def test_callable_factories_are_invoked_per_bound_instance():
     """Verify callable factories passed as extension arguments create fresh instances."""
 
@@ -144,7 +138,6 @@ def test_callable_factories_are_invoked_per_bound_instance():
     assert b.client.client_id == 2
 
 
-@pytest.mark.unit
 def test_uncopyable_dependencies_fallback_safely_without_crash():
     """Verify uncopyable dependencies (e.g. threading.Lock) raise ExtensionIsolationError unless wrapped in SharedDependency."""
     import threading

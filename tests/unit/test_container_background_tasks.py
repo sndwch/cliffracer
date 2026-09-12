@@ -6,6 +6,8 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
 
+pytestmark = pytest.mark.unit
+
 
 class _MockEventMsg:
     def __init__(self, subject: str):
@@ -18,7 +20,6 @@ class _MockEventMsg:
         raise ConnectionResetError("Client disconnected")
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_unbounded_rpc_does_not_leak_exception_on_client_disconnect():
     class TestService(CliffracerService):
@@ -46,7 +47,6 @@ async def test_unbounded_rpc_does_not_leak_exception_on_client_disconnect():
     assert task.exception() is None
 
 
-@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_describe_request_does_not_leak_exception_on_client_disconnect():
     class TestService(CliffracerService):
