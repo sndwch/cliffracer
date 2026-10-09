@@ -60,6 +60,9 @@ SUBJECT_HELPERS = frozenset(
         "_with_namespace",
         "effective_event_subject",
         "outbound_subject",
+        # The same shape for a caller holding no ServiceConfig (`cliffracer.calls`), given the
+        # namespace and the environment prefix outright.
+        "call_subject",
         "format_dlq_subject",
         "describe_subject",
         "dlq_subject",

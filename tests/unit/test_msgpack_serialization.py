@@ -449,8 +449,9 @@ async def test_outbound_call_rpc_json_svc_decodes_msgpack_reply(json_svc):
     with patch(
         "cliffracer.core.rpc_calls.deserialize_payload", wraps=deserialize_payload
     ) as spy_mismatch:
-        with pytest.raises((json.JSONDecodeError, UnicodeDecodeError)):
+        with pytest.raises(RpcServerError, match="cannot read") as unreadable:
             await json_svc.call_rpc("other_svc", "plain", value="hi")
+    assert isinstance(unreadable.value.__cause__, json.JSONDecodeError | UnicodeDecodeError)
     spy_mismatch.assert_called_once()
     assert spy_mismatch.call_args.kwargs["content_type"] == "application/json"
 
@@ -551,7 +552,7 @@ async def test_client_content_type_negotiation():
     client._request = AsyncMock(return_value=mock_reply)
 
     with patch(
-        "cliffracer.client.deserialize_payload", wraps=deserialize_payload
+        "cliffracer.core.rpc_calls.deserialize_payload", wraps=deserialize_payload
     ) as spy_deserialize:
         res = await client._call("echo", {"message": "hi", "count": 1}, EchoResponse)
 
@@ -567,7 +568,7 @@ async def test_client_content_type_negotiation():
     # Verify case-insensitive header extraction
     mock_reply.headers = {"content-type": CONTENT_TYPE_MSGPACK}
     with patch(
-        "cliffracer.client.deserialize_payload", wraps=deserialize_payload
+        "cliffracer.core.rpc_calls.deserialize_payload", wraps=deserialize_payload
     ) as spy_deserialize:
         await client._call("echo", {"message": "hi", "count": 1}, EchoResponse)
         spy_deserialize.assert_called_once_with(
@@ -579,12 +580,14 @@ async def test_client_content_type_negotiation():
     # Negative control: mismatched declared content-type must raise rather than
     # silently fall back. Asserted at the decode for the same reason as above.
     # The class is `RpcServerError` rather than the raw `JSONDecodeError` the
-    # decoder throws: a reply this client cannot read is a documented failure,
+    # decoder throws: a reply this caller cannot read is a documented failure,
     # not a builtin escaping past the mapping. What this control asserts is
     # unchanged -- that the declared content type is used and no silent
     # fallback happens.
     mock_reply.headers = {"Content-Type": "application/json"}
-    with patch("cliffracer.client.deserialize_payload", wraps=deserialize_payload) as spy_mismatch:
+    with patch(
+        "cliffracer.core.rpc_calls.deserialize_payload", wraps=deserialize_payload
+    ) as spy_mismatch:
         with pytest.raises(RpcServerError):
             await client._call("echo", {"message": "hi", "count": 1}, EchoResponse)
     spy_mismatch.assert_called_once()

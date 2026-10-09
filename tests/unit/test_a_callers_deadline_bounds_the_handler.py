@@ -12,6 +12,7 @@ asserted is the typed code, who set the deadline, and what ran.
 """
 
 import asyncio
+import dataclasses
 import json
 from unittest.mock import AsyncMock
 
@@ -384,3 +385,36 @@ async def test_a_handler_that_keeps_running_past_its_deadline_is_named_at_twice_
     assert "stubborn is still running 0.050s after being cancelled at its deadline" in line
     # Set for the deadline plus the budget again: never sooner than twice the budget.
     assert at - began >= 2 * 0.05, f"the warning came {at - began:.3f}s after the request"
+
+
+# --- the edges of what a call inside a handler is given ----------------------------------------
+
+
+async def _left_for_a_call(seconds: float, own: float) -> float:
+    async def call() -> float:
+        return deadlines.outbound_timeout(own, "billing.rpc.charge")
+
+    return await _within(seconds, call)
+
+
+async def test_a_call_with_under_a_second_left_is_sent_with_what_is_left():
+    left = await _left_for_a_call(0.5, own=30.0)
+
+    assert 0 < left <= 0.5
+
+
+async def test_a_call_whose_own_timeout_is_zero_is_not_sent_inside_a_request():
+    """min(0, what is left) is exactly zero, which is no time at all, not a zero-second wait."""
+    with pytest.raises(RpcTimeoutError, match="was not sent"):
+        await _left_for_a_call(5.0, own=0.0)
+
+
+def test_a_budget_under_a_millisecond_is_sent_as_one():
+    assert deadlines.header_value(0.0004) == "1"
+
+
+def test_a_deadline_does_not_change_once_made():
+    deadline = Deadline(1.0, 1.0, "caller")
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        deadline.at = 2.0  # type: ignore[misc]

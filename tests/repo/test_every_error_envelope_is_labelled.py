@@ -47,7 +47,7 @@ DISPATCHERS = (
 CLIENT = REPO / "src" / "cliffracer" / "core" / "exceptions.py"
 
 # Asserted, not merely counted: one envelope more is a decision, not a detail.
-EXPECTED_ENVELOPES = 13
+EXPECTED_ENVELOPES = 14
 
 
 def codes_of(node: ast.expr | None) -> frozenset[str] | None:

@@ -132,6 +132,7 @@ def test_CONTROL_the_note_does_not_fit_in_one_environment_string():
     assert refused.value.errno == errno.E2BIG
 
 
+@pytest.mark.gitea_checkout
 def test_the_gitea_step_posts_a_json_body_holding_the_whole_note(stage):
     work, env = stage
 

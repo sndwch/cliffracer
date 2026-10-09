@@ -271,7 +271,7 @@ def _caller(fmt: str) -> Caller:
     svc = Caller(ServiceConfig(name="caller", health_port=0, serialization_format=fmt))
     svc.nc = AsyncMock()
     reply = AsyncMock()
-    reply.data = json.dumps({"result": "ok"}).encode()
+    reply.data = json.dumps({"success": True, "result": "ok"}).encode()
     svc.nc.request.return_value = reply
     svc.nc.publish = AsyncMock()
     return svc
@@ -380,7 +380,7 @@ async def test_the_arguments_the_hooks_see_are_the_callers_objects():
     svc = Spy(ServiceConfig(name="caller", health_port=0))
     svc.nc = AsyncMock()
     reply = AsyncMock()
-    reply.data = json.dumps({"result": "ok"}).encode()
+    reply.data = json.dumps({"success": True, "result": "ok"}).encode()
     svc.nc.request.return_value = reply
     original = svc.container.dispatcher._send_context
 

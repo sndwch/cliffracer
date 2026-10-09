@@ -10,6 +10,7 @@ permission. A decorated async handler is still a coroutine function. The middlew
 """
 
 import asyncio
+import inspect
 import time
 import types
 from datetime import UTC, datetime, timedelta
@@ -247,10 +248,10 @@ def test_CONTROL_an_async_handler_with_the_permission_runs():
     ids=["auth", "permissions"],
 )
 def test_an_async_handler_stays_a_coroutine_function_under_the_auth_decorators(decorator):
-    # The timer dispatch awaits a method only when `asyncio.iscoroutinefunction` says so.
+    # The timer dispatch awaits a method only when `inspect.iscoroutinefunction` says so.
     func = _decorated(decorator, is_async=True)
 
-    assert asyncio.iscoroutinefunction(func) is True
+    assert inspect.iscoroutinefunction(func) is True
 
 
 # --- middleware ---------------------------------------------------------------------------------

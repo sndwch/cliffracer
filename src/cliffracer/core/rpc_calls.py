@@ -19,13 +19,85 @@ from .correlation import CorrelationContext
 from .deadline import TIMEOUT_HEADER, header_value, outbound_timeout
 from .decorators import _unusable_subject_reason
 from .discovery import HandlerDiscovery
-from .exceptions import RpcNoRespondersError, RPCTimeoutError, raise_for_error_envelope
+from .exceptions import (
+    RpcNoRespondersError,
+    RpcServerError,
+    RPCTimeoutError,
+    raise_for_error_envelope,
+)
 from .nats_errors import rpc_error_for
-from .stream_reader import OpenStream, open_stream, read_stream
+from .stream_reader import OpenStream, _preview, open_stream, read_stream
 from .validation import deserialize_payload, serialize_payload, wire_models
 
 if TYPE_CHECKING:
     from .service import CliffracerService
+
+
+def reply_content_type(response: Any) -> str | None:
+    """A reply's declared content type, matched case-insensitively."""
+    headers = getattr(response, "headers", None)
+    if not isinstance(headers, Mapping):
+        return None
+    for key, value in headers.items():
+        if str(key).lower() == "content-type":
+            return str(value)
+    return None
+
+
+def read_reply(response: Any, subject: str, fallback_format: str) -> dict[str, Any]:
+    """An RPC reply decoded by its declared content type (`fallback_format` when it declares
+    none), as an object, or an `RpcServerError` saying what came back.
+
+    A reply that cannot be decoded, or that decodes to anything but an object, is the remote
+    breaking the protocol, so it is raised as the remote's fault, with a prefix of the payload: a
+    reply nobody can parse cannot be diagnosed without a sight of it.
+    """
+    try:
+        data = deserialize_payload(
+            response.data,
+            content_type=reply_content_type(response),
+            fallback_format=fallback_format,
+        )
+    except Exception as exc:
+        raise RpcServerError(
+            f"{subject} answered with something this caller cannot read: {_preview(response.data)}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise RpcServerError(
+            f"{subject} answered with {type(data).__name__}, not an object: "
+            f"{_preview(response.data)}"
+        )
+    return data
+
+
+def require_success(data: dict[str, Any], subject: str) -> None:
+    """Return if a reply with no error envelope says it succeeded, else raise `RpcServerError`.
+
+    A reply must carry the `success` key: one that does not is the remote breaking the protocol.
+    One that has it and says it failed, with no `error` for `raise_for_error_envelope` to read, is
+    a failing responder that left out why.
+    """
+    if data.get("success") is True:
+        return
+    if "success" not in data:
+        raise RpcServerError(f"protocol error: reply from {subject} carries no success key")
+    raise RpcServerError(
+        f"{subject} failed without saying why: the reply has success="
+        f"{data['success']!r} and no error"
+    )
+
+
+def reply_result(response: Any, subject: str, fallback_format: str) -> Any:
+    """The `result` of an RPC reply, or the error it carries, raised.
+
+    The reply is read as `read_reply` reads it, an error envelope is raised as
+    `raise_for_error_envelope` raises it, and a reply that does not say it succeeded is raised as
+    `require_success` raises it: the reading a generated client applies too.
+    """
+    data = read_reply(response, subject, fallback_format)
+    raise_for_error_envelope(data, subject)
+    require_success(data, subject)
+    return data.get("result")
 
 
 async def call_rpc(
@@ -68,23 +140,7 @@ async def call_rpc(
                 headers=dict(ctx.headers),
             )
 
-            resp_h = getattr(response, "headers", None)
-            reply_headers = dict(resp_h) if isinstance(resp_h, Mapping) else {}
-            reply_ct = None
-            for k, v in reply_headers.items():
-                if k.lower() == "content-type":
-                    reply_ct = v
-                    break
-
-            response_data = deserialize_payload(
-                response.data,
-                content_type=reply_ct,
-                fallback_format=self.config.serialization_format,
-            )
-
-            raise_for_error_envelope(response_data, subject)
-
-            return response_data.get("result")
+            return reply_result(response, subject, self.config.serialization_format)
 
         except NatsTimeoutError as e:
             self.logger.error(

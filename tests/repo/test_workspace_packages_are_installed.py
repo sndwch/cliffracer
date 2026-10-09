@@ -139,6 +139,7 @@ def _workflow_run_lines(path) -> list[str]:
     ]
 
 
+@pytest.mark.gitea_checkout
 def test_every_documented_dev_install_is_the_workspace_command():
     """Not a list of the documents that teach it: every tracked document that does.
 
@@ -160,6 +161,7 @@ def test_every_documented_dev_install_is_the_workspace_command():
     assert not any(wrong.values()), {rel: bad for rel, bad in wrong.items() if bad}
 
 
+@pytest.mark.gitea_checkout
 def test_every_workflow_that_installs_the_dev_environment_runs_the_workspace_command():
     """Both CI definitions and the scheduled one, read from their steps rather than their text.
 

@@ -172,6 +172,7 @@ def actions_used(workflow_data: dict[str, Any]) -> set[str]:
     }
 
 
+@pytest.mark.gitea_checkout
 def test_every_platform_holds_exactly_one_workflow():
     """One workflow per platform, so a second file cannot add or bypass gates unseen."""
     assert WORKFLOWS, "no CI pipeline was discovered at all"

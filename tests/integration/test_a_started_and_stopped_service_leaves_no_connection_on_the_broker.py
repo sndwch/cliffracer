@@ -8,9 +8,12 @@ any machine without monitoring. It belongs with the other tests that need a live
 here an unreachable monitoring endpoint FAILS, naming what to start or set, because a leak check
 that cannot reach what it checks has not checked anything.
 
-`CLIFFRACER_TEST_NATS_MONITOR_URL` names the endpoint (the private-broker wrapper and the CI
-broker both provide it); without it the default is `http://localhost:8222`, which `nats-server
--m 8222` serves. `tests/unit/test_the_live_leak_check_reads_the_monitor_it_is_given.py` drives
+`CLIFFRACER_TEST_NATS_MONITOR_URL` names the endpoint. Without it the endpoint is
+`http://localhost:8222`, which `nats-server -m 8222` serves, but only when the broker under test
+is the suite's default address, `nats://localhost:4222`, as in CI. For a broker anywhere else
+that address is another broker's monitor, so the check fails, naming the variable to set,
+instead of reading it.
+`tests/unit/test_the_live_leak_check_reads_the_monitor_it_is_given.py` drives
 this check with a stub service and a stub `urlopen`, so its monitoring handling is tested without
 a broker.
 """
@@ -18,13 +21,14 @@ a broker.
 import asyncio
 import json
 import os
+import urllib.parse
 import urllib.request
 
 import pytest
 
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.decorators import listener, rpc
-from tests.conftest import broker_url
+from tests.conftest import DEFAULT_BROKER_URL, broker_url
 
 pytestmark = pytest.mark.integration
 
@@ -43,8 +47,21 @@ class LeakCheckService(CliffracerService):
         pass
 
 
+DEFAULT_MONITOR_URL = "http://localhost:8222"
+
+
 def _connz_url() -> str:
-    monitor_url = os.getenv("CLIFFRACER_TEST_NATS_MONITOR_URL", "http://localhost:8222")
+    monitor_url = os.getenv("CLIFFRACER_TEST_NATS_MONITOR_URL")
+    if not monitor_url:
+        if broker_url() != DEFAULT_BROKER_URL:
+            broker = urllib.parse.urlsplit(broker_url())
+            raise AssertionError(
+                f"the broker under test is at {broker.hostname}:{broker.port} and "
+                f"CLIFFRACER_TEST_NATS_MONITOR_URL is unset: {DEFAULT_MONITOR_URL} is the monitor "
+                f"of the broker at {DEFAULT_BROKER_URL}, not of this one. Set "
+                f"CLIFFRACER_TEST_NATS_MONITOR_URL to its monitoring endpoint (nats-server -m <port>)"
+            )
+        monitor_url = DEFAULT_MONITOR_URL
     return f"{monitor_url.rstrip('/')}/connz"
 
 

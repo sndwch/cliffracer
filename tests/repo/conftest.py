@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.repo.mirror import MIRROR_REASON, is_mirror
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -26,3 +28,14 @@ def _require_git():
     """
     if not (REPO / ".git").exists():
         pytest.skip("Not running inside a git repository (release tarball)")
+
+
+@pytest.fixture(autouse=True)
+def _skip_a_gitea_guard_on_the_mirror(request):
+    """Skip a guard marked `gitea_checkout` on the GitHub mirror, which omits what it reads.
+
+    `tests/repo/mirror.py` says what the mirror is and why the signal is its missing `.gitea/`,
+    never the missing file itself.
+    """
+    if request.node.get_closest_marker("gitea_checkout") and is_mirror():
+        pytest.skip(MIRROR_REASON)

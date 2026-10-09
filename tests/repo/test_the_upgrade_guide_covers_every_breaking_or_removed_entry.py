@@ -191,6 +191,7 @@ def _checks_of_the_real_tree():
     ]
 
 
+@pytest.mark.gitea_checkout
 def test_the_guard_is_green_after_the_release_assembly(tmp_path: Path):
     """The release-prep change assembles every fragment into CHANGELOG.md and deletes it.
 

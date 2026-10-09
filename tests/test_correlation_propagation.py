@@ -285,7 +285,7 @@ class TestServiceCorrelation:
         # Mock NATS connection
         mock_nc = AsyncMock()
         mock_response = MagicMock()
-        mock_response.data = json.dumps({"result": "success"}).encode()
+        mock_response.data = json.dumps({"success": True, "result": "success"}).encode()
         mock_nc.request = AsyncMock(return_value=mock_response)
         service.nc = mock_nc
 

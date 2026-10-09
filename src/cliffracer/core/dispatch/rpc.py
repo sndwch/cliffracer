@@ -15,6 +15,7 @@ from loguru import logger as global_logger
 from ..correlation import CorrelationContext
 from ..deadline import Deadline, on_arrival, scoped
 from ..error_text import may_expose
+from ..exceptions import RpcValidationError
 from ..extension import RejectMessage, WorkerContext, is_a_finite_delay
 from ..messages import with_correlation_id
 from ..registry import ServiceRegistry
@@ -25,7 +26,7 @@ from ..validation import (
     deserialize_payload,
     serialize_payload,
 )
-from ..validation_extension import redacts_rpc_validation
+from ..validation_extension import redacts_rpc_validation, rpc_validation_details
 from . import rpc_stream
 from .describe import DescribeAnswers
 from .handler_limits import (
@@ -264,7 +265,21 @@ class RpcDispatcher:
         return on_arrival(headers, self.config.max_rpc_processing_time)
 
     async def _run_worker(self, ctx: WorkerContext, call: Callable[[], Awaitable[Any]]) -> Any:
-        return await self.pipeline.run_worker(ctx, call)
+        async def call_with_validation_policy() -> Any:
+            redacted: RpcValidationError | None = None
+            try:
+                return await call()
+            except RpcValidationError:
+                if not redacts_rpc_validation(self.config):
+                    raise
+                redacted = RpcValidationError(rpc_validation_details(self.config, []))
+
+            # Raise outside the handler's exception context. Result hooks may inspect
+            # both context links and the rendered traceback, so chaining a fixed error
+            # to the original would still disclose the diagnostic the policy replaced.
+            raise redacted
+
+        return await self.pipeline.run_worker(ctx, call_with_validation_policy)
 
     def _what_a_refusal_adds(self, refusal: BaseException) -> dict[str, Any]:
         """The fields a refusal that knows more than its reason adds to the reply.
@@ -500,6 +515,24 @@ class RpcDispatcher:
             finally:
                 if still_running is not None:
                     still_running.cancel()
+        except RpcValidationError as e:
+            details = rpc_validation_details(self.config, e.details)
+            self.logger.warning(
+                f"RPC request {handler_name} failed validation "
+                f"(correlation_id: {ctx.correlation_id}): {details}"
+            )
+            if has_reply:
+                await _respond(
+                    {
+                        "success": False,
+                        "error": "validation failed",
+                        "code": "validation_failed",
+                        "details": details,
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "correlation_id": ctx.correlation_id,
+                    }
+                )
+            return
         except RejectMessage as e:
             if has_reply:
                 error = ctx.data.get("validation_error")
@@ -671,6 +704,12 @@ class RpcDispatcher:
             if bound.expired():
                 assert deadline is not None
                 self.logger.warning(deadline_text(handler_name, deadline, ran=True))
+        except RpcValidationError as e:
+            details = rpc_validation_details(self.config, e.details)
+            self.logger.warning(
+                f"Async request {handler_name} failed validation "
+                f"(correlation_id: {ctx.correlation_id}): {details}"
+            )
         except RejectMessage as e:
             error = ctx.data.get("validation_error")
             if e.hook_crash:

@@ -158,6 +158,7 @@ def test_CONTROL_a_url_outside_the_canonical_home_is_reported(tmp_path):
     }
 
 
+@pytest.mark.gitea_checkout
 def test_the_allowlist_has_no_stale_entries():
     """Verify no redundant entries remain in ALLOWED, and all entries have documented reasons.
 
@@ -180,6 +181,7 @@ def test_the_allowlist_has_no_stale_entries():
         )
 
 
+@pytest.mark.gitea_checkout
 def test_the_allowlist_and_exemptions_name_files_that_exist():
     missing = sorted(rel for rel in (set(ALLOWED) | EXEMPT) if not (REPO / rel).exists())
     assert not missing, f"allowlisted or exempt files that do not exist: {missing}"

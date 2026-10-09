@@ -16,6 +16,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
+from cliffracer.calls import prepare
 from cliffracer.cli.live_service import DEFAULT_URL
 from cliffracer.cli.main import build_parser
 from cliffracer.cli.operate import (
@@ -485,3 +486,59 @@ async def test_a_wait_the_service_would_not_read_as_a_budget_sends_none(broker, 
     assert (code, json.loads(out)) == (0, "hi"), err
     (request,) = sent_to(broker, "orders.rpc.ping")
     assert not any(k.lower() == "cliffracer-timeout-ms" for k in request.headers), request.headers
+
+
+# --- call: the request is the one cliffracer.calls builds -----------------------------------------
+
+
+async def test_the_dry_run_shows_the_request_calls_prepare_builds(broker):
+    async with ServiceTestHarness(Orders, config=_config(), broker=broker):
+        code, out, err = await cli(
+            broker,
+            "call",
+            "orders.ping",
+            "--arg",
+            "word=hi",
+            "--timeout",
+            "2.5",
+            "--header",
+            "X-Correlation-ID=c1",
+            "--dry-run",
+        )
+
+    assert code == 0, err
+    shown = json.loads(out)
+    prepared = prepare(
+        "orders", "ping", {"word": "hi"}, timeout=2.5, headers={"X-Correlation-ID": "c1"}
+    )
+    assert (shown["subject"], shown["headers"]) == (prepared.subject, prepared.headers)
+    assert json.dumps(shown["payload"]).encode() == prepared.payload
+
+
+@pytest.mark.parametrize("name", ["x-correlation-id", "correlation_id"])
+async def test_a_correlation_id_given_in_another_spelling_is_the_calls_id(broker, name):
+    async with ServiceTestHarness(Orders, config=_config(), broker=broker):
+        code, _, err = await cli(
+            broker, "call", "orders.ping", "--arg", "word=hi", "--header", f"{name}=given"
+        )
+
+    assert code == 0, err
+    (request,) = sent_to(broker, "orders.rpc.ping")
+    ids = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() in ("x-correlation-id", "correlation_id")
+    }
+    assert ids == {"X-Correlation-ID": "given", "correlation_id": "given"}
+
+
+async def test_a_content_type_given_as_a_header_is_replaced_by_the_json_label(broker):
+    async with ServiceTestHarness(Orders, config=_config(), broker=broker):
+        code, _, err = await cli(
+            broker, "call", "orders.ping", "--arg", "word=hi", "--header", "content-type=text/plain"
+        )
+
+    assert code == 0, err
+    (request,) = sent_to(broker, "orders.rpc.ping")
+    types = {k: v for k, v in request.headers.items() if k.lower() == "content-type"}
+    assert types == {"Content-Type": "application/json"}

@@ -13,6 +13,7 @@ caller gets the same items and the same exceptions whichever it called through.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass
@@ -69,7 +70,8 @@ async def read_stream(
     opened: OpenStream,
     subject: str,
     *,
-    timeout: float,
+    timeout: float | None,
+    idle_timeout: float | None = None,
     item_type: Any = None,
     fallback_format: str = "json",
     raise_for_envelope: Callable[[dict[str, Any], str], None],
@@ -78,27 +80,35 @@ async def read_stream(
     is given, until the envelope that ends the stream; raise what that envelope says when it is an
     error.
 
-    `timeout` bounds the whole stream, and each wait for the next message within it. An exception
+    `timeout` bounds the whole stream, and each wait for the next message within it (None: no
+    bound of its own);
+    `idle_timeout`, when given, bounds each wait on its own as well. An exception
     raised here carries `items`, the number of items yielded before it. The subscription is
     unsubscribed however this ends: the end, an error (a gap, a mismatched item, a timeout),
     `break`, cancellation or `aclose()`.
     """
     adapter = None if item_type is None else TypeAdapter(item_type)
-    deadline = time.monotonic() + timeout
+    deadline = math.inf if timeout is None else time.monotonic() + timeout
     received = 0
     try:
         while True:
             remaining = deadline - time.monotonic()
+            idle = idle_timeout is not None and idle_timeout < remaining
             try:
                 if remaining <= 0:
                     raise TimeoutError
-                msg = await asyncio.wait_for(opened.arrived.get(), remaining)
+                msg = await asyncio.wait_for(
+                    opened.arrived.get(),
+                    idle_timeout if idle else (None if math.isinf(remaining) else remaining),
+                )
             except TimeoutError as exc:
+                which = (
+                    f"sent nothing for {idle_timeout}s"
+                    if idle
+                    else f"did not end within {timeout}s"
+                )
                 raise _counted(
-                    RpcTimeoutError(
-                        f"the stream from {subject} did not end within {timeout}s, after "
-                        f"{received} items"
-                    ),
+                    RpcTimeoutError(f"the stream from {subject} {which}, after {received} items"),
                     received,
                 ) from exc
             headers = msg.headers or {}
@@ -216,6 +226,10 @@ async def _leave(sub: Any) -> None:
         pass
 
 
-def _preview(payload: bytes, limit: int = 120) -> str:
+def _preview(payload: object, limit: int = 120) -> str:
+    """A short, printable look at a payload, for a message a human reads. Typed `object` because
+    the failures this appears in are exactly the ones where the payload is not what it should be."""
+    if not isinstance(payload, bytes | bytearray):
+        return repr(payload)[:limit]
     text = bytes(payload[:limit]).decode("utf-8", errors="replace")
     return f"{text!r}{'...' if len(payload) > limit else ''}"

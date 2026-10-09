@@ -319,6 +319,7 @@ def test_CONTROL_the_scenario_table_rejects_a_condition_that_misses_build_failur
     )
 
 
+@pytest.mark.gitea_checkout
 def test_every_platform_directory_contributes_a_workflow() -> None:
     """Each platform has at least one workflow, so none can drop out unnoticed.
 

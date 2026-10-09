@@ -189,6 +189,7 @@ def test_it_never_fails_the_job(tmp_path):
     assert done.returncode == 0, done.stdout + done.stderr
 
 
+@pytest.mark.gitea_checkout
 def test_the_workflow_runs_it_and_AGENTS_names_it():
     """A step nobody reads is not a report, and a step in no workflow is not a
     step."""

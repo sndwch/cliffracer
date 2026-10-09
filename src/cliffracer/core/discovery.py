@@ -116,6 +116,22 @@ class HandlerDiscovery:
         return f"{prefix}.{subject}" if prefix else subject
 
     @classmethod
+    def call_subject(
+        cls,
+        service: str,
+        verb: str,
+        method: str,
+        *,
+        namespace: str | None,
+        subject_prefix: str | None,
+    ) -> str:
+        """The wire subject for a call to `service`'s `method` from a caller that holds no
+        `ServiceConfig`, given the target's namespace and the environment prefix outright."""
+        return cls.scoped_subject(
+            f"{service}.{verb}.{method}", namespace=namespace, subject_prefix=subject_prefix
+        )
+
+    @classmethod
     def effective_event_subject(
         cls, config: ServiceConfig, pattern: str, cross_namespace: bool
     ) -> str:

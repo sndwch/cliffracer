@@ -267,9 +267,12 @@ keeps true. CI, `scripts/check_kv_compatibility.py` and a disposable
 broker on ephemeral ports all set it. `load-testing/` contains locust scripts,
 which the suite does not run.
 `$CLIFFRACER_TEST_NATS_MONITOR_URL` selects that broker's HTTP monitoring base URL
-for connection-leak checks (default `http://localhost:8222`). Set both URLs when
-using a disposable broker on ephemeral ports. An explicitly configured monitor
-must be reachable; its check fails instead of skipping.
+for connection-leak checks. Unset, it is `http://localhost:8222` when the broker
+under test is the default address, `nats://localhost:4222`; for any other broker
+URL the check fails, naming the variable, because that address is another broker's
+monitor. Set
+both URLs when using a disposable broker on ephemeral ports. The monitor must be
+reachable; its check fails instead of skipping.
 
 `tests/repo/test_the_suite_follows_its_conventions.py` enforces the tier rule
 and the two filename rules in CONTRIBUTING.md.

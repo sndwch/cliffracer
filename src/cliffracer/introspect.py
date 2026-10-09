@@ -536,17 +536,11 @@ def describe(
         # Discover event handlers (_cliffracer_events)
         events = getattr(member, "_cliffracer_events", None)
         if events:
-            build_event_spec(name, member, owner=cls)
+            event_spec = build_event_spec(name, member, owner=cls)
             durables: dict[str, str] = getattr(member, "_cliffracer_event_durables", {})
             fanout_set: set[str] = getattr(member, "_cliffracer_event_fanout", set())
             pull_set: set[str] = getattr(member, "_cliffracer_event_pull", set())
             cross_set: set[str] = getattr(member, "_cliffracer_event_cross_namespace", set())
-            raw_doc = inspect.getdoc(member)
-            doc_summary = (
-                next((line.strip() for line in raw_doc.splitlines() if line.strip()), None)
-                if raw_doc
-                else None
-            )
             for pattern in events:
                 refuse_cross_namespace_without_a_namespace(name, pattern, cross_set)
                 is_fanout = pattern in fanout_set
@@ -574,9 +568,9 @@ def describe(
                         cross_namespace=pattern in cross_set,
                         effective_subject=effective_subject(pattern, pattern in cross_set),
                         queue_group=queue_group,
-                        doc=doc_summary,
-                        doc_summary=doc_summary,
-                        description=raw_doc,
+                        doc=event_spec.doc_summary,
+                        doc_summary=event_spec.doc_summary,
+                        description=event_spec.doc_description,
                     )
                 )
 
@@ -586,14 +580,8 @@ def describe(
             v_durables: dict[str, str] = getattr(member, "_cliffracer_event_durables", {})
             v_fanout_set: set[str] = getattr(member, "_cliffracer_event_fanout", set())
             v_cross_set: set[str] = getattr(member, "_cliffracer_event_cross_namespace", set())
-            raw_doc = inspect.getdoc(member)
-            doc_summary = (
-                next((line.strip() for line in raw_doc.splitlines() if line.strip()), None)
-                if raw_doc
-                else None
-            )
             for pattern, schema_cls, _on_invalid in val_events:
-                build_validated_event_spec(name, member, owner=cls, schema=schema_cls)
+                event_spec = build_validated_event_spec(name, member, owner=cls, schema=schema_cls)
                 refuse_cross_namespace_without_a_namespace(name, pattern, v_cross_set)
                 is_fanout = pattern in v_fanout_set
                 # `validated_listener` has no `pull` option, so it never marks one.
@@ -623,23 +611,17 @@ def describe(
                         cross_namespace=pattern in v_cross_set,
                         effective_subject=effective_subject(pattern, pattern in v_cross_set),
                         queue_group=queue_group,
-                        doc=doc_summary,
-                        doc_summary=doc_summary,
-                        description=raw_doc,
+                        doc=event_spec.doc_summary,
+                        doc_summary=event_spec.doc_summary,
+                        description=event_spec.doc_description,
                     )
                 )
 
         # Discover broadcast handlers (_cliffracer_broadcast)
         bcast_pattern = getattr(member, "_cliffracer_broadcast", None)
         if bcast_pattern:
-            build_event_spec(name, member, owner=cls)
+            event_spec = build_event_spec(name, member, owner=cls)
             declare(key_for(bcast_pattern, False), name, durable=None, fanout=True, pull=False)
-            raw_doc = inspect.getdoc(member)
-            doc_summary = (
-                next((line.strip() for line in raw_doc.splitlines() if line.strip()), None)
-                if raw_doc
-                else None
-            )
             listeners.append(
                 EventListenerDescription(
                     pattern=bcast_pattern,
@@ -650,9 +632,9 @@ def describe(
                     pull=False,
                     effective_subject=effective_subject(bcast_pattern, False),
                     queue_group=None,
-                    doc=doc_summary,
-                    doc_summary=doc_summary,
-                    description=raw_doc,
+                    doc=event_spec.doc_summary,
+                    doc_summary=event_spec.doc_summary,
+                    description=event_spec.doc_description,
                 )
             )
 

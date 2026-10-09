@@ -594,7 +594,9 @@ The service judges the values. `--arg name=value` gives one scalar or literal ar
 The request carries `--timeout` as its `Cliffracer-Timeout-Ms` budget, so the service stops the
 handler when the command stops waiting. A `--timeout` of `inf`, or over one day (the most a
 service reads as a budget), sends none, and the service applies its own `max_rpc_processing_time`.
-A budget given with `--header` is sent as given.
+A budget given with `--header` is sent as given. The request is the one `cliffracer.calls.prepare`
+builds, so it carries the correlation id under `X-Correlation-ID` and `correlation_id`, from a
+`--header` in either spelling or a new one.
 
 The result is written to stdout as JSON. An error the service answered is written to stderr as a
 JSON object (`code`, `error`, and `details` or `retry_after` when it has them), followed by a line

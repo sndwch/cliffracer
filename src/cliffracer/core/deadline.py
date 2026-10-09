@@ -120,3 +120,15 @@ def outbound_timeout(own: float, call: str) -> float:
 def header_value(seconds: float) -> str:
     """`seconds` as the header carries it: whole milliseconds, at least one."""
     return str(max(1, math.floor(seconds * 1000)))
+
+
+def refuse_a_duration(name: str, seconds: Any) -> None:
+    """Refuse, naming `name`, a wait that is not a positive, finite number of seconds: zero or less
+    fails every call for a reason that is not the real one, and NaN cannot be sent as a budget."""
+    if (
+        isinstance(seconds, bool)
+        or not isinstance(seconds, int | float)
+        or not math.isfinite(seconds)
+        or seconds <= 0
+    ):
+        raise ValueError(f"{name} must be a positive, finite number of seconds, not {seconds!r}")

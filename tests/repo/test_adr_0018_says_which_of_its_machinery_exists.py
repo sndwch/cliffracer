@@ -85,6 +85,7 @@ def test_the_record_says_there_is_no_seed_option_exactly_while_there_is_none():
     assert "no `--composition-seed` option" in _line()
 
 
+@pytest.mark.gitea_checkout
 def test_the_record_names_the_chaos_soak_as_the_only_scheduled_workflow_while_it_is():
     assert not schedules_composition_tests(REPO), (
         "a scheduled workflow other than the chaos soak exists: update ADR-0018's Implementation line"

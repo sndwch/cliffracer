@@ -13,8 +13,12 @@ from pathlib import Path
 import pytest
 
 from tests.repo.ci_workflows import ci_workflow_files, load
+from tests.repo.mirror import skip_module_on_mirror
 
-pytestmark = pytest.mark.repo
+pytestmark = [pytest.mark.repo, pytest.mark.gitea_checkout]
+
+# The rows are built from the Gitea workflow while the module is collected.
+skip_module_on_mirror()
 
 MESSAGE = (
     "pytest was killed by SIGKILL (exit 137), most likely the job container's memory cap "

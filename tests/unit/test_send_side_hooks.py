@@ -36,7 +36,7 @@ class Recorder:
     def __init__(self):
         self.published: list[tuple[str, bytes, dict]] = []
         self.requested: list[tuple[str, bytes, dict]] = []
-        self.reply = {"result": {"ok": True}}
+        self.reply = {"success": True, "result": {"ok": True}}
 
     async def publish(self, subject, data, headers=None, **kw):
         self.published.append((subject, data, dict(headers or {})))
@@ -157,7 +157,7 @@ def test_after_call_receives_the_result(loop):
     spy = Spy()
     svc = _service(spy)
     bound_spy = svc.ext0
-    svc.nc.reply = {"result": {"answer": 42}}
+    svc.nc.reply = {"success": True, "result": {"answer": 42}}
     out = loop.run_until_complete(svc.call_rpc("other", "m"))
     assert out == {"answer": 42}
     assert bound_spy.results[-1] == {"answer": 42}
@@ -259,7 +259,7 @@ def test_a_raising_hook_is_swallowed_and_the_call_still_returns(loop, hook):
     spy = Spy()
     svc = _service(Bad(), spy)
     bound_spy = svc.ext1
-    svc.nc.reply = {"result": "fine"}
+    svc.nc.reply = {"success": True, "result": "fine"}
     out = loop.run_until_complete(svc.call_rpc("other", "m"))
 
     assert out == "fine"

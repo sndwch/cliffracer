@@ -80,7 +80,7 @@ class TestAsyncRPC:
         # Mock NATS connection
         service.nc = AsyncMock()
         mock_response = AsyncMock()
-        mock_response.data = json.dumps({"result": "test_result"}).encode()
+        mock_response.data = json.dumps({"success": True, "result": "test_result"}).encode()
         service.nc.request = AsyncMock(return_value=mock_response)
 
         # Call RPC method

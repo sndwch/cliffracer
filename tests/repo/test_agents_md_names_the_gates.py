@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.repo
+pytestmark = [pytest.mark.repo, pytest.mark.gitea_checkout]
 
 REPO = Path(__file__).resolve().parents[2]
 AGENTS = REPO / "AGENTS.md"

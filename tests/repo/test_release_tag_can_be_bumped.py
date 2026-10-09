@@ -52,6 +52,7 @@ def unbumpable(tokens: list[tuple[str, str]]) -> list[str]:
     return bad
 
 
+@pytest.mark.gitea_checkout
 def test_a_release_prerelease_token_yields_a_bumpable_version():
     """Every token a release job passes normalises to a version with no dev component."""
     tokens = prerelease_tokens()

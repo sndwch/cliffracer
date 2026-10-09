@@ -66,7 +66,7 @@ def _caller():
     svc = CliffracerService(ServiceConfig(name="caller", health_port=0))
     svc.nc = AsyncMock()
     reply = AsyncMock()
-    reply.data = json.dumps({"result": "ok"}).encode()
+    reply.data = json.dumps({"success": True, "result": "ok"}).encode()
     svc.nc.request.return_value = reply
     return svc
 
@@ -89,7 +89,7 @@ async def test_the_proxy_passes_a_remote_argument_named_service_or_method():
     svc = Caller(ServiceConfig(name="caller", health_port=0))
     svc.nc = AsyncMock()
     reply = AsyncMock()
-    reply.data = json.dumps({"result": "ok"}).encode()
+    reply.data = json.dumps({"success": True, "result": "ok"}).encode()
     svc.nc.request.return_value = reply
 
     await svc.peer.find(service="a", method="b")

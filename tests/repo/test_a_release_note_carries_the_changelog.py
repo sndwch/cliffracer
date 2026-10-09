@@ -197,7 +197,13 @@ def test_the_command_line_takes_the_tag_to_read(repo: Path):
     assert proc.stdout.startswith("## Changelog"), proc.stdout
 
 
-@pytest.mark.parametrize("workflow", [".gitea/workflows/ci.yml", ".github/workflows/ci.yml"])
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        pytest.param(".gitea/workflows/ci.yml", marks=pytest.mark.gitea_checkout),
+        ".github/workflows/ci.yml",
+    ],
+)
 def test_both_release_jobs_pass_the_tag_to_the_renderer(workflow: str):
     text = (ROOT / workflow).read_text()
 
@@ -371,6 +377,7 @@ def test_the_command_line_counts_a_note_given_on_stdin(repo: Path):
     assert out.split() == [str(len(BREAKING))], out
 
 
+@pytest.mark.gitea_checkout
 def test_the_gitea_release_job_counts_through_the_renderer_not_by_heading():
     run = "\n".join(
         step["run"]

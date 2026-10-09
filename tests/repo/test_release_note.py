@@ -366,6 +366,7 @@ def unchecked_render_calls(text: str) -> list[str]:
     ]
 
 
+@pytest.mark.gitea_checkout
 def test_ci_yml_actually_uses_the_checked_shape():
     """The Gitea release job renders the note with the renderer's exit status checked, writing it
     to a file, and renders it nowhere unchecked."""

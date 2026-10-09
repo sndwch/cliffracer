@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.repo.built_distributions import build_all
+from tests.repo.built_distributions import build_all, uv_build
 
 pytestmark = pytest.mark.repo
 
@@ -244,13 +244,7 @@ def test_CONTROL_removing_a_members_LICENSE_reds_both_checks(tmp_path):
             victim.unlink()
 
             out = tmp_path / f"dist_nolicence_{member.name}"
-            proc = subprocess.run(
-                ["uv", "build", "--package", member.name, "--out-dir", str(out)],
-                cwd=work,
-                capture_output=True,
-                text=True,
-            )
-            assert proc.returncode == 0, proc.stderr
+            uv_build(["--package", member.name, "--out-dir", str(out)], work)
             wheel = next(f for f in out.iterdir() if f.name.endswith(".whl"))
             assert not _licence_entries(zipfile.ZipFile(wheel)), (
                 f"removing {member.name}'s LICENSE left one in its wheel anyway, "

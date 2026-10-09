@@ -50,6 +50,7 @@ UNRESOLVED_FETCH_FAILED = "the deepen fetch failed"
 UNRESOLVED_HISTORY_EXHAUSTED = "the history ran out"
 UNRESOLVED_BASE_UNFETCHABLE = "the base ref could not be fetched"
 UNRESOLVED_UNRELATED = "the histories are unrelated"
+UNRESOLVED_HEAD_UNFETCHABLE = "the pull request's head commit could not be fetched"
 
 
 def git_root() -> Path:
@@ -85,6 +86,18 @@ def remote_url(remote: str) -> str:
     if found.returncode != 0 or not found.stdout.strip():
         return "no such remote in this checkout"
     return _redacted(found.stdout.strip())
+
+
+def head_commit() -> str:
+    """The commit the range ends at: `COMMIT_CHECK_HEAD`, else `HEAD`.
+
+    A pull request's CI checks out a merge commit the forge made, which is not one of the pull
+    request's commits. And a forge can make a new one and drop every ref to the old, after which
+    it no longer deepens the old one, so its history cannot be reached at all. The workflows pass
+    the pull request's head commit instead. That is a branch tip, so the forge always serves it,
+    and `base..head` is exactly the pull request's commits.
+    """
+    return os.environ.get("COMMIT_CHECK_HEAD", "").strip() or "HEAD"
 
 
 def base_ref_name(base: str) -> str:
@@ -152,7 +165,7 @@ def _git(*args: str, check: bool = False) -> subprocess.CompletedProcess:
     )
 
 
-def fetch_base(base: str) -> tuple[str | None, str, str]:
+def fetch_base(base: str, head: str = "HEAD") -> tuple[str | None, str, str]:
     """Fetch the base branch and deepen until the merge base resolves.
 
     `actions/checkout` fetches only the head commit, at depth 1, and narrows the
@@ -166,8 +179,10 @@ def fetch_base(base: str) -> tuple[str | None, str, str]:
     what git said when it did not: the ref that resolved is then whatever the
     working copy already had. Otherwise `ref` is None and `code` is one of the
     UNRESOLVED_* reasons, with `detail` carrying whatever git said. The caller
-    reports which one, because the four have different remedies and a single
+    reports which one, because they have different remedies and a single
     "cannot resolve" hides that.
+
+    A `head` other than `HEAD` is fetched by its sha first, and the range is measured from it.
     """
     remote = remote_name()
     ref = base_ref_name(base)
@@ -194,14 +209,19 @@ def fetch_base(base: str) -> tuple[str | None, str, str]:
         else _redacted((fetched.stderr or fetched.stdout).strip() or "the fetch exited non-zero")
     )
 
+    if head != "HEAD":
+        got = _git("fetch", "--no-tags", "--quiet", remote, head)
+        if _git("rev-parse", "--verify", f"{head}^{{commit}}").returncode != 0:
+            return None, UNRESOLVED_HEAD_UNFETCHABLE, (got.stderr or got.stdout).strip()
+
     for step in range(1, MAX_DEEPEN + 1):
-        if _git("merge-base", ref, "HEAD").returncode == 0:
+        if _git("merge-base", ref, head).returncode == 0:
             return ref, "", stale
 
         if _git("rev-parse", "--is-shallow-repository").stdout.strip() != "true":
             # Nothing left to deepen and still no common ancestor: this branch
             # was not cut from the base's history.
-            return None, UNRESOLVED_UNRELATED, f"{ref} and HEAD share no commit"
+            return None, UNRESOLVED_UNRELATED, f"{ref} and {head} share no commit"
 
         last = None
         for _attempt in range(1, DEEPEN_RETRIES + 1):
@@ -220,7 +240,7 @@ def fetch_base(base: str) -> tuple[str | None, str, str]:
         None,
         UNRESOLVED_HISTORY_EXHAUSTED,
         f"deepened {MAX_DEEPEN} times by {DEEPEN_STEP} commits without reaching a "
-        f"common ancestor of {ref} and HEAD",
+        f"common ancestor of {ref} and {head}",
     )
 
 
@@ -280,7 +300,8 @@ def main(argv: list[str]) -> int:
         print("No base ref given; nothing to check.")
         return 0
 
-    base_ref, unresolved, detail = fetch_base(base)
+    head = head_commit()
+    base_ref, unresolved, detail = fetch_base(base, head)
     if base_ref is None:
         remote = remote_name()
         print(
@@ -308,6 +329,12 @@ def main(argv: list[str]) -> int:
             )
         elif unresolved == UNRESOLVED_HISTORY_EXHAUSTED:
             print(f"Rebase this branch onto {base!r} and push again.", file=sys.stderr)
+        elif unresolved == UNRESOLVED_HEAD_UNFETCHABLE:
+            print(
+                f"Check that COMMIT_CHECK_HEAD ({head!r}) is the pull request's head commit and "
+                f"that the job's token can read it.",
+                file=sys.stderr,
+            )
         elif unresolved == UNRESOLVED_BASE_UNFETCHABLE:
             print(
                 f"Check that {base!r} exists on the remote and that the job's token can read it.",
@@ -323,21 +350,21 @@ def main(argv: list[str]) -> int:
         return 1
 
     try:
-        messages = commit_messages(base_ref, "HEAD")
+        messages = commit_messages(base_ref, head)
     except subprocess.CalledProcessError as exc:
-        print(f"Could not read {base_ref}..HEAD: {exc.stderr}", file=sys.stderr)
+        print(f"Could not read {base_ref}..{head}: {exc.stderr}", file=sys.stderr)
         return 1
 
     measured = how_the_range_was_measured(detail)
     if detail:
         print(
-            f"Warning: the fetch of {base_ref} failed, so {base_ref}..HEAD is measured against "
+            f"Warning: the fetch of {base_ref} failed, so {base_ref}..{head} is measured against "
             f"the local ref as it was and may include commits already on the base.",
             file=sys.stderr,
         )
 
     if not messages:
-        print(f"No commits in {base_ref}..HEAD ({measured}).")
+        print(f"No commits in {base_ref}..{head} ({measured}).")
         return 0
 
     try:
@@ -355,7 +382,7 @@ def main(argv: list[str]) -> int:
         return 1
 
     print(
-        f"{len(messages)} commit message(s) in {base_ref}..HEAD describe the code as it is ({measured})."
+        f"{len(messages)} commit message(s) in {base_ref}..{head} describe the code as it is ({measured})."
     )
     return 0
 

@@ -183,13 +183,14 @@ class RpcValidationError(RpcClientError):
 
     Raised by the CLIENT when an argument does not match its declared
     annotation, before anything is sent, and by the client again when the
-    SERVICE answers that it rejected the payload. One class because the
-    caller's remedy is the same either way -- the argument was wrong -- so a
-    call site handling one should not have to learn to handle the other.
+    SERVICE answers that it rejected the payload. A handler may raise it when
+    semantic validation depends on a structurally valid argument's contents.
+    One class because the caller's remedy is the same in each case -- the
+    argument was wrong -- so a call site handling one should not have to learn
+    to handle the other.
 
     Which end refused it is in the message: the local refusal says so, and
-    names the declared type. `details` carries pydantic's own errors in both
-    cases.
+    names the declared type. `details` carries structured validation errors.
 
     Attributes:
         details: List of Pydantic error dictionaries.

@@ -4,12 +4,12 @@ Provides AuthConfig, token signing with HS256, password hashing, and
 auth context management for RPC and listener handlers.
 """
 
-import asyncio
 import base64
 import binascii
 import functools
 import hashlib
 import hmac
+import inspect
 import math
 import secrets
 import time
@@ -758,7 +758,7 @@ def requires_auth(func: Callable[..., Any]) -> Callable[..., Any]:
             raise AuthenticationError("Authentication required")
         return func(*args, **kwargs)
 
-    if asyncio.iscoroutinefunction(func):
+    if inspect.iscoroutinefunction(func):
         return async_wrapper
     return sync_wrapper
 
@@ -799,7 +799,7 @@ def requires_roles(*roles: str) -> Callable[[Callable[..., Any]], Callable[..., 
 
             return func(*args, **kwargs)
 
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
 
@@ -848,7 +848,7 @@ def requires_permissions(*permissions: str) -> Callable[[Callable[..., Any]], Ca
 
             return func(*args, **kwargs)
 
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
 

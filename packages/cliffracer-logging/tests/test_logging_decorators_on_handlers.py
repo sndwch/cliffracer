@@ -5,7 +5,6 @@ wrapper that hides it makes the service refuse to start. These tests declare the
 decorators under ``@rpc`` and ``@listener`` on a service and run discovery.
 """
 
-import asyncio
 import inspect
 
 import pytest
@@ -118,8 +117,8 @@ def test_a_sync_function_stays_sync_under_either_decorator():
     def note(service, subject):
         return subject
 
-    assert not asyncio.iscoroutinefunction(add)
-    assert not asyncio.iscoroutinefunction(note)
+    assert not inspect.iscoroutinefunction(add)
+    assert not inspect.iscoroutinefunction(note)
     assert add(None, 1, 2) == 3
     assert note(None, "s") == "s"
 

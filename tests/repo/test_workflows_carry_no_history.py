@@ -211,6 +211,7 @@ def test_no_workflow_comment_or_name_narrates_history():
     )
 
 
+@pytest.mark.gitea_checkout
 def test_the_sweep_reads_both_platform_directories():
     """A sweep that opened no file, or only one platform's, would pass above."""
     paths = workflow_paths()
@@ -517,6 +518,7 @@ def test_CONTROL_the_history_sweep_does_not_read_values(tmp_path: Path):
     assert history_in_workflows([path]) == [], "the history sweep read a run body"
 
 
+@pytest.mark.gitea_checkout
 def test_the_value_sweep_reads_the_real_workflows():
     """Zero hits and zero lines read are the same report.
 

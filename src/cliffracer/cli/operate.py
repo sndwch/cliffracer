@@ -32,7 +32,6 @@ import json
 import math
 import os
 import sys
-import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any, TextIO
@@ -41,9 +40,9 @@ from nats.errors import Error as NatsError
 from nats.errors import NoRespondersError, NoServersError
 from nats.errors import TimeoutError as NatsTimeoutError
 
+from cliffracer.calls import prepare
 from cliffracer.core import dial
 from cliffracer.core.deadline import TIMEOUT_HEADER, caller_budget, header_value
-from cliffracer.core.discovery import HandlerDiscovery
 from cliffracer.core.endpoints import redact_nats_url
 from cliffracer.core.exceptions import (
     RpcBusyError,
@@ -503,31 +502,18 @@ async def _call(args: argparse.Namespace, dialer: Dialer, out: TextIO, err: Text
                     "cliffracer call does not read a streamed reply.",
                 )
             arguments = _arguments(method, args)
-            # Built as a service builds a call to another: this command has no service of its
-            # own, so its config carries only the environment's prefix.
-            caller = ServiceConfig(
-                name="cliffracer_cli",
-                subject_prefix=os.environ.get("CLIFFRACER_SUBJECT_PREFIX") or None,
-                health_port=0,
+            # The request as cliffracer.calls builds it, so this command sends what call()
+            # sends. A wait the service would not read as a budget (not finite, or over its
+            # one-day ceiling) is no bound to the request: no budget is sent, and the service
+            # applies its own max_rpc_processing_time. A budget given with --header is sent as given.
+            subject, send, payload, _ = prepare(
+                service,
+                method_name,
+                arguments,
+                namespace=args.namespace,
+                timeout=args.timeout if _budget_header(args.timeout) is not None else None,
+                headers=headers,
             )
-            subject = HandlerDiscovery.outbound_subject(
-                caller, service, "rpc", method_name, namespace=args.namespace
-            )
-            payload = json.dumps(arguments).encode()
-            send = {
-                **headers,
-                "Content-Type": "application/json",
-                "X-Correlation-ID": headers.get("X-Correlation-ID") or uuid.uuid4().hex,
-            }
-            # What this command waits, as the service's budget, so the handler stops when the
-            # command does; a budget the user set with --header is sent as given. A wait the
-            # service would not read as a budget (not finite, or over its one-day ceiling) sends
-            # none, and the service applies its own max_rpc_processing_time.
-            budget = _budget_header(args.timeout)
-            if budget is not None and not any(
-                name.lower() == TIMEOUT_HEADER.lower() for name in send
-            ):
-                send[TIMEOUT_HEADER] = budget
             if args.dry_run:
                 out.write(
                     json.dumps({"subject": subject, "headers": send, "payload": arguments}) + "\n"

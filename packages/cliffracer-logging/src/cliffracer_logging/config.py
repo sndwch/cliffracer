@@ -2,6 +2,7 @@
 
 import asyncio
 import functools
+import inspect
 import json
 import sys
 import threading
@@ -499,7 +500,7 @@ def _wrap_with_logging(
     discovery reads the handler's own parameters, and it is a coroutine
     function exactly when ``func`` is.
     """
-    if asyncio.iscoroutinefunction(func):
+    if inspect.iscoroutinefunction(func):
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:

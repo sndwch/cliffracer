@@ -29,7 +29,7 @@ import time
 import types
 import uuid
 from collections import deque
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Callable
 from functools import lru_cache
 from typing import Annotated, Any, Self, Union, get_args, get_origin
 
@@ -46,7 +46,12 @@ from pydantic import ValidationError as PydanticValidationError
 from cliffracer.core import dial
 from cliffracer.core.connection import redact_nats_url
 from cliffracer.core.correlation import CorrelationContext
-from cliffracer.core.deadline import TIMEOUT_HEADER, header_value, outbound_timeout
+from cliffracer.core.deadline import (
+    TIMEOUT_HEADER,
+    header_value,
+    outbound_timeout,
+    refuse_a_duration,
+)
 from cliffracer.core.discovery import HandlerDiscovery
 from cliffracer.core.exceptions import (
     ClientError,
@@ -73,6 +78,7 @@ from cliffracer.core.exceptions import (
     raise_for_error_envelope,
 )
 from cliffracer.core.nats_errors import rpc_error_for
+from cliffracer.core.rpc_calls import read_reply, require_success
 from cliffracer.core.service_config import ServiceConfig
 from cliffracer.core.stream_reader import open_stream, read_stream
 from cliffracer.core.subjects import validate_inbox_prefix
@@ -81,7 +87,6 @@ from cliffracer.core.validation import (
     ExtraForms,
     _reads_faithfully,
     choose_wire_form,
-    deserialize_payload,
     faithful_to,
     nested_form,
     read_python_then_json,
@@ -414,6 +419,9 @@ class ServiceClient:
         self.namespace = self.NAMESPACE if namespace is None else namespace
         self.subject_prefix = subject_prefix
         self._validate_subject_parts()
+        refuse_a_duration("timeout", timeout)
+        if connect_timeout is not None:
+            refuse_a_duration("connect_timeout", connect_timeout)
         self.timeout = timeout
         self.connect_timeout = connect_timeout
         self.headers = dict(headers or {})
@@ -692,46 +700,10 @@ class ServiceClient:
             raise rpc_error_for(exc, subject, awaiting_reply=True) from exc
 
     @staticmethod
-    def _content_type(reply: Msg) -> str | None:
-        """The reply's declared content type, matched case-insensitively."""
-        headers = getattr(reply, "headers", None)
-        if not isinstance(headers, Mapping):
-            return None
-        for key, value in headers.items():
-            if str(key).lower() == "content-type":
-                return str(value)
-        return None
-
-    def _decode_reply(self, reply: Msg, subject: str) -> dict[str, Any]:
-        """The reply as an object, or an `RpcServerError` saying what came back.
-
-        Everything past `nc.request` used to trust the wire. Bytes that are not
-        valid UTF-8 raised `UnicodeDecodeError`, bytes that are not JSON raised
-        `JSONDecodeError`, and a payload that decoded to a scalar, a list or
-        `null` reached `data.get(...)` and raised `TypeError` or
-        `AttributeError` -- four builtins for one failure, none of them a
-        `CliffracerError`, so a caller's `except RpcError` did not contain them.
-
-        It is an `RpcServerError` because a reply that cannot be read is the
-        remote breaking the contract, the same split `_raise_for_error` makes
-        for envelopes. The message carries a prefix of the payload: a reply
-        nobody can parse cannot be diagnosed without a sight of it.
-        """
-        try:
-            data = deserialize_payload(
-                reply.data, content_type=self._content_type(reply), fallback_format="json"
-            )
-        except Exception as exc:
-            raise RpcServerError(
-                f"{subject} answered with something this client cannot read: "
-                f"{self._preview(reply.data)}"
-            ) from exc
-        if not isinstance(data, dict):
-            raise RpcServerError(
-                f"{subject} answered with {type(data).__name__}, not an object: "
-                f"{self._preview(reply.data)}"
-            )
-        return data
+    def _decode_reply(reply: Msg, subject: str) -> dict[str, Any]:
+        """The reply as an object, or an `RpcServerError` saying what came back: `read_reply`,
+        the reading `call_rpc` and `cliffracer.calls` apply too."""
+        return read_reply(reply, subject, "json")
 
     @staticmethod
     def _preview(payload: object, limit: int = 120) -> str:
@@ -1121,17 +1093,7 @@ class ServiceClient:
         except RpcValidationError:
             await self._after_validation_reply()
             raise
-        if data.get("success") is not True:
-            # Replies must include the 'success' key. A reply that does not is
-            # the remote breaking the protocol, not the caller misusing it. One
-            # that has the key and says it failed, with no `error` for
-            # `_raise_for_error` to read, is a failing responder that left out why.
-            if "success" not in data:
-                raise RpcServerError(f"protocol error: reply from {subject} carries no success key")
-            raise RpcServerError(
-                f"{subject} failed without saying why: the reply has success="
-                f"{data['success']!r} and no error"
-            )
+        require_success(data, subject)
         try:
             return _adapter(return_type).validate_python(data.get("result"))
         except PydanticValidationError as exc:

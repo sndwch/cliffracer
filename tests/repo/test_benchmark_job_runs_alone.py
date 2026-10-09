@@ -171,6 +171,7 @@ def serialises_host_wide(job: dict) -> bool:
     return isinstance(group, str) and bool(group) and not EXPRESSION.search(group)
 
 
+@pytest.mark.gitea_checkout
 def test_the_workflow_can_be_dispatched():
     """The control under every check below: a trigger set without the dispatch
     would make "runs on a dispatch" unreachable rather than satisfied."""
@@ -179,6 +180,7 @@ def test_the_workflow_can_be_dispatched():
     )
 
 
+@pytest.mark.gitea_checkout
 def test_a_dispatch_reaches_the_benchmark():
     assert reaches(
         workflow()["jobs"]["benchmark"],
@@ -188,6 +190,7 @@ def test_a_dispatch_reaches_the_benchmark():
     )
 
 
+@pytest.mark.gitea_checkout
 def test_a_push_to_main_reaches_the_benchmark():
     """The release path: a release is gated on this job, so it has to run there."""
     assert reaches(
@@ -195,6 +198,7 @@ def test_a_push_to_main_reaches_the_benchmark():
     )
 
 
+@pytest.mark.gitea_checkout
 def test_no_other_event_reaches_the_benchmark():
     """The check that matters. A pull_request and a push for one branch both
     reaching this job is what put two measurements on the host at once."""
@@ -210,6 +214,7 @@ def test_no_other_event_reaches_the_benchmark():
         )
 
 
+@pytest.mark.gitea_checkout
 def test_the_benchmark_waits_for_the_suite():
     """On a main push the suites and the benchmark are triggered; `needs` is what
     stops them sharing the host. Both suites, the 3.13 and the 3.12 run.
@@ -225,6 +230,7 @@ def test_the_benchmark_waits_for_the_suite():
 DISABLED = "true"
 
 
+@pytest.mark.gitea_checkout
 def test_a_push_does_not_reach_the_benchmark_when_the_variable_is_set():
     """The switch this exists for: a push stops measuring on a shared host."""
     job = workflow()["jobs"]["benchmark"]
@@ -266,6 +272,7 @@ def test_CONTROL_an_opt_out_is_what_makes_a_skipped_need_survivable():
     assert reaches(with_opt_out, DISPATCH, MAIN, results=skipped_suite)
 
 
+@pytest.mark.gitea_checkout
 def test_a_push_still_requires_the_suite_to_have_passed():
     """Opting out of skip propagation also opts out of the implicit ordering.
 
@@ -280,6 +287,7 @@ def test_a_push_still_requires_the_suite_to_have_passed():
     )
 
 
+@pytest.mark.gitea_checkout
 def test_a_dispatch_still_reaches_the_benchmark_when_the_variable_is_set():
     """A dispatch is a measurement someone asked for, so the switch spares it.
 
@@ -290,6 +298,7 @@ def test_a_dispatch_still_reaches_the_benchmark_when_the_variable_is_set():
     assert reaches(job, DISPATCH, MAIN, disable_benchmarks=DISABLED, results=DISPATCH_RESULTS)
 
 
+@pytest.mark.gitea_checkout
 def test_the_variable_gates_on_presence_rather_than_on_a_value():
     """Any non-empty setting disables it, so no particular contents are magic.
 
@@ -307,24 +316,28 @@ def test_the_variable_gates_on_presence_rather_than_on_a_value():
         ), f"a push still reached the benchmark with the variable set to {setting!r}"
 
 
+@pytest.mark.gitea_checkout
 def test_a_skipped_benchmark_does_not_withhold_a_release():
     """The other half of the switch: gating the measurement must not gate publishing."""
     job = workflow()["jobs"]["release"]
     assert reaches(job, "push", MAIN, results=SUITE_GREEN_BENCHMARK_SKIPPED)
 
 
+@pytest.mark.gitea_checkout
 def test_a_failed_benchmark_still_withholds_a_release():
     """A measurement that ran and failed is a regression, and still stops it."""
     job = workflow()["jobs"]["release"]
     assert not reaches(job, "push", MAIN, results=SUITE_GREEN_BENCHMARK_FAILED)
 
 
+@pytest.mark.gitea_checkout
 def test_a_failed_suite_withholds_a_release():
     """Correctness is not waived by any of this."""
     job = workflow()["jobs"]["release"]
     assert not reaches(job, "push", MAIN, results=SUITE_FAILED)
 
 
+@pytest.mark.gitea_checkout
 def test_a_cancelled_run_does_not_release():
     job = workflow()["jobs"]["release"]
     assert not reaches(job, "push", MAIN, results=SUITE_GREEN_BENCHMARK_GREEN, cancelled=True)
@@ -341,6 +354,7 @@ def test_CONTROL_the_evaluator_refuses_a_condition_it_cannot_substitute():
         reaches({"if": "vars.SOMETHING_ELSE == ''"}, "push", MAIN)
 
 
+@pytest.mark.gitea_checkout
 def test_a_release_waits_for_the_benchmark():
     """A performance regression blocks a release."""
     needs = workflow()["jobs"]["release"].get("needs")
@@ -349,6 +363,7 @@ def test_a_release_waits_for_the_benchmark():
     )
 
 
+@pytest.mark.gitea_checkout
 def test_a_measurement_dispatch_runs_nothing_beside_the_benchmark():
     """`level: none` is the measurement dispatch: the benchmark and nothing else."""
     jobs = workflow()["jobs"]
@@ -358,6 +373,7 @@ def test_a_measurement_dispatch_runs_nothing_beside_the_benchmark():
         ), f"the {name} job would run on a measurement dispatch alongside the benchmark"
 
 
+@pytest.mark.gitea_checkout
 @pytest.mark.parametrize("level", ["patch", "minor"])
 def test_a_release_dispatch_scores_no_benchmark(level: str):
     """A release dispatch must not put a measurement on the host.
@@ -375,6 +391,7 @@ def test_a_release_dispatch_scores_no_benchmark(level: str):
     )
 
 
+@pytest.mark.gitea_checkout
 @pytest.mark.parametrize("level", ["patch", "minor"])
 def test_a_release_dispatch_runs_the_suite_before_the_release(level: str):
     """Nothing is published without the tests having passed.
@@ -395,6 +412,7 @@ def test_a_release_dispatch_runs_the_suite_before_the_release(level: str):
     ), "the release job would not run on a release dispatch even with a green suite"
 
 
+@pytest.mark.gitea_checkout
 @pytest.mark.parametrize("level", ["patch", "minor"])
 def test_a_release_dispatch_with_a_failed_suite_releases_nothing(level: str):
     jobs = workflow()["jobs"]
@@ -403,6 +421,7 @@ def test_a_release_dispatch_with_a_failed_suite_releases_nothing(level: str):
     )
 
 
+@pytest.mark.gitea_checkout
 @pytest.mark.parametrize("level", ["patch", "minor"])
 def test_a_release_dispatch_with_the_suite_failed_on_3_12_releases_nothing(level: str):
     jobs = workflow()["jobs"]
@@ -411,12 +430,14 @@ def test_a_release_dispatch_with_the_suite_failed_on_3_12_releases_nothing(level
     ), "a suite failing on Python 3.12 alone would still publish"
 
 
+@pytest.mark.gitea_checkout
 def test_a_push_with_the_suite_failed_on_3_12_runs_no_release():
     assert not reaches(workflow()["jobs"]["release"], "push", MAIN, results=SUITE_FAILED_ON_3_12), (
         "a suite failing on Python 3.12 alone would still reach the release job on a push"
     )
 
 
+@pytest.mark.gitea_checkout
 def test_a_push_with_the_suite_failed_on_3_12_runs_no_benchmark():
     """The benchmark waits for both suites: a run on 3.12 beside it would skew the measurement."""
     job = workflow()["jobs"]["benchmark"]
@@ -424,6 +445,7 @@ def test_a_push_with_the_suite_failed_on_3_12_runs_no_benchmark():
     assert reaches(job, "push", MAIN, results=SUITE_GREEN_BENCHMARK_GREEN)
 
 
+@pytest.mark.gitea_checkout
 def test_a_release_dispatch_off_main_releases_nothing():
     """The ref gate holds for a dispatch as it does for a push."""
     assert not reaches(
@@ -435,6 +457,7 @@ def test_a_release_dispatch_off_main_releases_nothing():
     )
 
 
+@pytest.mark.gitea_checkout
 def test_the_benchmark_job_serialises_against_every_other_run():
     """Constant, for the fast-forward case where one commit arrives under two
     events and the ref-keyed workflow group does not collide them."""
@@ -442,6 +465,7 @@ def test_the_benchmark_job_serialises_against_every_other_run():
     assert serialises_host_wide(job), f"found concurrency: {job.get('concurrency')!r}"
 
 
+@pytest.mark.gitea_checkout
 def test_a_running_benchmark_is_queued_behind_not_cancelled():
     concurrency = workflow()["jobs"]["benchmark"]["concurrency"]
     assert concurrency.get("cancel-in-progress") is False, (
@@ -467,6 +491,7 @@ def test_CONTROL_a_ref_keyed_group_does_not_count():
     assert not serialises_host_wide({"concurrency": {}})
 
 
+@pytest.mark.gitea_checkout
 def test_the_guard_reads_the_real_workflow():
     """A parse that found no benchmark job would pass the checks above."""
     jobs = workflow()["jobs"]

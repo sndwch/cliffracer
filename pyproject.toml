@@ -132,6 +132,7 @@ markers = [
     "benchmark: Performance benchmarks; not a correctness gate",
     "repo: Guards over the repository itself (docs, packaging, CI, the suite)",
     "message_schedules: Needs nats-server 2.12+; collected only by scripts/check_message_schedules.py",
+    "gitea_checkout: Reads a file the GitHub mirror omits (.gitea/, AGENTS.md, CLAUDE.md, changelog.d/); skipped on the mirror",
     "leaves_correlation_id: The test leaves correlation_id_var set on purpose; the reset fixture does not report it",
 ]
 asyncio_mode = "auto"

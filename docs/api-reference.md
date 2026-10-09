@@ -152,6 +152,12 @@ service asks the caller to wait (a `RetryMessage` sets it, as the rate limiter's
 `details`, an object. A `retry_after` that is not a finite number of zero or more (`nan`, `inf`, a negative
 number) is left out of the reply, as one the refusal does not carry is, since `NaN` and `Infinity` are not JSON.
 
+An RPC handler may raise `RpcValidationError(details)` when semantic validation can happen only
+after its annotated arguments have parsed, such as checking keys in an implementation-specific
+configuration mapping. Request/reply callers receive `validation_failed` with those details;
+fire-and-forget dispatch logs the same classification. An ordinary Pydantic exception or any other
+unhandled handler exception remains `internal`.
+
 `refused` means a check turned the caller away and the caller can act on it. An
 extension that fails closed and whose hook RAISES is reported as `internal`
 instead, because that is the service being broken rather than the caller being
@@ -224,7 +230,10 @@ On the caller side, `call_rpc` raises the same classes the standalone `ServiceCl
 does for the same reply, all of them `RpcError` (`RPCError`): `RpcValidationError` for a
 validation failure, with the field-level errors on its `.details`; `RpcUnknownMethodError`;
 `RpcRefusedError`; and `RpcServerError` for anything else an error envelope carries, with the
-subject in its message. `RpcTimeoutError` is raised on timeout, `RpcNoRespondersError` when nothing
+subject in its message. A reply is read by one rule for `call_rpc`, `cliffracer.calls.call` and a
+generated client: one that cannot be decoded, that is not a JSON object, that carries no `success`
+key, or whose `success` is not `true` with no `error`, is an `RpcServerError` naming the subject and
+what came back. `RpcTimeoutError` is raised on timeout, `RpcNoRespondersError` when nothing
 is subscribed, and `RpcConnectionError` when the connection is lost before the reply, with the
 nats error as its `__cause__`; an argument larger than the broker's `max_payload` is an
 `RpcClientError`, and a full outbound buffer during a reconnect, a draining connection or any other
@@ -299,10 +308,11 @@ custom error types, messages and context can contain the same data.
 `errors()` or `json()` output. `expose_internal_errors` is independent and
 controls internal exception disclosure; it does not select this policy.
 
-This setting covers RPC ingestion diagnostics, including fire-and-forget RPC.
+This setting covers RPC ingestion diagnostics and a handler's deliberate `RpcValidationError`,
+including fire-and-forget RPC.
 It does not remove raw `WorkerContext.payload` or message bytes available to
 extensions, rewrite event dead-letter records, or redact application logs,
-correlation metadata, handler exceptions, or response-schema errors. Extensions
+correlation metadata, other handler exceptions, or response-schema errors. Extensions
 that record payloads and clients that validate arguments locally own those
 separate disclosure decisions.
 
@@ -513,6 +523,8 @@ Once connected the client reconnects indefinitely, as ADR-0008 specifies, and a 
 nats-py closes for good (an authentication change, or a terminal error from the server) is dialled
 again by the next call, with the drift check run again; a connection the client was handed is its
 owner's to replace. `timeout` (default `30.0`) is separate and bounds each request, not the dial.
+Both must be positive, finite numbers of seconds (`connect_timeout` may also be `None`); anything
+else is refused when the client is built, with a `ValueError` naming the argument.
 A dial that times out after the broker reported an error, an authorization failure for instance,
 says what that error was. A service, namespace or subject prefix that cannot be part of a subject
 (the rules `ServiceConfig` applies to them) raises `ValueError` when the client is built; the prefix from `CLIFFRACER_SUBJECT_PREFIX` is checked only when the client is given none. A
@@ -944,7 +956,7 @@ fails if it drifts.
 | `max_processing_time` | `None` | Seconds one replica may spend on a JetStream message before the handler is cancelled and the message redelivered. None leaves it unbounded, which is what the heartbeat does today. |
 | `jetstream_nak_backoff` | `1.0` | Base seconds before a naked message is redelivered. Doubles per delivery. A pull consumer whose fetch fails waits the same base, one second at least, before it fetches again, and doubles that wait for each failure in a row. |
 | `jetstream_max_backoff` | `60.0` | Ceiling for the doubling `jetstream_nak_backoff`, and for the wait after failed fetches, which is never under one second. |
-| `jetstream_update_streams` | `False` | Let startup update the fields declared by `StreamSpec`: subjects, storage, retention, maximum age, duplicate window, and message schedules when the declaration allows them. Broker-managed limits, discard policy, replicas, placement, description, metadata and fields outside `StreamSpec` are preserved. Off by default: two services declaring the same stream differently would flap it on every boot. |
+| `jetstream_update_streams` | `False` | Let startup update the fields declared by `StreamSpec`: subjects, storage, retention, maximum age, duplicate window, message schedules when the declaration allows them, and the limits, discard policy and replicas it declares. A limit lowered below what the stream holds is refused rather than applied. Limits, discard policy and replicas it leaves out, placement, description, metadata and fields outside `StreamSpec` are preserved. Off by default: two services declaring the same stream differently would flap it on every boot. |
 | `idempotent_publishing` | `False` | Whether to automatically generate idempotency keys from domain payloads. |
 | `on_connect` | `None` | Called after the initial connection and again after every reconnection, so it must be safe to run more than once. Setup that must happen once belongs in `on_startup`. |
 | `on_disconnect` | `None` | Called when the connection drops, before reconnection is attempted. |
@@ -1051,15 +1063,51 @@ takes its default.
   2.12 ignores it) is a difference from the declaration when the service starts and the stream
   already exists. The start that creates the stream refuses nothing, so on a broker before 2.12
   the floor is reported by `publish_at`, and by every start after the first.
+- `max_msgs`: the most messages the stream holds, a whole number, 1 or more. `None` (the default)
+  declares none: the stream is created without that limit, and an existing stream keeps whatever
+  limit it has. `0` and `-1` cannot be built, since the server reads both as no limit; to declare
+  none, leave the field out.
+- `max_bytes`: the most bytes the stream holds, read as `max_msgs` is.
+- `discard`: what the server does at a limit, `"old"` (drop the oldest message) or `"new"` (refuse
+  the new one). `None` (the default) declares neither: `"old"` on creation, the stream's own
+  otherwise. `"new"` with neither `max_msgs` nor `max_bytes` cannot be built, since it would change
+  nothing.
+- `num_replicas`: the fewest copies of the stream a cluster keeps, 1 to 5. More copies than declared
+  is not a difference. `None` (the default) declares none: one on creation, the stream's own
+  otherwise. A stream's configured count is not taken as its copies: a single server refuses more
+  than one when a stream is created but accepts a raised count on an update and reports it while
+  keeping one copy, so the copies are counted from the stream's cluster information, the leader and
+  every peer it lists, current or catching up.
 
 A declaration that holds a value from the list above cannot be built: `StreamSpec(...)` raises a
 validation error naming the stream and the value. `ensure_streams` checks every declaration again
 before it creates the first stream, and raises one `StreamDeclarationError` naming each stream it
 refuses, so a bad declaration never leaves the ones before it on the broker.
 
-There is no field for a size limit or a message count. A file stream with the default retention
-and no `max_age_seconds` keeps every message until the server's own limits stop it, so set
-`max_age_seconds` on a stream whose messages are not worth keeping for ever.
+A file stream with the default retention, no `max_age_seconds` and no `max_msgs` or `max_bytes`
+keeps every message until the server's own limits stop it, so declare an age or a limit on a stream
+whose messages are not worth keeping for ever.
+
+### Changing a declared stream
+
+What a broker reports for a field left out was measured on nats-server 2.10.29, 2.11.2 and 2.12.0:
+a limit comes back as `-1` (no limit), a discard policy as `"old"`, a replica count as `1`; a
+declaration is compared with those, so leaving a field out never reads as a difference.
+
+| change to an existing stream | `'provision'` with `jetstream_update_streams=True` | `'bind'` |
+|---|---|---|
+| a declared field the stream does not hold | applied | refused, naming the field, the declared and the held value |
+| `max_msgs` or `max_bytes` raised, removed from the broker's view, or lowered to no less than the stream holds | applied | refused as a difference |
+| `max_msgs` or `max_bytes` lowered below what the stream holds | refused as an operator action, naming the field, the declared limit and what the stream holds: the server would discard the messages over it | refused as a difference |
+| `discard` changed | applied | refused as a difference |
+| `num_replicas` raised | applied, then refused as an operator action if the copies counted afterwards are fewer than declared ("configured 3, 1 live, not clustered" on a single server); the refusal comes after the update, so the raised count stays on the broker | refused while the configured or the counted copies are fewer than declared |
+| a field the declaration leaves out | kept as it is on the broker | not compared |
+
+Without `jetstream_update_streams`, provision mode refuses any difference and changes nothing.
+Either way, provision mode counts the copies of every stream that declares `num_replicas` once its
+streams are in place, and refuses a stream with fewer than declared as an operator action, whether
+or not anything was changed. What a stream holds is read when the streams are listed, before any
+update, so a message published in between can still be over a lowered limit and be dropped by it.
 
 ### Stream subjects are exclusive
 
@@ -1393,6 +1441,61 @@ async for line in self.logs.tail.stream(n=100):  # through an RpcProxy
   sending the request), with `ctx.kind` `stream_rpc`: a hook that counts calls counts a stream
   once, whatever the number of its items.
 
+### Calling a service without a generated client
+
+`cliffracer.calls` calls a running service over a connection you hold, with no generated client:
+`call` for one reply, `stream` for a streamed one.
+
+```python
+import nats
+
+from cliffracer.calls import call, stream
+
+
+async def report(url: str) -> None:
+    nc = await nats.connect(url)
+    total = await call(nc, "orders", "total", {"customer": "c-1"}, timeout=5.0)
+    async for line in stream(nc, "logs", "tail", {"n": 100}, idle_timeout=2.0):
+        print(total, line)
+    await nc.close()
+```
+
+- `params` is a mapping of JSON-ready values: the method's arguments by name. `namespace` and
+  `subject_prefix` address the subject as the service subscribes it (`subject_prefix` defaults to
+  `CLIFFRACER_SUBJECT_PREFIX`; `""` is unprefixed), and `headers` adds headers of your own.
+- The request is labelled `Content-Type: application/json`, carries the correlation id (one in
+  `headers`, the ambient one, or a new one), and carries `timeout` as its `Cliffracer-Timeout-Ms`
+  budget, cut to what an enclosing request has left (a budget given in `headers` is sent as given);
+  a call with none left is not sent.
+- An error the service answers is raised as `call_rpc` raises it; a call nothing holds raises
+  `RpcNoRespondersError`, and one not answered within `timeout` raises `RpcTimeoutError`.
+- `stream` reads as a generated client does (each item as it arrives, an error after the items
+  before it with `items`, `RpcStreamGapError` for a lost item, the inbox unsubscribed however it
+  ends), with one more bound: `idle_timeout`, when given, ends a stream that sends nothing for that
+  long with `RpcTimeoutError` naming it. `timeout` bounds the whole stream.
+- `prepare(service, method, params, ...)` builds and checks the request `call` and `stream` send,
+  without sending it, and returns its `subject`, `headers`, `payload` and `timeout` (the wait):
+  what a dry run shows. `cliffracer call --dry-run` prints it.
+- `timeout=None` sets no bound of the caller's own: no wait limit and no budget header (inside a
+  handler the request's remainder is still the wait and the budget). It is the one way to say
+  unbounded: `inf`, NaN, zero and negatives are refused.
+- `timeout` and `idle_timeout` must otherwise be positive, finite numbers of seconds, and are
+  refused by name; a service or method name that makes a subject the server cannot use (whitespace,
+  an empty or doubled `.`) is refused with `ValueError`, as `call_rpc` refuses it. Every argument
+  is checked when `call` or `stream` is called, before anything is sent.
+
+What an untyped call gives up, against a generated client's method:
+
+- **No encoding through declared types.** The arguments go out as `json.dumps` writes them. A value
+  it cannot write is refused before sending (`RpcClientError`), but a value the service would read
+  as something else (a string for a date, a float for an int) is not caught here. A pydantic model
+  anywhere in `params` is refused by name: which form of it the service reads is the generated
+  client's to choose, so call the method through one, or pass the model's dump.
+- **No signature check.** The service's signature hashes are not compared, so a call to a method
+  whose parameters changed is answered as the service now reads it, never refused as out of date.
+- **No result type.** The result is the reply's decoded JSON, and each streamed item the item's,
+  not validated against a declared type.
+
 ### Event Decorators
 
 ```python
@@ -1406,6 +1509,9 @@ async def on_any_order_event(self, subject: str, order_id: str) -> None:
     """Subscribe to pattern"""
     pass
 ```
+
+A listener's default is validated and coerced as a sent value is: when an event omits
+`count: int = "5"`, the handler receives `5`.
 
 A listener whose only parameter is a model, `on(self, item: Item)`, reads the event's payload as
 that model, so `publish_event(topic, name="a")` delivers `Item(name="a")`. It reads the form

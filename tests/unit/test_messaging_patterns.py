@@ -80,7 +80,7 @@ class TestMessagingPatterns:
 
         # Called: the request goes out on the method's subject, carrying its arguments.
         mock_response = AsyncMock()
-        mock_response.data = json.dumps({"result": 15}).encode()
+        mock_response.data = json.dumps({"success": True, "result": 15}).encode()
         service.nc.request = AsyncMock(return_value=mock_response)
 
         result = await service.call_rpc("calculator", "add", a=10, b=5)

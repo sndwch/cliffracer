@@ -14,6 +14,7 @@ This runs entirely in Python to showcase the framework concepts.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import random
@@ -77,7 +78,7 @@ class InMemoryMessageBus:
         if subject in self.subscribers:
             for callback in self.subscribers[subject]:
                 try:
-                    if asyncio.iscoroutinefunction(callback):
+                    if inspect.iscoroutinefunction(callback):
                         await callback(data)
                     else:
                         callback(data)

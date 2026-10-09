@@ -94,6 +94,7 @@ def workflow_stripped_names() -> list[set[str]]:
     ]
 
 
+@pytest.mark.gitea_checkout
 def test_the_control_strips_the_variables_the_workflow_strips():
     """The control runs the tool the way the decide step does, and the two lists are one list."""
     found = workflow_stripped_names()
@@ -140,6 +141,7 @@ def test_CONTROL_the_tool_computes_a_major_for_this_history(incident: Path):
     assert computed.stdout.strip() == "v2.0.0", computed.stdout
 
 
+@pytest.mark.gitea_checkout
 def test_a_release_dispatch_tags_the_base_version_of_its_prerelease(incident: Path):
     before = git(incident, "show-ref")
 
@@ -234,6 +236,7 @@ def test_the_script_refuses_what_it_cannot_promote_and_says_why(incident: Path, 
     assert git(incident, "show-ref", "--tags") == before
 
 
+@pytest.mark.gitea_checkout
 @pytest.mark.parametrize(
     "arrange",
     [refuse_when_the_final_exists, refuse_when_a_higher_final_exists],
@@ -261,6 +264,7 @@ def merge_an_unrelated_branch_after_the_prerelease(repo: Path) -> None:
     git(repo, "merge", "--no-ff", "-m", "Merge the unrelated work", "unrelated")
 
 
+@pytest.mark.gitea_checkout
 def test_a_prerelease_behind_head_by_an_unrelated_merge_is_still_promoted(incident: Path):
     merge_an_unrelated_branch_after_the_prerelease(incident)
     assert git(incident, "merge-base", "--is-ancestor", "v1.1.0-rc.1", "HEAD") == ""

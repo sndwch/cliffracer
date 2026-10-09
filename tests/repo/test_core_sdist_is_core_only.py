@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.repo.built_distributions import uv_build
+
 pytestmark = pytest.mark.repo
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,13 +20,7 @@ def _build_core_sdist(out: Path, cwd: Path) -> Path:
     Note `uv build --out-dir` also writes a `.gitignore` into the directory, so
     pick the artefact by suffix rather than by taking the only file there.
     """
-    proc = subprocess.run(
-        ["uv", "build", "--package", "cliffracer", "--sdist", "--out-dir", str(out)],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode == 0, f"uv build failed:\n{proc.stdout}\n{proc.stderr}"
+    uv_build(["--package", "cliffracer", "--sdist", "--out-dir", str(out)], cwd)
     sdists = [f for f in sorted(out.iterdir()) if f.name.endswith(".tar.gz")]
     assert len(sdists) == 1, f"expected exactly one sdist, got {[f.name for f in out.iterdir()]}"
     return sdists[0]

@@ -39,15 +39,21 @@ from .typed_rpc import (
 
 @dataclass(frozen=True)
 class EventHandlerSpec:
-    """Specification and synthesized validation model for one event listener or broadcast handler."""
+    """Specification and synthesized validation model for one event listener or broadcast handler.
+
+    A @listener's or @broadcast's spec describes every parameter its dispatch fills. A
+    @validated_listener's spec carries its schema as `payload_model`, the parameter that receives
+    it and its docstring: its dispatch passes `subject` and `correlation_id` by the handler's own
+    signature, so `params`, `takes_subject` and `takes_correlation_id` stay at their defaults.
+    """
 
     name: str
-    params: list[ParamSpec]
     payload_model: type[BaseModel]
-    takes_subject: bool
-    takes_correlation_id: bool
     is_single_model_param: bool
     single_model_param_name: str | None
+    params: list[ParamSpec] = field(default_factory=list)
+    takes_subject: bool = False
+    takes_correlation_id: bool = False
     doc: str | None = None
     doc_summary: str | None = None
     doc_description: str | None = None
@@ -245,8 +251,6 @@ def build_validated_event_spec(
         inspect.getattr_static(owner, name, None), staticmethod
     )
     payload: tuple[str, inspect.Parameter] | None = None
-    takes_subject = False
-    takes_cid = False
 
     for idx, (pname, parameter) in enumerate(sig.parameters.items()):
         if idx == 0 and pname == "self" and not is_static:
@@ -261,7 +265,6 @@ def build_validated_event_spec(
                 "must be explicitly annotated"
             )
         if pname == "subject":
-            takes_subject = True
             if pname not in hints or hints[pname] is not str:
                 hint_str = _name(hints[pname]) if pname in hints else "unannotated"
                 raise UntypedHandler(
@@ -269,7 +272,6 @@ def build_validated_event_spec(
                 )
             continue
         if pname == "correlation_id":
-            takes_cid = True
             if pname not in hints or not _valid_cid_annotation(hints[pname]):
                 hint_str = _name(hints[pname]) if pname in hints else "unannotated"
                 raise UntypedHandler(
@@ -317,8 +319,7 @@ def build_validated_event_spec(
             "'correlation_id: str | None' parameters are also accepted"
         )
 
-    payload_name, parameter = payload
-    has_default = parameter.default is not inspect.Parameter.empty
+    payload_name, _ = payload
     raw_doc = inspect.getdoc(func)
     doc_summary = None
     if raw_doc:
@@ -326,20 +327,12 @@ def build_validated_event_spec(
         doc_summary = next((line for line in lines if line), None)
 
     require_finite_json(qual, "the payload model", functools.partial(collect_model_schemas, schema))
-    param = ParamSpec(
-        name=payload_name,
-        annotation=schema,
-        ref=type_ref(schema),
-        adapter=TypeAdapter(schema),
-        has_default=has_default,
-        default=parameter.default if has_default else None,
-    )
+    # For its refusal: a schema pydantic cannot build is refused when the service starts, not at
+    # its first message.
+    type_ref(schema)
     return EventHandlerSpec(
         name=name,
-        params=[param],
         payload_model=schema,
-        takes_subject=takes_subject,
-        takes_correlation_id=takes_cid,
         is_single_model_param=True,
         single_model_param_name=payload_name,
         doc=doc_summary,

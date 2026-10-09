@@ -214,6 +214,9 @@ DECLARED = StreamSpec(
     retention="limits",
     max_age_seconds=60,
     duplicate_window_seconds=30,
+    max_msgs=100,
+    max_bytes=10_000,
+    discard="old",
 )
 DIFFERENT = {
     "name": "EAST_OTHER",
@@ -222,11 +225,14 @@ DIFFERENT = {
     "retention": "interest",
     "max_age_seconds": 61,
     "duplicate_window_seconds": 31,
+    "max_msgs": 101,
+    "max_bytes": 10_001,
+    "discard": "new",
 }
 
 
 #: Fields compared one way only, each with a case of its own below rather than in `DIFFERENT`.
-ONE_WAY = {"allow_msg_schedules"}
+ONE_WAY = {"allow_msg_schedules", "num_replicas"}
 
 
 def test_every_stream_field_has_a_case_below():

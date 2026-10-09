@@ -40,7 +40,7 @@ def _svc(namespace=None):
     svc.nc = AsyncMock()
     # make nc.request return a valid RPC response envelope
     resp = AsyncMock()
-    resp.data = json.dumps({"result": "ok"}).encode()
+    resp.data = json.dumps({"success": True, "result": "ok"}).encode()
     svc.nc.request.return_value = resp
     return svc
 
@@ -81,7 +81,7 @@ async def test_rpc_proxy_threads_namespace():
     holder = _Holder(ServiceConfig(name="holder", namespace="app1"))
     holder.nc = AsyncMock()
     resp = AsyncMock()
-    resp.data = json.dumps({"result": "ok"}).encode()
+    resp.data = json.dumps({"success": True, "result": "ok"}).encode()
     holder.nc.request.return_value = resp
     await holder.other.get_user(user_id="u1")
     assert holder.nc.request.call_args.args[0] == "app2.user_service.rpc.get_user"

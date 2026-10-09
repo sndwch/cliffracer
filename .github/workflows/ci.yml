@@ -74,6 +74,8 @@ jobs:
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           GITHUB_BASE_REF: ${{ github.base_ref }}
+          # The pull request's head, not the merge commit checked out: see head_commit().
+          COMMIT_CHECK_HEAD: ${{ github.event.pull_request.head.sha }}
         run: uv run python scripts/check_commit_messages.py
 
       # A pull request that changes src/ or packages/*/src/ adds a changelog

@@ -115,6 +115,7 @@ def test_CONTROL_a_different_baseline_makes_a_different_page():
 # --- the 15% gate on the median of the runs ---------------------------------
 
 
+@pytest.mark.gitea_checkout
 def test_the_page_states_the_threshold_and_the_median_ci_uses():
     commands = _benchmark_step_commands()
     threshold = re.search(r"check_benchmark_regression\.py[^\n]*--threshold\s+(\S+)", commands)

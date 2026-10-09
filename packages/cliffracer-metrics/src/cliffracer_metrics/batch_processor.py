@@ -1,6 +1,7 @@
 """Batch aggregation and scheduled flush for message payloads."""
 
 import asyncio
+import inspect
 import time
 import weakref
 from collections import defaultdict
@@ -222,7 +223,7 @@ class BatchProcessor:
 
                 try:
                     # Process the batch
-                    if asyncio.iscoroutinefunction(processor):
+                    if inspect.iscoroutinefunction(processor):
                         outcome = await processor(items)
                     else:
                         outcome = processor(items)

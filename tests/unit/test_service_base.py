@@ -121,7 +121,7 @@ class TestExtendedService:
         """
         service.nc = AsyncMock()
         mock_response = AsyncMock()
-        mock_response.data = json.dumps({"result": "test"}).encode()
+        mock_response.data = json.dumps({"success": True, "result": "test"}).encode()
         service.nc.request = AsyncMock(return_value=mock_response)
 
         result = await service.call_rpc("peer", "echo", text="hi")

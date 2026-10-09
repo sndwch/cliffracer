@@ -11,13 +11,14 @@ allowing the RPC dispatcher to format structured field error responses.
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, cast
 
 from pydantic import ValidationError
 from pydantic_core import PydanticCustomError
 
 from .extension import Extension, RejectMessage, WorkerContext
-from .validation import validate_payload
+from .validation import serialize_payload, validate_payload
 
 
 def redacts_rpc_validation(config: Any) -> bool:
@@ -38,6 +39,21 @@ def _redacted_validation_error() -> ValidationError:
         ],
         hide_input=True,
     )
+
+
+def rpc_validation_details(config: Any, details: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return JSON-safe validation details under the service's disclosure policy."""
+    if redacts_rpc_validation(config):
+        return [dict(detail) for detail in _redacted_validation_error().errors()]
+    try:
+        sanitized = cast(list[dict[str, Any]], json.loads(json.dumps(details, default=str)))
+        # Validate at the nesting depth used by the reply. A value can be writable
+        # by itself while the surrounding RPC envelope crosses the serializer's
+        # recursion limit.
+        serialize_payload({"details": sanitized}, format="json")
+        return sanitized
+    except Exception:
+        return []
 
 
 class ValidationExtension(Extension):

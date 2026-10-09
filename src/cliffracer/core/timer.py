@@ -406,7 +406,7 @@ class Timer:
             # other. Guarded: a timer may be driven by a
             # service double that has no container.
             async def _call() -> Any:
-                if asyncio.iscoroutinefunction(method):
+                if inspect.iscoroutinefunction(method):
                     return await method()
                 return method()
 

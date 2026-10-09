@@ -9,7 +9,14 @@ service state — the ack policy, the DLQ assertion — live on
 import math
 from typing import Any, Literal
 
-from nats.js.api import AckPolicy, ConsumerConfig, RetentionPolicy, StorageType, StreamConfig
+from nats.js.api import (
+    AckPolicy,
+    ConsumerConfig,
+    DiscardPolicy,
+    RetentionPolicy,
+    StorageType,
+    StreamConfig,
+)
 from nats.js.errors import NotFoundError
 from pydantic import (
     BaseModel,
@@ -122,6 +129,16 @@ class StreamSpec(BaseModel):
     #: later (nats-server 2.12 and later). A stream that allows it also declares a subject in the
     #: `_sched.` branch, where `CliffracerService.schedules` publishes the schedules.
     allow_msg_schedules: bool = False
+    #: The most messages the stream holds, and the most bytes. Left out, the stream has no such
+    #: limit when created and keeps whatever limit an operator gave it when updated or bound.
+    max_msgs: int | None = None
+    max_bytes: int | None = None
+    #: What the server does at a limit: ``"old"`` drops the oldest message, ``"new"`` refuses the
+    #: new one. Left out, ``"old"`` on creation and the operator's choice otherwise.
+    discard: Literal["old", "new"] | None = None
+    #: The fewest copies of the stream a cluster keeps, 1 to 5: more is not drift. Left out, one on
+    #: creation and the operator's choice otherwise.
+    num_replicas: int | None = None
 
     @field_validator("subjects")
     @classmethod
@@ -195,6 +212,26 @@ class StreamSpec(BaseModel):
             seconds = getattr(self, field)
             if seconds is not None and (not math.isfinite(seconds) or seconds < 0):
                 return f"{field} is {seconds!r}; it is a finite number of seconds, 0 or more"
+        for field, unit in (("max_msgs", "messages"), ("max_bytes", "bytes")):
+            limit = getattr(self, field)
+            if limit is not None and (
+                isinstance(limit, bool) or not isinstance(limit, int) or limit < 1
+            ):
+                return (
+                    f"{field} is {limit!r}; it is a whole number of {unit}, 1 or more. The server "
+                    f"reads 0 and -1 as no limit, so leave it out for none"
+                )
+        replicas = self.num_replicas
+        if replicas is not None and (
+            isinstance(replicas, bool) or not isinstance(replicas, int) or not 1 <= replicas <= 5
+        ):
+            return f"num_replicas is {replicas!r}; a stream keeps 1 to 5 copies"
+        if self.discard == "new" and self.max_msgs is None and self.max_bytes is None:
+            return (
+                "discard='new' refuses a message only once max_msgs or max_bytes is reached, and "
+                "neither is declared, so it would change nothing: declare a limit, or leave "
+                "discard out"
+            )
         return None
 
     @model_validator(mode="after")
@@ -254,6 +291,7 @@ class StreamSpec(BaseModel):
             duplicate_window=self.effective_duplicate_window(),
             # Sent only when asked for: a broker before 2.12 is never sent a field it lacks.
             allow_msg_schedules=True if self.allow_msg_schedules else None,
+            **self._declared_limits(),
         )
 
     def apply_to(self, config: StreamConfig) -> StreamConfig:
@@ -266,7 +304,23 @@ class StreamSpec(BaseModel):
             max_age=self.max_age_seconds,
             duplicate_window=self.effective_duplicate_window(),
             allow_msg_schedules=True if self.allow_msg_schedules else config.allow_msg_schedules,
+            **self._declared_limits(),
         )
+
+    def _declared_limits(self) -> dict[str, Any]:
+        """The limit, discard and replica fields this declaration sets, as nats-py names them.
+        One it leaves out is not sent, so a new stream takes the server's default and an existing
+        one keeps the operator's value."""
+        declared: dict[str, Any] = {}
+        if self.max_msgs is not None:
+            declared["max_msgs"] = self.max_msgs
+        if self.max_bytes is not None:
+            declared["max_bytes"] = self.max_bytes
+        if self.discard is not None:
+            declared["discard"] = DiscardPolicy(self.discard)
+        if self.num_replicas is not None:
+            declared["num_replicas"] = self.num_replicas
+        return declared
 
     @staticmethod
     def _plain(value: Any, default: str) -> str:
@@ -289,9 +343,10 @@ class StreamSpec(BaseModel):
         against our own defaults rather than against ``None``, because a
         server round-trip fills fields we left unset.
 
-        Limits, discard policy, replicas, placement, description, metadata and
-        fields added by newer brokers are outside ``StreamSpec``. Updates
-        preserve those fields from the broker's live configuration.
+        ``max_msgs``, ``max_bytes``, ``discard`` and ``num_replicas`` are compared
+        only where declared. Placement, description, metadata, per-subject limits and
+        fields added by newer brokers are outside ``StreamSpec``, and updates preserve
+        them, with any limit left undeclared, from the broker's live configuration.
         """
         return not self.declared_differences(config)
 
@@ -333,7 +388,63 @@ class StreamSpec(BaseModel):
         held = bool(getattr(config, "allow_msg_schedules", None))
         if self.allow_msg_schedules and not held:
             differences.append(("allow_msg_schedules", True, held))
+        # As each broker reports them (measured on 2.10.29, 2.11.2 and 2.12.0): a limit left out,
+        # sent as 0 or as -1 comes back as -1, no discard comes back "old", and no replica count, or
+        # 0, comes back 1.
+        for field in ("max_msgs", "max_bytes"):
+            limit = getattr(self, field)
+            if limit is None:
+                continue
+            reported = getattr(config, field, None)
+            held_limit = reported if isinstance(reported, int) and reported > 0 else "no limit"
+            if held_limit != limit:
+                differences.append((field, limit, held_limit))
+        if self.discard is not None:
+            held_discard = self._plain(getattr(config, "discard", None), "old")
+            if held_discard != self.discard:
+                differences.append(("discard", self.discard, held_discard))
+        # A replica count is a floor: more copies than declared is not drift, and lowering an
+        # operator's count is not this service's to do.
+        if self.num_replicas is not None:
+            held_replicas = getattr(config, "num_replicas", None) or 1
+            if held_replicas < self.num_replicas:
+                differences.append(("num_replicas", self.num_replicas, held_replicas))
         return differences
+
+    def replica_shortfall(self, info: Any) -> str | None:
+        """Why the stream keeps fewer copies than declared, or None.
+
+        A stream's configured replica count is not proof of copies: a single server refuses more
+        than one when a stream is created, but accepts the change on an update and reports it
+        back while keeping one copy (measured on 2.10.29, 2.11.2 and 2.12.0). So the copies are
+        counted from the cluster information as well: the leader and every peer it lists,
+        current or catching up, since a lagging peer is a copy being made.
+        """
+        if self.num_replicas is None:
+            return None
+        configured = getattr(info.config, "num_replicas", None) or 1
+        cluster = getattr(info, "cluster", None)
+        clustered = cluster is not None and getattr(cluster, "name", None) is not None
+        live = 1 + len(getattr(cluster, "replicas", None) or []) if cluster is not None else 1
+        if configured >= self.num_replicas and live >= self.num_replicas:
+            return None
+        where = "" if clustered else ", not clustered"
+        return (
+            f"num_replicas declared {self.num_replicas}: configured {configured}, {live} live"
+            f"{where}"
+        )
+
+    def limit_below_usage(self, state: Any) -> list[tuple[str, int, int]]:
+        """Each declared ``max_msgs`` or ``max_bytes`` lower than what the stream holds, as
+        ``(field, declared, held)``: applying it would make the server drop stored messages."""
+        held = {"max_msgs": getattr(state, "messages", 0), "max_bytes": getattr(state, "bytes", 0)}
+        return [
+            (field, limit, held[field])
+            for field in ("max_msgs", "max_bytes")
+            if (limit := getattr(self, field)) is not None
+            and isinstance(held[field], int)
+            and limit < held[field]
+        ]
 
 
 def subject_covered_by(specs: list[StreamSpec], subject: str) -> bool:
@@ -617,6 +728,7 @@ async def ensure_streams(
     infos = await all_streams(js)
     claims: dict[str, list[str]] = {i.config.name: list(i.config.subjects or []) for i in infos}
     server_configs = {i.config.name: i.config for i in infos}
+    server_states = {i.config.name: getattr(i, "state", None) for i in infos}
 
     # First decide, creating nothing: every spec is checked against the broker and against the
     # specs before it, and every conflict is collected. A conflict in a later spec must not leave
@@ -641,6 +753,18 @@ async def ensure_streams(
                         f"declaration in {differing}. Refusing to rewrite a stream that another "
                         f"service may own. Set jetstream_update_streams=True to apply the "
                         f"change deliberately, or align the declarations."
+                    )
+                dropping = spec.limit_below_usage(server_states.get(spec.name))
+                if dropping:
+                    lowered = "; ".join(
+                        f"{field} declared {declared!r}, the stream holds {held!r}"
+                        for field, declared, held in dropping
+                    )
+                    raise StreamDeclarationError(
+                        f"stream {spec.name!r} would drop stored messages if updated to this "
+                        f"declaration: {lowered}. The server discards what is over a lowered "
+                        f"limit, so this is an operator action: make room in the stream, or "
+                        f"lower the limit on the broker yourself."
                     )
                 _assert_no_overlap(spec, others)
                 plan.append((spec, current))
@@ -674,6 +798,19 @@ async def ensure_streams(
             )
             logger.info(f"Updated JetStream stream {spec.name!r}: {changes}")
 
+    # A replica count is held only when the copies exist: a single server accepts a raised count on
+    # an update and keeps one copy. A service must not start believing in replication it lacks.
+    for spec in specs:
+        if spec.num_replicas is None:
+            continue
+        shortfall = spec.replica_shortfall(await js.stream_info(spec.name))
+        if shortfall is not None:
+            raise StreamDeclarationError(
+                f"stream {spec.name!r} keeps fewer copies than declared: {shortfall}. This is an "
+                f"operator action, not one this service can reconcile: give the stream its "
+                f"replicas on a cluster, or lower num_replicas."
+            )
+
 
 async def validate_bound_streams(js: Any, specs: list[StreamSpec]) -> None:
     """Validate named streams without listing, creating, or updating broker resources."""
@@ -686,6 +823,13 @@ async def validate_bound_streams(js: Any, specs: list[StreamSpec]) -> None:
                 f"subjects {sorted(spec.subjects)!r} before starting this service in "
                 "JetStream bind mode."
             ) from exc
+        shortfall = spec.replica_shortfall(info)
+        if shortfall is not None:
+            raise StreamDeclarationError(
+                f"pre-provisioned stream {spec.name!r} keeps fewer copies than this service "
+                f"declares: {shortfall}. Give the stream its replicas, or lower the declaration, "
+                "before starting this service in JetStream bind mode."
+            )
         if spec.matches_declared_fields(info.config):
             continue
         detail = "; ".join(
