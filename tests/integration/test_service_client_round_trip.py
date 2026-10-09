@@ -1,5 +1,7 @@
 """Integration tests for ServiceClient RPC communication and schema verification."""
 
+import time
+
 import pytest
 from pydantic import BaseModel
 
@@ -75,13 +77,30 @@ async def test_verify_reads_the_live_describe_subject(nats_connection):
     Both sides compute the hash with the same function over the same class, so
     a passing call here is the offline and online descriptions agreeing over
     the wire rather than in one process.
+
+    Observed rather than assumed: a second subscription on the describe subject
+    counts the requests that reach the broker, and `_verified` is only set by a
+    verify that completed a round trip, so a verify that never contacted the
+    service, or asked the wrong subject, fails here.
     """
     svc = Shop(ServiceConfig(name="shop_rt", version="1.0.0"))
     await svc.start()
     client = _client_class(_signatures())(nats_connection, service="shop_rt")
+    describe_requests = []
+
+    async def on_describe(msg):
+        describe_requests.append(msg.subject)
+
+    subscription = await nats_connection.subscribe(client._subject("describe"), cb=on_describe)
+    await nats_connection.flush()
     try:
+        assert client._verified is False
         await client.verify()
+        await nats_connection.flush()
+        assert describe_requests == [client._subject("describe")]
+        assert client._verified is True
     finally:
+        await subscription.unsubscribe()
         await svc.stop()
 
 
@@ -144,16 +163,30 @@ async def test_a_refused_describe_arrives_as_RpcRefused_over_the_wire(nats_conne
 
 async def test_a_stopped_service_is_RpcNoResponders_not_a_timeout(nats_connection):
     """Immediately, and by its own name. A client that waited out the full
-    deadline for a service nobody is running would report a slow service."""
+    deadline for a service nobody is running would report a slow service.
+
+    The client's deadline is 5 seconds; the refusal has to arrive in well under
+    half of it, which is what the broker's no-responders reply gives and a
+    client that waits the deadline out and then reclassifies cannot.
+    """
     client = _client_class(_signatures())(nats_connection, service="shop_rt_absent", timeout=5.0)
+    started = time.monotonic()
     with pytest.raises(RpcNoResponders):
         await client.buy(Item(sku="a"))
+    elapsed = time.monotonic() - started
+    # Upper bound. CI p99 0.00156 s (run 4712: eric-7, CPython 3.12.15, n=20, p99 = max); 1283x p99.
+    assert elapsed < 2.0, f"took {elapsed:.2f}s of a 5.0s deadline: the fast path is lost"
 
 
 async def test_a_method_the_service_does_not_have_is_RpcUnknownMethod(nats_connection):
+    """The client declares the real signatures and verifies, so the unknown
+    method is refused by the SERVICE rather than by a client that skipped
+    verification. An empty SIGNATURES with `verify=False` would reach the same
+    error down a path no deployed client takes.
+    """
     svc = Shop(ServiceConfig(name="shop_rt", version="1.0.0"))
     await svc.start()
-    client = _client_class({})(nats_connection, service="shop_rt")
+    client = _client_class(_signatures())(nats_connection, service="shop_rt")
     try:
         with pytest.raises(RpcUnknownMethod):
             await client._call("refund", {}, Receipt)

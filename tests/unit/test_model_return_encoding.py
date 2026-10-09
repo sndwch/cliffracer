@@ -6,6 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
+from cliffracer.testing import refuse_a_reply_with_no_subject
 
 pytestmark = pytest.mark.unit
 
@@ -30,6 +31,10 @@ class _Svc(CliffracerService):
 
 
 class _Msg:
+    #: Every dispatcher path reads this; a double without one let a
+    #: reply be recorded that production would have refused.
+    reply: str | None = "_INBOX.test"
+
     def __init__(self, subject: str, payload: dict):
         self.subject = subject
         self.data = json.dumps(payload).encode()
@@ -37,6 +42,7 @@ class _Msg:
         self.response: dict | None = None
 
     async def respond(self, payload: bytes) -> None:
+        refuse_a_reply_with_no_subject(self)
         self.response = json.loads(payload.decode())
 
 

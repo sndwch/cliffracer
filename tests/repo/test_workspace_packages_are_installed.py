@@ -6,7 +6,10 @@ are missing.
 """
 
 import importlib
+import importlib.metadata
 import pathlib
+import re
+import tomllib
 
 import pytest
 
@@ -41,6 +44,26 @@ def missing(modules: list[str]) -> list[str]:
     return out
 
 
+def workspace_distributions() -> list[str]:
+    """Distribution names defined in packages/*/pyproject.toml."""
+    dists = []
+    for pyproject in sorted(ROOT.glob("packages/*/pyproject.toml")):
+        data = tomllib.loads(pyproject.read_text())
+        dists.append(data["project"]["name"])
+    return dists
+
+
+def missing_distributions(dists: list[str]) -> list[str]:
+    """Identify distribution packages not installed in the environment metadata."""
+    absent = []
+    for dist in dists:
+        try:
+            importlib.metadata.distribution(dist)
+        except importlib.metadata.PackageNotFoundError:
+            absent.append(dist)
+    return absent
+
+
 def test_the_discovery_finds_every_package():
     """Without this, an empty glob would make the guard below vacuously green."""
     modules = workspace_modules()
@@ -49,6 +72,24 @@ def test_the_discovery_finds_every_package():
         f"{len(dists)} distributions, {len(modules)} modules: {modules}"
     )
     assert modules, "no workspace packages found; the layout moved and this guard is blind"
+
+
+def test_every_workspace_package_is_installed():
+    """Verify all workspace packages are registered as installed distributions.
+
+    Checks distribution metadata in the virtual environment. Merely placing
+    package directories on sys.path does not satisfy this check.
+    """
+    absent = missing_distributions(workspace_distributions())
+    assert not absent, (
+        "workspace packages are not installed in the environment: "
+        + ", ".join(absent)
+        + f"\n\nRun: {SYNC}\n\n"
+        "`uv sync --extra dev` installs core only -- every extension under "
+        "packages/ is a separate distribution. Without them the package tests "
+        "cannot be collected and the documentation guard reports every "
+        "`import cliffracer_*` in the docs as unresolvable."
+    )
 
 
 def test_every_workspace_package_is_importable():
@@ -62,6 +103,13 @@ def test_every_workspace_package_is_importable():
     )
 
 
+def test_CONTROL_a_missing_distribution_is_detected():
+    """Verify that uninstalled distributions are reported by missing_distributions."""
+    assert missing_distributions(["cliffracer-nonexistent-package"]) == [
+        "cliffracer-nonexistent-package"
+    ]
+
+
 def test_CONTROL_a_missing_module_is_detected():
     """The checker reports what is absent, so the test above can fail."""
     assert missing(["cliffracer_definitely_not_installed"]) == [
@@ -69,21 +117,91 @@ def test_CONTROL_a_missing_module_is_detected():
     ]
 
 
-def test_CONTROL_the_command_in_the_message_is_the_one_ci_runs():
-    """A fix-it message that names a command nobody else runs goes stale.
+def dev_syncs(text: str) -> list[str]:
+    """Each line that installs the development environment: `uv sync` with `--extra dev`."""
+    return re.findall(r"^[^\n]*\buv sync\b[^\n]*--extra dev[^\n]*$", text, re.M)
 
-    ci.yml's install step is what the repo actually runs, so the message and
-    the command are pinned to each other rather than to a copy of the string.
+
+def not_the_workspace_command(lines: list[str]) -> list[str]:
+    return [line.strip() for line in lines if SYNC not in line]
+
+
+def _workflow_run_lines(path) -> list[str]:
+    """The lines of every `run:` step of a workflow; a comment or a name is not one."""
+    import yaml
+
+    workflow = yaml.safe_load(path.read_text())
+    return [
+        line
+        for job in (workflow.get("jobs") or {}).values()
+        for step in job.get("steps", [])
+        for line in str(step.get("run", "")).splitlines()
+    ]
+
+
+@pytest.mark.gitea_checkout
+def test_every_documented_dev_install_is_the_workspace_command():
+    """Not a list of the documents that teach it: every tracked document that does.
+
+    `uv sync --extra dev` installs core alone, which is the mistake this module's message exists
+    to correct, so a document that says it is wrong wherever it is.
     """
-    ci = (ROOT / ".gitea" / "workflows" / "ci.yml").read_text()
-    assert SYNC in ci, f"{SYNC!r} is not in ci.yml; one of the two moved"
+    from tests.repo.test_docs_code_blocks_resolve import docs
+
+    teaching = {}
+    for doc in docs():
+        lines = dev_syncs(doc.read_text())
+        if lines:
+            teaching[str(doc.relative_to(ROOT))] = lines
+
+    assert {"README.md", "CONTRIBUTING.md", "CLAUDE.md", "examples/ecommerce/README.md"} <= set(
+        teaching
+    ), sorted(teaching)
+    wrong = {rel: not_the_workspace_command(lines) for rel, lines in teaching.items()}
+    assert not any(wrong.values()), {rel: bad for rel, bad in wrong.items() if bad}
 
 
-# Documents that teach the development sync command.
-TEACHING_DOCS = ("README.md", "examples/ecommerce/README.md")
+@pytest.mark.gitea_checkout
+def test_every_workflow_that_installs_the_dev_environment_runs_the_workspace_command():
+    """Both CI definitions and the scheduled one, read from their steps rather than their text.
+
+    A substring over the whole file is satisfied by a comment, or by a job other than the one
+    installing for the test run.
+    """
+    workflows = sorted((ROOT / ".gitea" / "workflows").glob("*.yml")) + sorted(
+        (ROOT / ".github" / "workflows").glob("*.yml")
+    )
+    installs = {
+        str(path.relative_to(ROOT)): dev_syncs("\n".join(_workflow_run_lines(path)))
+        for path in workflows
+    }
+    installs = {rel: lines for rel, lines in installs.items() if lines}
+
+    assert {".gitea/workflows/ci.yml", ".github/workflows/ci.yml"} <= set(installs), sorted(
+        installs
+    )
+    wrong = {rel: not_the_workspace_command(lines) for rel, lines in installs.items()}
+    assert not any(wrong.values()), {rel: bad for rel, bad in wrong.items() if bad}
 
 
-def test_CONTROL_the_documents_that_teach_it_still_say_it():
-    """Verify teaching documentation includes the workspace sync command."""
-    wrong = [rel for rel in TEACHING_DOCS if SYNC not in (ROOT / rel).read_text()]
-    assert not wrong, f"these no longer document {SYNC!r}: {wrong}"
+def test_CONTROL_a_dev_install_that_is_not_the_workspace_command_is_reported(tmp_path):
+    assert not_the_workspace_command(dev_syncs("run: uv sync --extra dev\n")) == [
+        "run: uv sync --extra dev"
+    ]
+    assert not_the_workspace_command(dev_syncs(f"run: {SYNC}\n")) == []
+    # A release install is not the development one.
+    assert dev_syncs("run: uv sync --locked --group release\n") == []
+
+
+def test_CONTROL_a_comment_does_not_stand_in_for_the_install_step(tmp_path):
+    """The workspace command in a comment, and the wrong one in the step that runs."""
+    workflow = tmp_path / "ci.yml"
+    workflow.write_text(
+        f"# install with: {SYNC}\n"
+        "jobs:\n  test:\n    steps:\n      - name: install\n"
+        "        run: uv sync --extra dev\n"
+    )
+
+    assert not_the_workspace_command(dev_syncs("\n".join(_workflow_run_lines(workflow)))) == [
+        "uv sync --extra dev"
+    ]

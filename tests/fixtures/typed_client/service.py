@@ -9,7 +9,7 @@ from cliffracer_auth import AuthConfig, AuthExtension, SimpleAuthService
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
 
-from .models import Line, Order, Receipt
+from .models import Line, Order, Receipt, Shipment
 
 # At least 32 characters: SimpleAuthService refuses anything shorter, and a
 # fixture that cannot construct its own auth service is a fixture that hides
@@ -48,6 +48,17 @@ class Warehouse(CliffracerService):
     async def fail(self, reason: str) -> str:
         """Raise, so the client's error path has something real to carry."""
         raise RuntimeError(reason)
+
+    @rpc
+    async def route(self, leg: Shipment.Leg) -> Shipment.Leg:
+        """Echo a leg back.
+
+        The nested type is the whole point: its qualname is `Shipment.Leg`, so
+        the generated client has to import `Shipment` and spell the attribute.
+        Both the parameter and the return position go through `annotation_text`
+        separately.
+        """
+        return leg
 
 
 def make(name: str = "warehouse_e2e") -> Warehouse:

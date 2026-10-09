@@ -7,19 +7,23 @@ callbacks.
 
 import asyncio
 import json
-import time
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
+from cliffracer.testing import refuse_a_reply_with_no_subject
 
 pytestmark = pytest.mark.unit
 
 
 class _MockMsg:
     """Mock NATS message simulating RPC request-reply envelope."""
+
+    #: Every dispatcher path reads this; a double without one let a
+    #: reply be recorded that production would have refused.
+    reply: str | None = "_INBOX.test"
 
     def __init__(self, subject: str, data: dict):
         self.subject = subject
@@ -28,6 +32,7 @@ class _MockMsg:
         self.response: dict[str, Any] | None = None
 
     async def respond(self, payload: bytes) -> None:
+        refuse_a_reply_with_no_subject(self)
         self.response = json.loads(payload.decode())
 
 
@@ -71,10 +76,34 @@ async def svc():
 
 
 def test_active_tasks_property_delegation(svc):
-    """svc.container._active_tasks holds active tasks; delegation removed from service."""
-    assert isinstance(svc.container._active_tasks, set)
+    """A fresh service's container has an empty `_active_tasks`, and the service itself carries no
+    such attribute: the delegation to the service was removed. That the set tracks tasks is read
+    by the next test, which spawns one."""
+    assert isinstance(svc.container._active_tasks, frozenset)
     assert len(svc.container._active_tasks) == 0
     assert not hasattr(svc, "_active_tasks")
+
+
+async def test_a_supervised_task_is_tracked_while_it_runs_and_dropped_when_it_ends(svc):
+    """The half the test above does not exercise: `_active_tasks` holds a spawned task for as long
+    as it runs and releases it when it finishes."""
+    release = asyncio.Event()
+
+    async def work() -> str:
+        await release.wait()
+        return "done"
+
+    task = svc.container.lifecycle.spawn_supervised_task(work(), name="tracked")
+
+    assert task in svc.container._active_tasks
+    assert len(svc.container._active_tasks) == 1
+
+    release.set()
+    assert await task == "done"
+    await asyncio.sleep(0)  # the done-callback that releases it runs on the next iteration
+
+    assert task not in svc.container._active_tasks
+    assert len(svc.container._active_tasks) == 0
 
 
 @pytest.mark.asyncio
@@ -135,8 +164,8 @@ async def test_rpc_dispatch_concurrency_via_barrier(svc):
 
 
 @pytest.mark.asyncio
-async def test_rpc_dispatch_concurrency_timing(svc):
-    """5 concurrent calls with 0.05s sleep take ~0.05s (< 0.15s), not ~0.25s."""
+async def test_slow_calls_occupy_the_handler_together(svc):
+    """Five calls into a sleeping handler are inside it at once, not one after another."""
     call_count = 5
     sleep_delay = 0.05
     msgs = [
@@ -144,19 +173,14 @@ async def test_rpc_dispatch_concurrency_timing(svc):
         for i in range(call_count)
     ]
 
-    start_time = time.monotonic()
-
     for msg in msgs:
         await svc.container._on_rpc_request(msg)
 
     # Await all tasks dispatched to container._active_tasks
     await asyncio.gather(*list(svc.container._active_tasks))
 
-    elapsed = time.monotonic() - start_time
-
-    # Serial execution would take at least call_count * sleep_delay (0.25s)
-    # Concurrent execution should take ~0.05s; give generous headroom < 0.20s
-    assert elapsed < 0.20, f"Expected concurrent dispatch (< 0.20s), took {elapsed:.3f}s"
+    # The handler counts how many callers are inside it together, so serial
+    # dispatch reads as a peak of one however fast the host runs them.
     assert svc.peak_concurrency == call_count
 
     for i, msg in enumerate(msgs):

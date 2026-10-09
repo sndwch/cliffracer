@@ -1,6 +1,8 @@
 """cliffracer-metrics: dispatch timing, batching and connection pooling.
 
 `MetricsExtension` is registered on a service and runs on every dispatch.
+`PoolExtension` is registered on a service too, and keeps a pool of NATS connections
+beside the service's own.
 
 `BatchProcessor`, `OptimizedNATSConnection`, and `PerformanceMetrics` are
 library classes exported for direct application use.

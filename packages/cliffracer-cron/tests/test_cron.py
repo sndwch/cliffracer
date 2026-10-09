@@ -1,11 +1,14 @@
 """Unit tests for the @cron decorator and CronTimer."""
 
 import asyncio
-from datetime import datetime
+import importlib
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 from cliffracer_cron import CronTimer, cron
+
+from cliffracer.testing import FakeClock
 
 pytestmark = pytest.mark.unit
 
@@ -74,6 +77,22 @@ class TestCronSchedule:
         # next should be ~24h away, never 0
         assert timer._seconds_until_next(on_boundary) == pytest.approx(86400.0, abs=1.0)
 
+    def test_a_schedule_that_does_not_advance_is_refused(self, monkeypatch):
+        """A broken schedule cannot turn an inventory job into a tight loop."""
+        now = datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
+        candidates = iter((now, now, now + timedelta(days=1)))
+
+        class StuckSchedule:
+            def get_next(self, result_type):
+                return next(candidates)
+
+        timer = CronTimer("0 9 * * *", tz="UTC")
+        cron_module = importlib.import_module("cliffracer_cron.cron")
+        monkeypatch.setattr(cron_module, "croniter", lambda expression, start: StuckSchedule())
+
+        with pytest.raises(RuntimeError, match="did not advance"):
+            timer._seconds_until_next(now)
+
 
 class TestCronExecution:
     @pytest.mark.asyncio
@@ -96,8 +115,9 @@ class TestCronExecution:
         assert svc.calls == 1
 
     @pytest.mark.asyncio
-    async def test_not_eager_does_not_fire_immediately(self):
-        """Without eager, a far-future schedule does not fire during the test window."""
+    async def test_not_eager_fires_first_at_its_schedule(self):
+        """Without eager, a yearly schedule has not fired 1 µs before its first occurrence on its
+        clock, and has fired once at it."""
 
         class FakeService:
             def __init__(self):
@@ -107,12 +127,20 @@ class TestCronExecution:
                 self.calls += 1
 
         svc = FakeService()
-        timer = CronTimer("0 0 1 1 *", tz="UTC", eager=False)
+        start = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+        until = (datetime(2027, 1, 1, tzinfo=UTC) - start).total_seconds()
+        clock = FakeClock(start=start)
+        timer = CronTimer("0 0 1 1 *", tz="UTC", eager=False, clock=clock)
         timer.method_name = "job"
         await timer.start(svc)
-        await asyncio.sleep(0.05)
-        await timer.stop()
-        assert svc.calls == 0
+        clock.watch(timer.task)
+        try:
+            await clock.advance(until - 1e-6)
+            assert svc.calls == 0
+            await clock.advance(1e-6)
+            assert svc.calls == 1
+        finally:
+            await timer.stop()
 
     def test_get_stats_reports_expression(self):
         timer = CronTimer("*/5 * * * *", tz="UTC")
@@ -120,6 +148,8 @@ class TestCronExecution:
         stats = timer.get_stats()
         assert stats["expression"] == "*/5 * * * *"
         assert stats["tz"] == "UTC"
+        # A cron timer has no interval; the base timer's placeholder is not published as one.
+        assert "interval" not in stats
 
 
 class TestCronDiscovery:
@@ -166,6 +196,10 @@ class TestCronDiscovery:
         assert c.error_backoff == 10.0
         assert c.headers == {"authorization": "Bearer abc"}
         assert c.token_factory is token_fn
+        # Independent: the copy's headers are its own dict, so a write to one is not the other's.
+        assert c.headers is not t.headers
+        c.headers["x-added"] = "1"
+        assert t.headers == {"authorization": "Bearer abc"}
         assert c.method_name == "test_cron_method"
         assert c.is_running is False
         assert c.task is None

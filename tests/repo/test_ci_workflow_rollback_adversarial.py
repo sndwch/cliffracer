@@ -1,24 +1,89 @@
-"""Adversarial tests for Gitea / GitHub Actions CI workflow rollback syntax and logic.
+"""Adversarial tests for the release job's tag-rollback wiring, on every platform.
 
-Empirically validates:
-1. Structural integrity of .gitea/workflows/ci.yml release job.
-2. Exact expression syntax of the release rollback step.
-3. Evaluation of Actions expression semantics across all failure and success scenarios.
-4. Correct ordering and error resilience (|| true) of the tag deletion command.
+The same invariants are asserted against every workflow file in the repository,
+Gitea's and GitHub's alike, because both are real: CI runs here and on the
+upstream this tree is merged into. A guard that opened one file would be green
+about the other.
+
+Validates, per workflow:
+1. Structural integrity of the release job, keyed on what each step runs rather
+   than on the prose in its name.
+2. Every ``steps.<id>`` the release job reads resolves to a step id the job
+   declares, so renaming an id cannot silently blank out the references to it.
+3. The step that decides a release writes both of the outputs the rest of the
+   job reads back.
+4. The rollback condition -- read out of the workflow, not retyped here --
+   evaluates true on exactly the scenarios that warrant deleting the tag.
+
+``evaluate_actions_if_expression`` below is a local model of Actions semantics,
+not the runner, and nothing here proves the two agree. Its value is that it is
+driven by the condition each workflow actually carries, so a semantic change to
+one reaches these assertions instead of only a string comparison.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
+
+from tests.repo.ci_workflows import (
+    PLATFORM_DIRS,
+    ci_workflow_ids,
+    ci_workflow_paths,
+    load,
+    rel,
+)
 
 pytestmark = pytest.mark.repo
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CI_WORKFLOW = REPO_ROOT / ".gitea" / "workflows" / "ci.yml"
+# Matches a `steps.<id>.` context lookup in an `if:`, `run:` or `env:` value.
+STEP_REFERENCE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.")
+
+# CI pipelines only: the rollback structure below is a property of the
+# release pipeline, and a scheduled workflow has no part in it.
+WORKFLOWS = ci_workflow_paths()
+WORKFLOW_IDS = ci_workflow_ids()
+
+
+def release_job(path: Path) -> dict[str, Any]:
+    """Return the parsed `release` job of a workflow."""
+    jobs = load(path).get("jobs", {})
+    assert "release" in jobs, f"release job missing from {rel(path)}"
+    return jobs["release"]
+
+
+def step_running(steps: list[dict[str, Any]], fragment: str) -> int:
+    """Return the index of the one step whose run script contains `fragment`.
+
+    Steps are located by what they execute so that renaming a step for clarity
+    does not redden the ordering assertions, and renaming one to disguise a
+    behaviour change does not hide it.
+    """
+    matches = [i for i, s in enumerate(steps) if fragment in str(s.get("run", ""))]
+    assert len(matches) == 1, (
+        f"expected exactly one release step running {fragment!r}, found {len(matches)}: "
+        f"{[steps[i].get('name', '<unnamed>') for i in matches]}"
+    )
+    return matches[0]
+
+
+def referenced_step_ids(job: dict[str, Any]) -> set[str]:
+    """Return every step id the job reads through a `steps.<id>.` lookup."""
+    found: set[str] = set()
+    for step in job.get("steps", []):
+        scalars = [str(step.get("if", "")), str(step.get("run", ""))]
+        scalars += [str(v) for v in (step.get("env") or {}).values()]
+        for text in scalars:
+            found.update(STEP_REFERENCE.findall(text))
+    return found
+
+
+def declared_step_ids(job: dict[str, Any]) -> set[str]:
+    """Return every step id the job declares."""
+    return {s["id"] for s in job.get("steps", []) if s.get("id")}
 
 
 def evaluate_actions_if_expression(
@@ -93,50 +158,80 @@ def evaluate_actions_if_expression(
     return all(results)
 
 
-def test_ci_workflow_yaml_syntax_and_rollback_step_structure() -> None:
-    """Verify that ci.yml parses cleanly and rollback step has exact configuration."""
-    assert CI_WORKFLOW.exists(), f"{CI_WORKFLOW} does not exist"
-    data = yaml.safe_load(CI_WORKFLOW.read_text())
+@pytest.mark.parametrize(("platform", "path"), WORKFLOWS, ids=WORKFLOW_IDS)
+def test_ci_workflow_yaml_syntax_and_rollback_step_structure(platform: str, path: Path) -> None:
+    """Verify the workflow parses and its release steps run in the right order."""
+    job = release_job(path)
+    steps = job.get("steps", [])
 
-    jobs = data.get("jobs", {})
-    assert "release" in jobs, "release job missing from ci.yml"
-    release_job = jobs["release"]
+    push_idx = step_running(steps, 'git push origin "$TAG"')
+    build_idx = step_running(steps, "uv build --all-packages")
+    pub_idx = step_running(steps, "uv publish dist/*")
+    rollback_idx = step_running(steps, 'git push --delete origin "$TAG"')
+    relnote_idx = step_running(steps, "scripts/release_note.py")
 
-    steps = release_job.get("steps", [])
-    step_names = [s.get("name", "") for s in steps]
-
-    assert "Push the tag FIRST, before anything is built or published" in step_names
-    assert "Build" in step_names
-    assert "Publish to the private Gitea PyPI registry" in step_names
-    assert "Delete the tag if publishing failed" in step_names
-    assert "Write the changelog into a Gitea release note" in step_names
-
-    # Check order: Push tag -> Build -> Publish -> Rollback -> Relnote
-    push_idx = step_names.index("Push the tag FIRST, before anything is built or published")
-    build_idx = step_names.index("Build")
-    pub_idx = step_names.index("Publish to the private Gitea PyPI registry")
-    rollback_idx = step_names.index("Delete the tag if publishing failed")
-    relnote_idx = step_names.index("Write the changelog into a Gitea release note")
-
-    assert push_idx < build_idx < pub_idx < rollback_idx < relnote_idx
+    assert push_idx < build_idx < pub_idx < rollback_idx < relnote_idx, (
+        f"in {rel(path)} the tag must be pushed before anything is built or "
+        "published, and the rollback must come after the publish it undoes"
+    )
 
     rollback_step = steps[rollback_idx]
-    # Verify exact if condition
     assert rollback_step["if"] == "failure() && steps.decide.outputs.released == 'true'"
 
-    # Verify rollback run script
-    run_script = rollback_step.get("run", "")
+    run_script = str(rollback_step.get("run", ""))
     assert 'git push --delete origin "$TAG" || true' in run_script
     assert 'TAG="${{ steps.decide.outputs.tag }}"' in run_script
 
 
-def test_actions_expression_evaluates_correctly_under_all_scenarios() -> None:
-    """Empirically verify evaluation across all build/publish outcomes."""
-    rollback_expr = "failure() && steps.decide.outputs.released == 'true'"
-    buggy_expr = "steps.publish.outcome == 'failure'"
+@pytest.mark.parametrize(("platform", "path"), WORKFLOWS, ids=WORKFLOW_IDS)
+def test_every_step_reference_resolves_to_a_declared_step_id(platform: str, path: Path) -> None:
+    """Every `steps.<id>` the release job reads is an id the job declares.
 
-    # Scenario 1: Publish fails after tag pushed
-    # Job status: failure. released: 'true'.
+    An unresolved reference evaluates to the empty string rather than erroring,
+    so a renamed id turns every step gated on it into a permanent no-op.
+    """
+    job = release_job(path)
+    referenced = referenced_step_ids(job)
+    declared = declared_step_ids(job)
+
+    assert referenced, f"the release job in {rel(path)} reads no step outputs at all"
+    unresolved = referenced - declared
+    assert not unresolved, (
+        f"{rel(path)}: release steps read {sorted(unresolved)} but the job declares "
+        f"only {sorted(declared)}; unresolved lookups silently evaluate to ''"
+    )
+
+
+@pytest.mark.parametrize(("platform", "path"), WORKFLOWS, ids=WORKFLOW_IDS)
+def test_the_decide_step_writes_the_outputs_the_job_reads_back(platform: str, path: Path) -> None:
+    """The `decide` step writes both outputs the rest of the release job gates on."""
+    job = release_job(path)
+    decide = [s for s in job.get("steps", []) if s.get("id") == "decide"]
+    assert len(decide) == 1, (
+        f"{rel(path)}: the release job declares no single step with id 'decide'"
+    )
+
+    script = str(decide[0].get("run", ""))
+    for output in ("released", "tag"):
+        assert f'echo "{output}=' in script, (
+            f"{rel(path)}: the decide step never writes {output!r}, yet other "
+            f"steps read steps.decide.outputs.{output}"
+        )
+    assert '>> "$GITHUB_OUTPUT"' in script, (
+        f"{rel(path)}: the decide step writes no value into $GITHUB_OUTPUT"
+    )
+
+
+@pytest.mark.parametrize(("platform", "path"), WORKFLOWS, ids=WORKFLOW_IDS)
+def test_the_rollback_condition_in_the_workflow_fires_only_when_it_should(
+    platform: str, path: Path
+) -> None:
+    """Evaluate each workflow's own rollback condition across release outcomes."""
+    job = release_job(path)
+    steps = job.get("steps", [])
+    rollback_expr = steps[step_running(steps, 'git push --delete origin "$TAG"')]["if"]
+
+    # Publish fails after the tag was pushed: the tag must come back off.
     assert (
         evaluate_actions_if_expression(
             rollback_expr,
@@ -147,19 +242,7 @@ def test_actions_expression_evaluates_correctly_under_all_scenarios() -> None:
         is True
     )
 
-    # Confirm old buggy expression would have evaluated to False (skipped)
-    assert (
-        evaluate_actions_if_expression(
-            buggy_expr,
-            job_status="failure",
-            step_outputs={"decide": {"released": "true"}},
-            step_outcomes={"publish": "failure"},
-        )
-        is False
-    )
-
-    # Scenario 2: Build fails after tag pushed (before publish runs)
-    # Job status: failure. released: 'true'. publish outcome: empty/skipped.
+    # Build fails after the tag was pushed, so publish never ran at all.
     assert (
         evaluate_actions_if_expression(
             rollback_expr,
@@ -170,19 +253,7 @@ def test_actions_expression_evaluates_correctly_under_all_scenarios() -> None:
         is True
     )
 
-    # Buggy expression would fail to roll back build failures
-    assert (
-        evaluate_actions_if_expression(
-            buggy_expr,
-            job_status="failure",
-            step_outputs={"decide": {"released": "true"}},
-            step_outcomes={"publish": ""},
-        )
-        is False
-    )
-
-    # Scenario 3: Happy path (everything succeeds)
-    # Job status: success. released: 'true'.
+    # Happy path: the tag stays.
     assert (
         evaluate_actions_if_expression(
             rollback_expr,
@@ -193,8 +264,7 @@ def test_actions_expression_evaluates_correctly_under_all_scenarios() -> None:
         is False
     )
 
-    # Scenario 4: No release warranted
-    # Job status: success. released: 'false'.
+    # No release warranted, so there is no tag to remove.
     assert (
         evaluate_actions_if_expression(
             rollback_expr,
@@ -205,8 +275,7 @@ def test_actions_expression_evaluates_correctly_under_all_scenarios() -> None:
         is False
     )
 
-    # Scenario 5: Early failure before tag pushed (e.g. decide failed)
-    # Job status: failure. released: not set or 'false'.
+    # Failure before the tag was pushed: nothing to roll back.
     assert (
         evaluate_actions_if_expression(
             rollback_expr,
@@ -216,3 +285,52 @@ def test_actions_expression_evaluates_correctly_under_all_scenarios() -> None:
         )
         is False
     )
+
+
+def test_CONTROL_the_scenario_table_rejects_a_condition_that_misses_build_failures() -> None:
+    """The scenarios above discriminate: a plausible wrong condition fails them.
+
+    Without this, a rollback condition that never fires would satisfy every
+    `is False` assertion above and only the two `is True` cases would carry the
+    test.
+    """
+    buggy_expr = "steps.publish.outcome == 'failure'"
+
+    # It does fire when publish itself failed ...
+    assert (
+        evaluate_actions_if_expression(
+            buggy_expr,
+            job_status="failure",
+            step_outputs={"decide": {"released": "true"}},
+            step_outcomes={"publish": "failure"},
+        )
+        is False
+    )
+
+    # ... and it misses a build failure, where the tag is already pushed.
+    assert (
+        evaluate_actions_if_expression(
+            buggy_expr,
+            job_status="failure",
+            step_outputs={"decide": {"released": "true"}},
+            step_outcomes={"publish": ""},
+        )
+        is False
+    )
+
+
+@pytest.mark.gitea_checkout
+def test_every_platform_directory_contributes_a_workflow() -> None:
+    """Each platform has at least one workflow, so none can drop out unnoticed.
+
+    Parametrizing over discovered files means an empty directory produces zero
+    cases, and zero cases is a green run that asserted nothing.
+    """
+    assert WORKFLOWS, "no CI pipeline was discovered at all"
+    for platform, directory in PLATFORM_DIRS.items():
+        found = [p for plat, p in WORKFLOWS if plat == platform]
+        assert found, (
+            f"{platform} contributes no CI pipeline from {directory}. A directory "
+            f"holding only non-CI workflows would produce zero cases here, which is "
+            f"a green run that asserted nothing."
+        )

@@ -24,7 +24,12 @@ from tests.benchmark.benchmarks import DEFAULT_NATS_URL, run_all_benchmarks  # n
 
 
 def aggregate_metrics_median(runs_metrics: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute element-wise median for every scalar float/int across multiple runs."""
+    """Compute element-wise median for every scalar float/int across multiple runs.
+
+    A value is kept only when every run has it. A median over the runs that
+    happened to produce a metric reports a component that crashed in some of
+    them as measured, and the regression checker then scores it as present.
+    """
     if not runs_metrics:
         return {}
     if len(runs_metrics) == 1:
@@ -37,7 +42,7 @@ def aggregate_metrics_median(runs_metrics: list[dict[str, Any]]) -> dict[str, An
     result: dict[str, Any] = {}
     for key in all_keys:
         sample_vals = [r[key] for r in runs_metrics if key in r]
-        if not sample_vals:
+        if len(sample_vals) < len(runs_metrics):
             continue
         first_val = sample_vals[0]
         if isinstance(first_val, dict):
@@ -59,6 +64,27 @@ def aggregate_metrics_median(runs_metrics: list[dict[str, Any]]) -> dict[str, An
             result[key] = first_val
 
     return result
+
+
+def aggregate_runs(runs_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """One result for several runs: the last run's record, the median metrics.
+
+    Every run's `failures` are carried, keyed by run, so a component that
+    crashed in any run fails the regression checker, not only one that crashed
+    in the last.
+    """
+    results = copy.deepcopy(runs_results[-1])
+    results["metrics"] = aggregate_metrics_median([r["metrics"] for r in runs_results])
+    results["runs_aggregated"] = len(runs_results)
+    failures = {
+        f"run {index}: {component}": message
+        for index, run in enumerate(runs_results, start=1)
+        for component, message in (run.get("failures") or {}).items()
+    }
+    results.pop("failures", None)
+    if failures:
+        results["failures"] = failures
+    return results
 
 
 def format_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -152,22 +178,6 @@ def print_summary(data: dict[str, Any]) -> None:
 
     # Extensions
     print("\n[4] Extension Overhead & Reliability:")
-    if "http_gateway" in metrics:
-        http = metrics["http_gateway"]
-        if "skipped" in http:
-            print(f"    - cliffracer-http: Skipped ({http['skipped']})")
-        else:
-            print(
-                f"    - cliffracer-http Gateway Overhead:  {http.get('overhead_ms', 0.0):.4f} ms/req"
-            )
-    if "faststream" in metrics:
-        fs = metrics["faststream"]
-        if "skipped" in fs:
-            print(f"    - cliffracer-faststream: Skipped ({fs['skipped']})")
-        else:
-            print(
-                f"    - cliffracer-faststream Hypervisor:  {fs.get('hypervisor_msgs_sec', 0.0):,.1f} msgs/sec ({fs.get('overhead_per_msg_ms', 0.0):.5f} ms/msg)"
-            )
     if "auth" in metrics:
         auth = metrics["auth"]
         if "skipped" in auth:
@@ -203,6 +213,22 @@ def print_summary(data: dict[str, Any]) -> None:
     print("=" * 78 + "\n")
 
 
+def kv_guarantee(kv: dict[str, Any]) -> str:
+    """What the kv run measured about failure and recovery, as the page's last cell.
+
+    Both flags are read as the benchmark recorded them. A flag that is absent or
+    not exactly true is a guarantee the run did not show.
+    """
+    handled = kv.get("stress_failure_handled") is True
+    recovered = kv.get("recovery_verified") is True
+    if handled and recovered:
+        return "Graceful failure & recovery: Verified"
+    return (
+        f"Graceful failure: {'Handled' if handled else 'Not handled'}; "
+        f"recovery: {'Verified' if recovered else 'Not verified'}"
+    )
+
+
 def generate_benchmarks_markdown(
     current_run: dict[str, Any], history_file: Path | None = None
 ) -> str:
@@ -213,6 +239,16 @@ def generate_benchmarks_markdown(
         "This document tracks performance across Cliffracer releases and the active commit baseline.",
         "CI automatically measures latency, throughput, serialization, and extension overheads,",
         "failing the build if any key performance metric regresses beyond tolerance (> 15% on median of runs).",
+        "",
+        "The RPC figures are the cost of a call through `CliffracerService`: the dispatcher,",
+        "handler resolution and the reply path, not a bare NATS request and reply. The",
+        "serialization figures go through the `cliffracer.core.validation` pack and unpack",
+        "wrappers rather than calling a codec directly. Both therefore measure what a service",
+        "actually pays, and neither is comparable to a raw transport number.",
+        "",
+        "One benchmark job runs at a time on a host. Two measuring together move these",
+        "figures by more than the 15% the gate allows, so a number recorded beside another",
+        "benchmark run is not a baseline.",
         "",
         f"> **Last Generated**: `{current_run.get('timestamp')}`  ",
         f"> **Baseline Commit**: `{current_run.get('git_commit', 'unknown')[:10]}`  ",
@@ -237,7 +273,7 @@ def generate_benchmarks_markdown(
             f"| **Runner Hardware** | Total System RAM | {runner.get('total_ram_gb', 0.0)} GB |",
             f"| **Runner Hardware** | Operating System / Kernel | {runner.get('os', 'Linux')} |",
             f"| **Runner Hardware** | Python Runtime | Python {runner.get('python_version', '3.13')} |",
-            f"| **Network Topology** | Target Broker Endpoint | `{network.get('nats_url', 'nats://localhost:4222')}` |",
+            f"| **Network Topology** | Target Broker Endpoint | `{network.get('nats_url', DEFAULT_NATS_URL)}` |",
             f"| **Network Topology** | Topology Classification | {network.get('topology', 'Localhost / Loopback')} |",
             f"| **NATS Broker** | Server Version | NATS v{nats.get('version', '2.10.29')} |",
             f"| **NATS Broker** | JetStream Engine | {'Enabled (Active)' if nats.get('jetstream_enabled') else 'Disabled'} |",
@@ -299,16 +335,6 @@ def generate_benchmarks_markdown(
         lines.append(
             f"| Core JetStream Pull | Batch throughput | {js.get('throughput_msgs_sec', 0.0):,.1f} msgs/sec | p50 batch fetch: {js.get('p50_batch_latency_ms', 0.0):.3f} ms |"
         )
-    if "http_gateway" in metrics and "skipped" not in metrics["http_gateway"]:
-        http = metrics["http_gateway"]
-        lines.append(
-            f"| `cliffracer-http` AutoGateway | Route translation overhead | {http.get('overhead_ms', 0.0):.4f} ms | Raw RPC: {http.get('raw_rpc_latency_ms', 0.0):.4f} ms |"
-        )
-    if "faststream" in metrics and "skipped" not in metrics["faststream"]:
-        fs = metrics["faststream"]
-        lines.append(
-            f"| `cliffracer-faststream` | ACK Hypervisor overhead | {fs.get('overhead_per_msg_ms', 0.0):.5f} ms/msg | Hypervisor: {fs.get('hypervisor_msgs_sec', 0.0):,.1f} msgs/sec |"
-        )
     if "auth" in metrics and "skipped" not in metrics["auth"]:
         auth = metrics["auth"]
         lines.append(
@@ -317,7 +343,7 @@ def generate_benchmarks_markdown(
     if "kv" in metrics and "skipped" not in metrics["kv"]:
         kv = metrics["kv"]
         lines.append(
-            f"| `cliffracer-kv` | Bulk Get/Put throughput | Put: {kv.get('bulk_put_ops_sec', 0.0):,.1f} / Get: {kv.get('bulk_get_ops_sec', 0.0):,.1f} ops/sec | Graceful failure & recovery: Verified |"
+            f"| `cliffracer-kv` | Bulk Get/Put throughput | Put: {kv.get('bulk_put_ops_sec', 0.0):,.1f} / Get: {kv.get('bulk_get_ops_sec', 0.0):,.1f} ops/sec | {kv_guarantee(kv)} |"
         )
     lines.append("")
 
@@ -341,9 +367,9 @@ def generate_benchmarks_markdown(
                 js = h_metrics.get("jetstream", {})
                 ser_1mb = h_metrics.get("serialization", {}).get("1MB", {})
                 extensions_present: list[str] = []
-                for ext in ("http_gateway", "faststream", "auth", "kv"):
+                for ext in ("auth", "kv"):
                     if ext in h_metrics and "skipped" not in h_metrics[ext]:
-                        extensions_present.append(ext.replace("_gateway", ""))
+                        extensions_present.append(ext)
                 ext_str = ", ".join(extensions_present) if extensions_present else "Core only"
 
                 lines.append(
@@ -392,9 +418,7 @@ async def main() -> int:
             print(f"\n--- Benchmark Run {run_idx}/{args.runs} ---")
             run_res = await run_all_benchmarks(nats_url=args.nats_url)
             runs_results.append(run_res)
-        results = copy.deepcopy(runs_results[-1])
-        results["metrics"] = aggregate_metrics_median([r["metrics"] for r in runs_results])
-        results["runs_aggregated"] = args.runs
+        results = aggregate_runs(runs_results)
     else:
         results = await run_all_benchmarks(nats_url=args.nats_url)
         results["runs_aggregated"] = 1

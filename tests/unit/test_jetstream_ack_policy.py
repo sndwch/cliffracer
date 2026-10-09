@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from loguru import logger
 from nats.js.api import AckPolicy
 from pydantic import BaseModel
 
@@ -127,12 +128,64 @@ async def test_a_failing_dead_letter_still_terminates():
     svc.js.publish.side_effect = RuntimeError("stream full")
 
     msg = _msg(num_delivered=5)
-    await svc.container._handle_jetstream_event(msg)  # must not raise
+    errors: list[str] = []
+    sink = logger.add(lambda m: errors.append(m.record["message"]), level="ERROR")
+    try:
+        await svc.container._handle_jetstream_event(msg)  # must not raise
+    finally:
+        logger.remove(sink)
 
     assert msg.term.await_count == 1
+    # The record the docstring leans on: the payload survives in the log line, with the
+    # subject it came from and the reason the dead letter could not be written.
+    (line,) = [e for e in errors if "Failed to dead-letter" in e]
+    assert "'events.ping'" in line, line
+    assert "{'seq': 1}" in line, line
+    assert "stream full" in line, line
+    assert "Terminating anyway" in line, line
 
 
 @pytest.mark.asyncio
+async def test_CONTROL_a_dead_letter_that_is_published_logs_no_failure():
+    """The instrument: the same path, with the publish succeeding, writes no such line."""
+    svc = _Svc(_config(), fail=True)
+    _mocked(svc)
+
+    errors: list[str] = []
+    sink = logger.add(lambda m: errors.append(m.record["message"]), level="ERROR")
+    try:
+        await svc.container._handle_jetstream_event(_msg(num_delivered=5))
+    finally:
+        logger.remove(sink)
+
+    assert not [e for e in errors if "Failed to dead-letter" in e], errors
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_payload_is_terminated_exactly_once():
+    """One message, one terminal acknowledgement, whoever decides it.
+
+    A real `nats.aio.msg.Msg` refuses a second terminal ack, and `safe_term`
+    catches that refusal and logs it, so a message terminated twice looks the
+    same as a message terminated once unless the count is read. This reads the
+    count, and it goes through the JetStream entry point, because the second
+    termination lives in that layer's INVALID branch rather than in the event
+    dispatcher a direct `handle_event` would exercise.
+    """
+    svc = _Svc(_config())
+    _mocked(svc)
+
+    msg = _msg(data=b'{"seq": "not-a-number"}')
+    await svc.container._handle_jetstream_event(msg)
+
+    assert msg.term.await_count == 1, (
+        f"the message was terminated {msg.term.await_count} times; the second is "
+        "refused by a real client and swallowed by safe_term"
+    )
+    assert msg.nak.await_count == 0
+    assert msg.ack.await_count == 0
+
+
 async def test_invalid_payload_terminates_without_nak():
     """Redelivering something that does not parse can never succeed."""
     svc = _ValidatedSvc(_config())
@@ -203,3 +256,18 @@ async def test_durable_is_keyed_by_the_effective_subject():
     await svc.container._setup_subscriptions()
 
     assert svc.js.subscribe.call_args.args[0] == "*.events.ping"
+
+
+@pytest.mark.asyncio
+async def test_a_subject_with_no_handler_is_acked():
+    """NO_HANDLER is not INVALID: nothing is listening, and redelivery will not change that."""
+    svc = _Svc(_config())
+    _mocked(svc)
+
+    msg = _msg(subject="events.unlistened")
+    await svc.container._handle_jetstream_event(msg)
+
+    assert msg.ack.await_count == 1
+    assert msg.nak.await_count == 0
+    assert msg.term.await_count == 0
+    assert svc.seen == []

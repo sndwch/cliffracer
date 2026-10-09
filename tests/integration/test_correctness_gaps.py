@@ -5,6 +5,8 @@ import asyncio
 import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
+from cliffracer.core.discovery import HandlerDiscovery
+from cliffracer.testing.waiting import wait_until
 
 pytestmark = pytest.mark.integration
 
@@ -49,7 +51,8 @@ async def test_replicas_load_balance_via_queue_group():
 @pytest.mark.asyncio
 async def test_correlation_id_rides_in_nats_headers():
     """publish_event sets correlation_id in the NATS message headers, so a consumer
-    that doesn't parse the JSON body can still read it."""
+    that doesn't parse the JSON body can still read it: both header spellings carry the id the
+    event was published under."""
     svc = CliffracerService(ServiceConfig(name="pub"))
     await svc.start()
 
@@ -58,14 +61,15 @@ async def test_correlation_id_rides_in_nats_headers():
     async def _raw_cb(msg):
         received.append(msg.headers)
 
-    await svc.nc.subscribe("evt.headers", cb=_raw_cb)
-    await asyncio.sleep(0.1)
+    await svc.nc.subscribe(HandlerDiscovery.with_namespace(svc.config, "evt.headers"), cb=_raw_cb)
+    await svc.nc.flush()
 
     try:
-        await svc.publish_event("evt.headers", n=1)
-        await asyncio.sleep(0.2)
+        await svc.publish_event("evt.headers", n=1, correlation_id="trace-in-the-headers")
+        await wait_until(lambda: received, within=10.0, reason="the event to reach the subscriber")
         assert len(received) == 1
         assert received[0] is not None
-        assert "correlation_id" in received[0]
+        assert received[0]["correlation_id"] == "trace-in-the-headers", received[0]
+        assert received[0]["X-Correlation-ID"] == "trace-in-the-headers", received[0]
     finally:
         await svc.stop()

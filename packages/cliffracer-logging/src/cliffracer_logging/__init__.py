@@ -9,12 +9,13 @@ should not do to its host process without being asked.
 from .config import (
     ContextualLogger,
     LoggingConfig,
+    LogRecordRedactor,
     get_service_logger,
     log_event_handling,
     log_rpc_calls,
+    redact_sensitive_log_fields,
 )
 from .correlation_logging import (
-    CorrelationLoggerMixin,
     get_correlation_logger,
     setup_correlation_logging,
 )
@@ -24,10 +25,11 @@ __all__ = [
     "LoggingExtension",
     "LoggingConfig",
     "ContextualLogger",
+    "LogRecordRedactor",
     "get_service_logger",
     "log_rpc_calls",
     "log_event_handling",
+    "redact_sensitive_log_fields",
     "setup_correlation_logging",
     "get_correlation_logger",
-    "CorrelationLoggerMixin",
 ]

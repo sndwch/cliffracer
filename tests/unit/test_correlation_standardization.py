@@ -34,28 +34,32 @@ def test_extract_from_headers_case_insensitivity() -> None:
         assert CorrelationContext.extract_from_headers(headers) == "corr-123"
 
 
+PRECEDENCE = [
+    "x-correlation-id",
+    "x-request-id",
+    "x-trace-id",
+    "correlation-id",
+    "correlation_id",
+    "request-id",
+    "trace-id",
+]
+
+
 def test_extract_from_headers_candidate_priority() -> None:
-    """Precedence: x-correlation-id > x-request-id > x-trace-id > correlation-id > correlation_id."""
-    headers = {
-        "x-correlation-id": "cid-high",
-        "x-request-id": "rid-mid",
-        "x-trace-id": "tid-low",
-        "correlation-id": "hyphen-low",
-        "correlation_id": "underscore-lowest",
-    }
-    assert CorrelationContext.extract_from_headers(headers) == "cid-high"
+    """Precedence: x-correlation-id > x-request-id > x-trace-id > correlation-id > correlation_id
+    > request-id > trace-id.
 
-    del headers["x-correlation-id"]
-    assert CorrelationContext.extract_from_headers(headers) == "rid-mid"
+    The headers are inserted in REVERSE precedence order, so the lowest-priority name is the first
+    key of the dict. A function that returned the first recognised key of the caller's dict would
+    answer the lowest candidate each round; one that walks the ladder answers the highest.
+    """
+    headers = {name: f"value-of-{name}" for name in reversed(PRECEDENCE)}
+    assert next(iter(headers)) == PRECEDENCE[-1], "the dict must not be in precedence order"
 
-    del headers["x-request-id"]
-    assert CorrelationContext.extract_from_headers(headers) == "tid-low"
-
-    del headers["x-trace-id"]
-    assert CorrelationContext.extract_from_headers(headers) == "hyphen-low"
-
-    del headers["correlation-id"]
-    assert CorrelationContext.extract_from_headers(headers) == "underscore-lowest"
+    for winner in PRECEDENCE:
+        assert CorrelationContext.extract_from_headers(headers) == f"value-of-{winner}"
+        del headers[winner]
+    assert CorrelationContext.extract_from_headers(headers) is None
 
 
 def test_extract_from_headers_legacy_underscore() -> None:
@@ -172,6 +176,37 @@ def test_client_headers_for_send_injects_canonical_and_legacy() -> None:
     assert headers["X-Correlation-ID"] == headers["correlation_id"]
     assert len(headers["X-Correlation-ID"]) > 0
     assert headers["authorization"] == "bearer xyz"
+
+
+def test_client_headers_for_send_makes_a_new_id_for_each_request() -> None:
+    """With no id from the caller and none ambient, every request gets its own.
+
+    One call cannot show it: a constant, or an id cached on the client, is non-empty and equal in
+    both header names too. A long-lived client sharing one id would fold every trace into one.
+    """
+    CorrelationContext.clear()
+    client = ServiceClient(headers={"authorization": "bearer xyz"})
+
+    first, second = client._headers_for_send(), client._headers_for_send()
+
+    assert first["X-Correlation-ID"] != second["X-Correlation-ID"]
+    for headers in (first, second):
+        assert headers["X-Correlation-ID"] == headers["correlation_id"]
+    assert first["authorization"] == second["authorization"] == "bearer xyz"
+
+
+def test_client_headers_for_send_prefers_the_callers_id_then_the_ambient_one() -> None:
+    """The other half: the id is not unconditionally fresh. A caller's id wins over the ambient
+    one, which wins over a new one, and each is the same on every request."""
+    CorrelationContext.set("ambient-trace")
+    try:
+        assert ServiceClient()._headers_for_send()["X-Correlation-ID"] == "ambient-trace"
+        client = ServiceClient(headers={"X-Correlation-ID": "callers-trace"})
+        for _ in range(2):
+            headers = client._headers_for_send()
+            assert headers["X-Correlation-ID"] == headers["correlation_id"] == "callers-trace"
+    finally:
+        CorrelationContext.clear()
 
 
 def test_container_send_context_injects_canonical_and_legacy() -> None:

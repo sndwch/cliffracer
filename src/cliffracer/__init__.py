@@ -5,12 +5,12 @@ event pub/sub, scheduled timers, JetStream consumer configuration, and
 health endpoints. Extensions provide optional HTTP, auth, metrics, and tracing.
 """
 
-from importlib.metadata import PackageNotFoundError
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 try:
     __version__ = _pkg_version("cliffracer")
-except PackageNotFoundError:  # not installed (e.g. running from a raw source tree)
+except _PackageNotFoundError:  # not installed (e.g. running from a raw source tree)
     __version__ = "0.0.0+unknown"
 
 # Core exports - Consolidated Service Architecture
@@ -20,13 +20,17 @@ from cliffracer.client import (
     ClientError,
     ClientOutOfDate,
     ClientOutOfDateError,
+    RpcBusyError,
     RpcClientError,
+    RpcConnectionError,
+    RpcDeadlineExceededError,
     RpcError,
     RpcNoResponders,
     RpcNoRespondersError,
     RpcRefused,
     RpcRefusedError,
     RpcServerError,
+    RpcStreamGapError,
     RpcTimeout,
     RpcTimeoutError,
     RpcUnknownMethod,
@@ -60,15 +64,23 @@ from cliffracer.core.dependencies import Dependency, dependency
 from cliffracer.core.exceptions import (
     CliffracerError,
     ConfigurationError,
-    ConnectionError,
     ErrorHandler,
-    HandlerError,
     IdempotencyKeyError,
     RPCError,
     ServiceError,
     ServiceLifecycleError,
-    TimerError,
     ValidationError,
+)
+
+# The extension contract
+from cliffracer.core.extension import (
+    Extension,
+    ExtensionIsolationError,
+    ExtensionSetupContext,
+    RejectMessage,
+    RetryMessage,
+    SharedDependency,
+    WorkerContext,
 )
 
 # Idempotency support
@@ -77,7 +89,12 @@ from cliffracer.core.idempotency import (
 )
 
 # JetStream stream declaration
-from cliffracer.core.jetstream import StreamDeclarationError, StreamSpec
+from cliffracer.core.jetstream import (
+    ConsumerBindingError,
+    MessageScheduleError,
+    StreamDeclarationError,
+    StreamSpec,
+)
 
 # Message types
 from cliffracer.core.messages import (
@@ -86,6 +103,7 @@ from cliffracer.core.messages import (
     RPCRequest,
     RPCResponse,
 )
+from cliffracer.core.outputs import Output, OutputError
 from cliffracer.core.service import (
     CliffracerService,
 )
@@ -93,9 +111,6 @@ from cliffracer.core.service import (
 # Configuration
 from cliffracer.core.service_config import ServiceConfig
 from cliffracer.core.timer import Timer
-
-# Invariants
-from cliffracer.invariants import override_length_check
 
 # RPC proxy descriptor
 from cliffracer.rpc_proxy import RpcProxy
@@ -108,12 +123,18 @@ __all__ = [
     "__version__",
     # Core Service Classes - Consolidated Architecture
     "CliffracerService",
+    "Output",
+    "OutputError",
     # Generated clients: the base and the errors a call can raise
     "ServiceClient",
     "RpcError",
     "RpcClientError",
     "RpcServerError",
+    "RpcStreamGapError",
     "RpcTimeoutError",
+    "RpcDeadlineExceededError",
+    "RpcBusyError",
+    "RpcConnectionError",
     "RpcNoRespondersError",
     "RpcValidationError",
     "RpcUnknownMethodError",
@@ -147,15 +168,19 @@ __all__ = [
     "CliffracerError",
     "ServiceError",
     "ServiceLifecycleError",
-    "ConnectionError",
     "ConfigurationError",
-    "HandlerError",
     "IdempotencyKeyError",
     "ValidationError",
     "RPCError",
-    "TimerError",
     "ErrorHandler",
-    # Performance
+    # Extensions
+    "Extension",
+    "ExtensionIsolationError",
+    "ExtensionSetupContext",
+    "RejectMessage",
+    "RetryMessage",
+    "SharedDependency",
+    "WorkerContext",
     # RPC Proxy
     "RpcProxy",
     # Runners
@@ -172,6 +197,6 @@ __all__ = [
     # JetStream
     "StreamSpec",
     "StreamDeclarationError",
-    # Invariants
-    "override_length_check",
+    "MessageScheduleError",
+    "ConsumerBindingError",
 ]

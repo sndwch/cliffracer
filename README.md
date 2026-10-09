@@ -2,13 +2,13 @@
 
 Cliffracer is a strongly opinionated, async-native Python framework for building typed NATS services, inspired by Nameko, Lightbus, NestJS, Moleculer, and Zero (`Ananto30/zero`). 
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Lint: ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://docs.astral.sh/ruff/)
 
 ## Core
 
-Core gives you RPC, events, timers and a health endpoint. HTTP, WebSockets, authentication, metrics, logging, cron and a debug console are separate distributions you install when you want them.
+Core gives you RPC, events, timers and a health endpoint. Authentication, metrics, logging, cron and more are separate distributions you install when you want them.
 
 - **RPC.** `@rpc` on a method exposes it at `{service}.rpc.{method}`. Call it
   with `RpcProxy` or `call_rpc`.
@@ -19,8 +19,8 @@ Core gives you RPC, events, timers and a health endpoint. HTTP, WebSockets, auth
 - **Binary Serialization.** Configurable payload serialization supporting JSON and
   MsgPack formats via `ServiceConfig.serialization_format`, with automatic content
   negotiation over NATS headers.
-- **Health.** `GET /health` and `GET /info` on a stdlib listener, no web
-  framework needed.
+- **Health.** `GET /live`, `GET /ready`, `GET /health` and `GET /info` on a
+  stdlib listener, no web framework needed.
 - **Correlation IDs.** Propagated through NATS messages and readable in any
   handler with `CorrelationContext.get()`.
 - **Reconnection.** The client retries forever by default; a connection closed
@@ -34,16 +34,15 @@ Each is its own distribution. Declaring one on the class is what loads it.
 
 | distribution | attribute | gives you |
 |---|---|---|
-| `cliffracer-http` | `HttpExtension`, `AutoGatewayExtension` | FastAPI routes, WebSockets, dynamic RPC Auto-Gateway, and `/health` on the same port |
 | `cliffracer-auth` | `AuthExtension` | JWT issue and verify, roles, permissions |
-| `cliffracer-metrics` | `MetricsExtension` | call, error and refusal counts over the dispatch hooks |
+| `cliffracer-metrics` | `MetricsExtension`, `PoolExtension` | call, error and refusal counts over the dispatch hooks; a pool of broker connections beside the service's own |
 | `cliffracer-logging` | `LoggingExtension` | structured logging, optionally to a NATS subject |
 | `cliffracer-otel` | `OtelExtension` | OpenTelemetry distributed tracing and W3C context propagation |
 | `cliffracer-kv` | `KvExtension` | NATS JetStream Key-Value and Object Store integration with bucket TTL |
 | `cliffracer-resilience` | `ResilienceExtension` | circuit breaking, sliding-window rate limiting, and resilient RPC |
-| `cliffracer-backdoor` | `BackdoorExtension` | a live async Python console, off unless you enable it |
 | `cliffracer-cron` | *(none)* | `@cron` handlers, started by core's timer discovery |
-| `cliffracer-faststream` | `FastStreamExtension` | FastStream broker hosting, resilient ACK/DLQ routing, and shutdown drain |
+| `cliffracer-dlq` | *(none)* | `cliffracer-dlq`, a read-only command that lists, shows and counts dead letters |
+| `cliffracer-cyanide` | `CyanideExtension` | error injection and mundane failure modes for testing |
 
 
 ## Install
@@ -51,7 +50,7 @@ Each is its own distribution. Declaring one on the class is what loads it.
 Install Cliffracer and desired extensions from PyPI:
 
 ```bash
-pip install cliffracer cliffracer-http
+pip install cliffracer cliffracer-auth
 ```
 
 Releases are cut by pushing a version tag such as `v1.0.0`, which triggers the
@@ -95,54 +94,17 @@ if __name__ == "__main__":
     UserService().run()
 ```
 
-## HTTP and WebSockets
-
-Install `cliffracer-http` and declare the extension. Routes hang off the
-attribute, so the decorator says which extension serves them.
-
-```python
-from cliffracer import CliffracerService, ServiceConfig, listener
-from cliffracer_http import HttpExtension
-
-class NotificationService(CliffracerService):
-    http = HttpExtension(port=8080)
-
-    def __init__(self):
-        super().__init__(ServiceConfig(name="notification_service"))
-
-    @http.get("/users/{user_id}")
-    async def get_user(self, user_id: str) -> dict:
-        return {"user_id": user_id}
-
-    @http.websocket("/ws/notifications")
-    async def notifications(self, websocket):
-        await websocket.accept()
-        while True:
-            await websocket.receive_text()
-
-    @listener("user.activity", fanout=True)
-    async def broadcast_activity(self, subject: str, activity: str = ""):
-        await self.http.broadcast_to_websockets({"activity": activity})
-```
-
-The websocket handler is bound before the framework calls it, so it takes
-`self` and the socket. `broadcast_to_websockets` drops sockets that fail to
-send, so one dead client does not stop the fan-out.
-
-The extension serves `/health` and `/info` on its app as well, and the core
-listener does not bind. The service has one port — the extension's, 8080 in the
-example above — and that is where probes go. `ServiceConfig.health_port` applies
-to services that do not declare this extension.
-
 ## Health
 
 `GET /health` returns `health_check()`, and encodes the answer in the status
-code as well: 200 when `status` is `healthy`, 503 otherwise. That holds on both
-implementations — the core listener and the `HttpExtension` route
-(`extension.py:112`) evaluate the same expression — so `curl -f` works without
-parsing the body, whichever one is serving.
+code as well: 200 when `status` is `healthy`, 503 otherwise, so `curl -f` works
+without parsing the body. `GET /ready` is the same answer under the name a
+readiness probe expects. `GET /live` answers only whether the process is
+running (200, or 503 once stopped) and never consults the broker or a
+dependency; use it for a liveness probe, and see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#health) for why.
 
-`status` is the field to read on either path, and it has five values:
+`status` is the field to read, and it has five values:
 
 | `status` | means |
 |---|---|
@@ -156,6 +118,10 @@ parsing the body, whichever one is serving.
 are more specific diagnoses, and reporting either as `"unhealthy"` would lose
 the reason. Read that vocabulary rather than `"ok"`, which another framework's
 convention might lead you to expect.
+
+A stopped service runs no probe: its `/health` answers `"stopped"` at once, with no
+`dependencies` block and no `unhealthy_dependencies`, and its downstreams are not
+called. `"connecting"` and `"disconnected"` still run the probes and report them.
 
 ### Dependencies
 
@@ -207,6 +173,10 @@ class Api(CliffracerService):
 
 Each one reaches the dependency and comes back. That is what makes the answer
 worth anything.
+
+The keywords after `timeout` (`database`, `bucket` and `url` above) are published on
+`/health` exactly as given, and `/health` can be read without authentication: name a host
+or a database, never a password or a connection string that holds one.
 
 **The anti-pattern**, because it is the easy thing to write:
 
@@ -267,8 +237,7 @@ change nothing else. They are there so an operator reading a failure knows
 which postgres could not be reached.
 
 **Probes run only when something asks for `/health`.** There is no timer and no
-cache: `health_check()` is called from the core listener and from the
-`HttpExtension` route, and nowhere else, and it runs every declared probe once
+cache: `health_check()` is called from the core listener and nowhere else, and it runs every declared probe once
 per call, concurrently. So the cost is your poller's interval times the number
 of probes — a 30-second container healthcheck with three probes is three round
 trips every 30 seconds, per service. A thousand services declaring the same
@@ -280,67 +249,18 @@ another's.
 Two more things the framework does, both in `core/dependencies.py`:
 
 - **Probes run concurrently**, each bounded by its own `timeout`
-  (`asyncio.gather`, `dependencies.py:133`). Five 2-second checks cost about
-  two seconds, not ten.
+  (`asyncio.gather`). Five 2-second checks cost about two seconds, not ten.
+  The call returns when the timeout passes: a probe slow to honour its
+  cancellation is left to finish and does not extend `/health`. A probe that
+  blocks the event loop (a synchronous driver call inside `async def`) cannot
+  be interrupted, so `/health` waits for it, but it is reported as failed
+  (`exceeded its Ns timeout`), never ok.
 - **A probe that raises fails that dependency, not the endpoint.** The
   exception is caught and recorded against the name, so `/health` still answers
   when something is wrong. A timeout is recorded as `timed out after Ns`,
   distinct from a refusal, because a slow dependency and an absent one need
-  different fixes.
-
-## Auto-Gateway for HTTP Ingress
-
-`AutoGatewayExtension` in `cliffracer-http` mounts dynamic FastAPI HTTP routes mapped
-directly to downstream RPC methods discovered via introspection or service declarations.
-It infers HTTP verbs from method name prefixes, extracts path, query, and JSON body
-parameters, forwards calls via NATS RPC, translates errors to HTTP status codes, and
-exposes interactive OpenAPI documentation:
-
-```python
-from pydantic import BaseModel
-
-from cliffracer import CliffracerService, rpc
-from cliffracer_http import AutoGatewayExtension, HttpExtension
-
-
-class UserModel(BaseModel):
-    id: str
-    name: str
-    email: str
-
-
-class CreateUserPayload(BaseModel):
-    name: str
-    email: str
-
-
-class UserService(CliffracerService):
-    name = "users"
-    http = HttpExtension(port=8080)
-    gateway = AutoGatewayExtension(prefix="/api/v1")
-
-    @rpc
-    async def get_user(self, user_id: str) -> UserModel:
-        """Fetch user by id."""
-        return UserModel(id=user_id, name="Alice", email="alice@example.com")
-
-    @rpc
-    async def create_user(self, payload: CreateUserPayload) -> UserModel:
-        """Create new user."""
-        return UserModel(id="usr_1", name=payload.name, email=payload.email)
-
-    @rpc
-    async def delete_user(self, user_id: str) -> bool:
-        """Delete user by id."""
-        return True
-```
-
-HTTP verbs are automatically inferred from method prefixes:
-- `get_user` -> `GET /api/v1/users/get_user?user_id=...` (`get_`, `list_`, `fetch_`, `find_` -> `GET`)
-- `create_user` -> `POST /api/v1/users/create_user` (`create_`, `add_`, `post_`, `insert_` -> `POST`, request body JSON)
-- `delete_user` -> `DELETE /api/v1/users/delete_user?user_id=...` (`delete_`, `remove_`, `drop_` -> `DELETE`)
-
-Interactive Swagger UI documentation is available at `http://localhost:8080/docs`.
+  different fixes; a `TimeoutError` the probe itself raises (a driver's own
+  timeout) is the probe's failure, not this one.
 
 ## Distributed Tracing with OpenTelemetry
 
@@ -359,8 +279,10 @@ class OrderService(CliffracerService):
 ```
 
 The extension extracts `traceparent` headers from incoming NATS messages in `worker_setup`,
-creates server spans linked to `cliffracer.subject` and `cliffracer.correlation_id`, injects
-W3C headers into outbound calls in `before_call`, and records exceptions on failures.
+creates a span per dispatch (`SERVER` for an RPC or async RPC, `CONSUMER` for an event,
+`INTERNAL` for a timer, none for `describe`) linked to `cliffracer.subject` and
+`cliffracer.correlation_id`, injects W3C headers into outbound calls in `before_call`, and
+records exceptions on failures.
 
 ## Key-Value and Object Store
 
@@ -458,7 +380,8 @@ class FastService(CliffracerService):
 ```
 
 Services send and inspect the `content-type` header (`application/msgpack` vs
-`application/json`), automatically decoding binary payloads and encoding replies.
+`application/json`), automatically decoding binary payloads and encoding replies. Both formats
+carry the same values: integer map keys arrive as strings and `bytes` as `str` either way.
 
 ## Idempotent Publishing
 
@@ -477,11 +400,15 @@ class OrderService(CliffracerService):
         await self.publish_event("order.processed", order_id=order_id, amount=amount)
 ```
 
-`@idempotent` extracts the specified key from method arguments, or hashes the payload with SHA-256 when using `hash_payload=True` or bare `@idempotent`.
+`@idempotent` extracts the specified key from method arguments, or hashes the payload with SHA-256 when using `hash_payload=True` or bare `@idempotent`. A key that does not resolve, or resolves to `None`, raises `IdempotencyKeyError` rather than falling back to the payload hash.
 
 > **Note**: `@idempotent` relies entirely on JetStream's native message deduplication window via the `Nats-Msg-Id` header. It operates without requiring `cliffracer-kv` or an external cache.
 
 ## Typed clients
+
+[Broker permissions](docs/broker-permissions.md) derive service and client NATS
+grants from the declared contracts, with dedicated inbox prefixes and bounded
+reply permissions.
 
 A service that annotates its handlers can hand out a client. The annotations
 are the contract, the service publishes them on `{service}.describe`, and
@@ -519,15 +446,46 @@ cliffracer-generate-client --service warehouse --nats-url nats://localhost:4222 
     --out warehouse_client.py
 ```
 
-Both produce the same bytes, which
-`tests/integration/test_typed_client_end_to_end.py` asserts. A service behind
-`AuthExtension` refuses an unauthenticated describe like any other message, so
-give the live form credentials:
+Both produce the same bytes when `--version` is the version the service's
+`ServiceConfig` declares, which
+`tests/integration/test_typed_client_end_to_end.py` asserts. A class cannot see
+the config it is started with, so the class form records `--version`, or the
+`ServiceConfig` default without it; the live form records what the running
+service reports and refuses `--version`. A service in a namespace needs
+`--namespace` on either form, and the client it writes calls in that namespace
+by default. A service behind `AuthExtension` refuses an unauthenticated describe
+like any other message, so give the live form credentials:
 
 ```text
 cliffracer-generate-client --service warehouse \
     --header authorization="bearer $TOKEN" --out warehouse_client.py
 ```
+
+
+For a build or CI check, compare the checked-in client without rewriting it:
+
+```text
+cliffracer-generate-client --class myapp.warehouse:Warehouse \
+    --service warehouse --version 1.0.0 --out warehouse_client.py \
+    --check --require-source-under ./src
+```
+
+`--check` requires `--out` and works with both class and live-service generation.
+It compares the complete UTF-8 output byte for byte, including metadata,
+docstrings, formatting and line endings. A match exits zero quietly. A missing
+or stale client exits eight and names missing, extra and changed RPCs when the
+existing file's signature table and method definitions can be read. Other
+content differences and malformed metadata are reported explicitly. The existing
+client is read as data, never imported or rewritten; missing output directories
+are left absent. Regenerate with the same arguments without `--check`.
+
+`--require-source-under PATH` works with `--class`, for both generation and
+checking. The directory must exist. The defining class's source file must resolve
+inside it, including through re-exports and symlinks. A wrong checkout or a class
+without verifiable source exits nine and leaves the output untouched. This checks
+the class definition's location; imported shared models may live elsewhere, and
+service imports still execute normally. It verifies the interpreter's selection
+without changing `PYTHONPATH` or the editable install.
 
 The generated file imports the models rather than copying them, so a change to
 `Line` reaches the client the way it reaches everything else. Calling it from
@@ -557,20 +515,36 @@ can still make every call it knows how to make.
 
 Everything else that can go wrong has its own exception, so a caller can tell
 them apart without reading message text: `RpcValidationError` carries
-pydantic's own `details`, `RpcRefused` carries the reason an extension gave,
-`RpcUnknownMethod` means the service is running and has no such method,
+validation `details` (Pydantic's own by default) -- and is the one class raised for a bad argument
+whichever end refused it, because the remedy is the same; the message says
+which, and that distinction alone is in the text -- `RpcRefused` carries the
+reason an extension gave, `RpcUnknownMethod` means the service is running and
+has no such method,
 `RpcNoResponders` means nothing is subscribed at all, and `RpcTimeout` means
 nobody answered in time.
+
+Services accepting sensitive RPC input can set
+`ServiceConfig(rpc_validation_errors="redacted")`. Request validation and decode
+failures then use fixed diagnostics in broker replies, async logs, and validation
+exception chains. The default `"full"` includes rejected values, field locations,
+and validator messages; Pydantic's `hide_input_in_errors=True` alone does not hide
+these structured details. See the [RPC validation policy](docs/api-reference.md#rpc-validation-diagnostics)
+for its scope.
 
 The command's exit codes are for scripts:
 
 | code | meaning |
 |---|---|
-| 0 | a client was written |
+| 0 | a client was written, or `--check` found an exact match |
 | 2 | the broker answered and no such service did |
-| 3 | no broker at that address |
-| 4 | the service cannot be described, or its description cannot be emitted |
-| 5 | the class named by `--class` could not be imported |
+| 3 | no broker at that address, or a broker that refused this client's credentials or permissions |
+| 4 | the service cannot be described, has no rpc handler, or its description cannot be emitted |
+| 5 | the class named by `--class` could not be imported, or is not a class |
+| 6 | the client could not be written where `--out` asked |
+| 7 | the command line is wrong: a missing, unknown or malformed flag, a flag the chosen mode does not use, or a service name, namespace or (when a running service is asked) `$CLIFFRACER_SUBJECT_PREFIX` that cannot be part of a subject |
+| 8 | `--check` found a missing or stale generated client |
+| 9 | the service class source could not be verified under the required path |
+| 10 | `--check` could not read the output file |
 
 ### A permanently closed connection stops the service
 
@@ -585,14 +559,83 @@ on the health endpoint.
 ```bash
 cliffracer run myapp.services                  # every service in the module
 cliffracer run myapp.services:OrderService
+cliffracer run myapp.services --log-level WARNING
 ```
+
+`--log-level` sets the level for the whole process: the orchestrator points
+loguru at one sink before any service starts, so every service run by that
+command logs at that level. That sink prints the frames of a traceback and not
+the values in them, so a credential a service was configured with is not
+printed. Leave the flag off and the command keeps loguru's default level
+but replaces its default sink with one that prints no values either; an
+application that embeds the services through `ServiceOrchestrator` keeps
+whatever logging it has configured.
+
+## Describing and calling a running service
+
+```bash
+cliffracer describe orders                     # what it offers, as a person reads it
+cliffracer describe orders --json              # the description as the service sent it
+cliffracer call orders.place --json-args '{"item": {"sku": "bolt", "quantity": 3}}' --arg priority=2
+cliffracer call orders.place --arg priority=2 --json-args - < order.json
+cliffracer call orders.ping --arg word=hi --dry-run
+```
+
+Both ask the running service for its description first. `call` then checks the call against it
+before sending anything:
+
+- the method is one the service lists;
+- every argument is one it takes;
+- every argument without a default is given;
+- a scalar or literal argument is of that kind.
+
+The service judges the values. `--arg name=value` gives one scalar or literal argument, and
+`--json-args` gives them all as one JSON object (`-` reads it from stdin).
+The request carries `--timeout` as its `Cliffracer-Timeout-Ms` budget, so the service stops the
+handler when the command stops waiting. A `--timeout` of `inf`, or over one day (the most a
+service reads as a budget), sends none, and the service applies its own `max_rpc_processing_time`.
+A budget given with `--header` is sent as given. The request is the one `cliffracer.calls.prepare`
+builds, so it carries the correlation id under `X-Correlation-ID` and `correlation_id`, from a
+`--header` in either spelling or a new one.
+
+The result is written to stdout as JSON. An error the service answered is written to stderr as a
+JSON object (`code`, `error`, and `details` or `retry_after` when it has them), followed by a line
+saying what happened. The exit code says which:
+
+| code | meaning |
+|---|---|
+| 0 | answered with a result (or described) |
+| 2 | the broker answered but no such service did |
+| 3 | no broker at that address, or the broker refused this client's credentials or a permission |
+| 4 | the service cannot be described, or the method streams its reply |
+| 7 | the command line is wrong |
+| 11 | the arguments were refused, before sending or by the service |
+| 12 | no such method |
+| 13 | the service is busy; the error object carries `retry_after` |
+| 14 | the service's deadline passed |
+| 15 | the service refused the call, as an auth or policy extension does |
+| 16 | any other error, or a reply that is not one |
+
+Only a method the description lists can be called: a name cannot become another subject, and
+there is no fire-and-forget call and no event publish. `--dry-run` prints the subject, headers and
+payload without sending. A call is a real call; nothing tells a method that changes state from one
+that does not.
+
+The connection options are the same for both: `--server`, then `$CLIFFRACER_NATS_URL`, then
+`$NATS_URL`; `--creds`, `--user`, `--password` and `--token` (or `$NATS_CREDS`, `$NATS_USER`,
+`$NATS_PASSWORD`, `$NATS_TOKEN`, where a process list does not show them); `--inbox-prefix` for a
+role the broker confines to one; `--namespace`; `--timeout`; and `--header NAME=VALUE`, repeatable,
+which a service behind `AuthExtension` needs as `--header authorization="bearer <token>"`.
 
 ## Configuration
 
 Core settings are fields on `ServiceConfig`, set in code or in a
 `cliffracer run --config` YAML file. `ServiceConfig` forbids unknown keys, so a
-name it does not recognise raises `ValidationError` at construction rather than
-being ignored.
+name it does not recognise raises pydantic's `ValidationError` at construction rather than
+being ignored. In a `--config` file or a flag, a name the config does not have and a value it
+refuses (a `restart_delay` below 0, a `nats_user` without a `nats_password`) both end
+`cliffracer run` with exit code 2 and a message that names the service, the field and the
+reason; the message never repeats the value.
 
 ```python
 from cliffracer import CliffracerService, ServiceConfig
@@ -609,14 +652,19 @@ service = CliffracerService(config)
 
 ### Environment variables
 
-Each installed extension owns a prefix and reads its own:
+These are the variables the library and its packages read:
 
 | variable | read by | effect |
 |---|---|---|
-| `CLIFFRACER_HTTP_HOST`, `CLIFFRACER_HTTP_PORT` | `cliffracer-http` | where the HTTP app binds |
-| `CLIFFRACER_BACKDOOR_ENABLED` | `cliffracer-backdoor` | turns the console on; it is off by default |
-| `CLIFFRACER_BACKDOOR_PORT`, `CLIFFRACER_BACKDOOR_PASSWORD` | `cliffracer-backdoor` | console port and password |
-| `CLIFFRACER_LOG_DIR` | `cliffracer-logging` | directory for file logging, default `./logs` |
+| `CLIFFRACER_SUBJECT_PREFIX` | core: `ServiceConfig`, `ServiceClient` and the client generator | the outermost prefix of every subject, stream and durable consumer, used when no `subject_prefix` is given; unset or empty means none |
+| `CLIFFRACER_NATS_URL` | the `cliffracer-generate-client` command; `cliffracer describe` and `cliffracer call` | the broker it asks for a service's description when `--nats-url` (`--server` for `describe` and `call`) is not given, before the default `nats://localhost:4222` |
+| `LOGURU_LEVEL` | the `cliffracer run` command | loguru's own variable: the level of the stderr sink the command installs in place of loguru's default when `--log-level` is not given (default DEBUG) |
+| `CLIFFRACER_LOG_DIR` | `cliffracer-logging` | directory for file logging, default `./logs` (an empty value is the default; a path separator in a service name becomes `_` in its file names) |
+| `CLIFFRACER_CYANIDE_<FIELD>` | `cliffracer-cyanide` | one variable for each field of `CyanideConfig` (`ENABLED`, `MODE`, `SLOW_DELAY`, `RAISE_DELAY`, `SLEEP_TIMEOUT_DURATION`, the four `*_WEIGHT`, `SEED`, `INJECTION_RECORD_LIMIT`); fault injection is off unless `CLIFFRACER_CYANIDE_ENABLED` is true |
+| `NATS_URL`, `NATS_CREDS`, `NATS_USER`, `NATS_PASSWORD`, `NATS_TOKEN` | `cliffracer-dlq`; `cliffracer describe` and `cliffracer call` | the defaults of their `--server`, `--creds`, `--user`, `--password` and `--token` flags (for `describe` and `call`, `$NATS_URL` after `$CLIFFRACER_NATS_URL`); a password or token belongs here, where a process list does not show it |
+
+The other packages read none. A service's own credentials (`nats_user`, `nats_password`,
+`nats_token`) are `ServiceConfig` fields and are not read from the environment.
 
 Your own settings are yours to read: pull them from `os.environ` or your own
 `pydantic_settings.BaseSettings`, and pass the values to whatever needs them.
@@ -636,6 +684,9 @@ config = ServiceConfig(
 )
 ```
 
+`nats_password` and `nats_token` are held as `SecretStr`, so `repr(config)`, `model_dump_json()` and a
+validation error do not print them; `config.nats_password.get_secret_value()` reads one.
+
 Prefer these fields to a password embedded in `nats_url`. The connect log line
 is redacted either way — an embedded password logs as `nats://***@broker:4222` —
 but a URL credential still reaches argv and error messages. The fields do not.
@@ -645,11 +696,16 @@ They work in a `--config` YAML file with no extra wiring, since
 
 ```yaml
 # deploy.yaml
-my_service:
-  nats_url: nats://broker:4222
-  nats_user: svc
-  nats_password: s3cret
+services:
+  my_service:
+    nats_url: nats://broker:4222
+    nats_user: svc
+    nats_password: s3cret
 ```
+
+The file has a `global:` section, whose settings apply to every service in the run, and a
+`services:` section keyed by service name. A key outside those two is refused, and a name under
+`services:` that no service in the run has is reported as a warning naming the services that are run.
 
 That is the path to use for authenticated deployments. Passing `--nats-url`
 with an embedded password puts the credential in argv, where anything that can
@@ -663,7 +719,7 @@ secret, so it can live in a config file or in version control.
 ### Docker
 
 ```dockerfile
-FROM python:3.11-slim
+FROM python:3.12-slim
 WORKDIR /app
 COPY . /app
 RUN pip install uv && uv sync --no-dev
@@ -673,9 +729,12 @@ CMD ["python", "-m", "your_service"]
 ### Kubernetes
 
 A cliffracer service is an ordinary Python process with one port to probe.
-Point a readiness probe at `GET /health` and let the status code decide: 200
-healthy, 503 otherwise, on whichever listener is serving. Read `status` from
-the body when you want to know *which* dependency failed.
+Point a readiness probe at `GET /ready` and let the status code decide: 200
+healthy, 503 otherwise, on whichever listener is serving. Point a liveness probe
+at `GET /live`, which stays 200 while the process runs whatever the broker is
+doing; a liveness probe on `/ready` or `/health` restarts the pod whenever the
+broker is down for longer than the probe's failure threshold. Read `status` from the body when you want to know *which*
+dependency failed.
 
 ### JetStream tuning
 
@@ -694,10 +753,38 @@ config = ServiceConfig(
 )
 ```
 
-`jetstream_max_ack_pending` and `jetstream_ack_wait` are write-once per durable
-consumer: change them and restart, and the service asks for one thing while the
-server does another. [docs/api-reference.md](docs/api-reference.md) explains how
-to apply a change.
+`jetstream_ack_wait` is not a bound on how long one replica may hold a message.
+The heartbeat resets the server's ack timer for as long as the handler has not
+returned, which is what keeps a slow handler from being redelivered under
+itself — and what lets a WEDGED handler hold the message forever, with
+`jetstream_max_deliver` and the dead-letter queue never firing. Set
+`max_processing_time` to bound it: a handler that outlives it is cancelled and
+the message naked, then dead-lettered like any other failure. It is `None` by
+default, so nothing changes until you choose a number.
+
+A cancelled handler is one that had already signed up for redelivery, so
+partial work followed by a retry is within its contract; a handler that cannot
+tolerate cancellation cannot tolerate redelivery either.
+
+The budget is enforced by cancellation, so it bounds a handler that lets
+`asyncio.CancelledError` propagate. A handler that suppresses it (catching
+`CancelledError`, or `BaseException`) is outside that bound. If it then returns,
+the message is still naked and a WARNING says the cancellation was suppressed,
+so the work it went on to do may be delivered again: a handler that is not
+idempotent must let the cancellation through. If it keeps running, the message
+cannot be redelivered under it and stays in flight with no disposition, and a
+WARNING says the handler is still running once it reaches twice
+`max_processing_time`.
+
+`jetstream_max_ack_pending`, `jetstream_ack_wait` and `jetstream_max_deliver`
+are write-once per durable consumer: change them and restart, and the service
+asks for one thing while the server does another.
+[docs/api-reference.md](docs/api-reference.md) explains how to apply a change.
+For `jetstream_max_deliver` the lower of the two decides when a failing message
+is dead-lettered, so a message is not lost when the server stops redelivering
+first.
+[Dead letters](docs/dead-letters.md) says what a dead-letter record holds and how to read
+the dead-letter subject with the `nats` command line.
 
 ## Layout
 
@@ -708,7 +795,7 @@ src/cliffracer/
     container.py              connection lifecycle, dispatch, exit handling
     decorators.py             @rpc, @listener, @timer, @broadcast
     dependencies.py           the @dependency probe machinery
-    health_listener.py        /health and /info without a web framework
+    health_listener.py        /live, /ready, /health and /info without a web framework
     jetstream.py              durable consumer setup
     service_config.py         the ServiceConfig model
     validation.py             handler signature and payload validation
@@ -725,13 +812,16 @@ uv run pytest                                   # everything; NATS-marked tests 
 uv run pytest tests/unit                        # no broker required
 uv run pytest tests/transport                   # no broker required
 uv run pytest tests/repo                        # no broker required
-uv run pytest tests/integration                 # needs NATS_URL
+uv run pytest tests/integration                 # needs CLIFFRACER_TEST_NATS_URL
 uv run pytest --cov=src/cliffracer --cov-report=html
 ```
 
 `tests/integration/test_examples_run.py` launches every example under
 `examples/` against a real broker and sends it SIGINT, so the examples are
-checked as documentation rather than assumed to work.
+checked as documentation rather than assumed to work. A long-running example
+prints a line beginning `EXAMPLE READY:` once the thing it demonstrates has
+happened (an order created, a timer run, an RPC answered), and the test waits
+for that line.
 
 ## Documentation
 
@@ -739,13 +829,14 @@ checked as documentation rather than assumed to work.
 - [docs/philosophy.md](docs/philosophy.md) — landscape, design philosophy, and why NATS
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design
 - [docs/api-reference.md](docs/api-reference.md) — classes, methods, config fields
-- [docs/http-guide.md](docs/http-guide.md) — REST APIs
-- [docs/websocket-guide.md](docs/websocket-guide.md) — real-time communication
 - [docs/extensions.md](docs/extensions.md) — writing and using extensions
 - [docs/correlation.md](docs/correlation.md) — distributed correlation ID tracking
 - [docs/performance.md](docs/performance.md) — batch processing and connection pools
 - [docs/decisions.md](docs/decisions.md) — the constraints behind the design
-- [docs/debugging/backdoor.md](docs/debugging/backdoor.md) — the live console
+- [docs/upgrading.md](docs/upgrading.md) — what to change in a deployment for each breaking change, with a before and an after
+- [docs/virtual-services.md](docs/virtual-services.md) — local template and activation contract, with future placement boundaries
+- [docs/service-templates.md](docs/service-templates.md) — registered service factories and typed activation references
+- [docs/local-supervisor.md](docs/local-supervisor.md) — bounded local activation, owner lifetimes and cleanup outcomes
 - [examples/](examples/) — runnable services
 
 ## Contributing

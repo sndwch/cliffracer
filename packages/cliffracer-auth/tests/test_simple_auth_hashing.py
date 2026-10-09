@@ -53,9 +53,20 @@ class TestEncodedHash:
         assert high.verify_password("pw", h)
 
 
+def _legacy_hash(password: str, secret: str = SECRET) -> str:
+    """Reproduce the pre-1.4.0 algorithm exactly: its salt is the first 16 bytes of the key."""
+    salt = secret.encode()[:16]
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100000).hex()
+
+
 class TestSecretKeyIndependence:
-    def test_rotating_the_secret_key_does_not_invalidate_hashes(self):
-        """Verify rotating the secret key does not invalidate password hashes."""
+    """A modern hash carries its own salt; a legacy one derives its salt from the secret key.
+
+    Rotating the key therefore leaves modern records valid and orphans a legacy record that no
+    login has upgraded yet.
+    """
+
+    def test_rotating_the_secret_key_does_not_invalidate_a_modern_hash(self):
         svc = _service()
         svc.create_user("alice", "alice@example.com", "shared-password")
         stored = svc._users["alice"]["password_hash"]
@@ -64,12 +75,34 @@ class TestSecretKeyIndependence:
         rotated.config.secret_key = "y" * 40
         assert rotated.verify_password("shared-password", stored)
 
+    def test_rotating_the_secret_key_orphans_a_legacy_hash_nobody_has_upgraded(self):
+        """Characterisation: the legacy form's salt is the key, so the key is part of the record."""
+        legacy = _legacy_hash("legacy-password")
+        before = _service()
+        assert before.verify_password("legacy-password", legacy)
+
+        rotated = _service()
+        rotated.config.secret_key = "y" * 40
+        assert not rotated.verify_password("legacy-password", legacy)
+
+        restored = _service()
+        assert restored.verify_password("legacy-password", legacy)
+
+    def test_a_login_before_the_rotation_upgrades_a_legacy_record_so_it_survives(self):
+        svc = _service()
+        svc.create_user("alice", "alice@example.com", "legacy-password")
+        svc._users["alice"]["password_hash"] = _legacy_hash("legacy-password")
+
+        assert svc.authenticate("alice", "legacy-password") is not None
+        assert svc._users["alice"]["password_hash"].startswith(f"{svc._HASH_PREFIX}$")
+
+        svc.config.secret_key = "y" * 40
+        assert svc.authenticate("alice", "legacy-password") is not None
+
 
 class TestLegacyHashes:
     def _legacy(self, password, secret=SECRET):
-        """Reproduce the pre-1.4.0 algorithm exactly."""
-        salt = secret.encode()[:16]
-        return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100000).hex()
+        return _legacy_hash(password, secret)
 
     def test_a_legacy_hash_still_verifies(self):
         """Nothing anyone stored via the public hash_password breaks."""
@@ -114,6 +147,54 @@ class TestMalformedInput:
         assert svc.verify_password("anything", bad) is False
 
 
+class TestIterationCeiling:
+    """`_MAX_ITERATIONS` caps attacker-supplied cost, read by whether PBKDF2 runs at all.
+
+    A record over the ceiling returns False whether or not the ceiling exists, because the
+    digest mismatches either way; the difference is ten seconds of CPU per attempt. So the
+    ceiling is read by what it prevents: `pbkdf2_hmac` is not called.
+    """
+
+    @staticmethod
+    def _spy(monkeypatch):
+        calls = []
+
+        def spy(name, password, salt, iterations):
+            calls.append(iterations)
+            return b"not the digest"
+
+        monkeypatch.setattr(hashlib, "pbkdf2_hmac", spy)
+        return calls
+
+    @pytest.mark.parametrize(
+        "iterations",
+        [
+            SimpleAuthService._MAX_ITERATIONS + 1,
+            50_000_000,
+            int("9" * 400),
+        ],
+    )
+    def test_a_cost_over_the_ceiling_never_reaches_pbkdf2(self, monkeypatch, iterations):
+        calls = self._spy(monkeypatch)
+
+        assert (
+            _service().verify_password("anything", f"pbkdf2_sha256${iterations}$c2FsdA$aGFzaA")
+            is False
+        )
+        assert calls == []
+
+    def test_CONTROL_a_cost_at_the_ceiling_does_reach_pbkdf2(self, monkeypatch):
+        """The spy is wired: the largest cost allowed is computed (here, by the spy)."""
+        calls = self._spy(monkeypatch)
+        ceiling = SimpleAuthService._MAX_ITERATIONS
+
+        assert (
+            _service().verify_password("anything", f"pbkdf2_sha256${ceiling}$c2FsdA$aGFzaA")
+            is False
+        )
+        assert calls == [ceiling]
+
+
 _TRIPWIRE_MESSAGE = (
     "SimpleAuthService user store is not persistent across rebuilds. "
     "If persistence is implemented, upgrade legacy-form hashes on login."
@@ -141,7 +222,7 @@ class TestUserStoreIsNotPersistent:
 
 
 class TestLegacyPasswordRehashing:
-    """Verify that authenticating with a legacy hash upgrades it to modern PBKDF2 (#339)."""
+    """Verify that authenticating with a legacy hash upgrades it to modern PBKDF2."""
 
     def test_legacy_hash_upgraded_on_successful_login(self):
         config = AuthConfig(secret_key=SECRET)
@@ -218,7 +299,7 @@ class TestLegacyPasswordRehashing:
 
 
 class TestAuthConfigCleanups:
-    """Verify pruning of vestigial fields from AuthConfig (#338)."""
+    """Verify AuthConfig carries no vestigial fields."""
 
     def test_bcrypt_rounds_is_not_a_valid_field(self):
         assert "bcrypt_rounds" not in AuthConfig.model_fields

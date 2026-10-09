@@ -3,11 +3,11 @@
 import asyncio
 import dataclasses
 import socket
-import time
 
 import pytest
 
 from cliffracer import Dependency, dependency
+from cliffracer.core import dependencies as dependencies_module
 from cliffracer.core.exceptions import ConfigurationError
 from cliffracer.core.service import CliffracerService
 from cliffracer.core.service_config import ServiceConfig
@@ -23,8 +23,8 @@ class _FakeNats:
         self.is_connected = is_connected
 
 
-def _running_service(cls=CliffracerService, name="dep-test"):
-    svc = cls(ServiceConfig(name=name))
+def _running_service(cls=CliffracerService, name="dep-test", **config):
+    svc = cls(ServiceConfig(name=name, **config))
     svc._running = True
     svc.nc = _FakeNats(is_closed=False, is_connected=True)
     return svc
@@ -149,19 +149,37 @@ async def test_the_keyword_is_gone_rather_than_ignored():
 
 @pytest.mark.asyncio
 async def test_a_hung_dependency_times_out_instead_of_hanging_the_endpoint():
-    async with Listener(answer=False) as listener:
-        svc = _running_service()
-        svc.add_dependency("slow", listener.probe(), timeout=0.2)
+    cancelled = False
+    finished = False
 
-        started = time.monotonic()
-        # Bound health_check execution with timeout.
+    async with Listener(answer=False) as listener:
+        probe = listener.probe()
+
+        async def watched():
+            """The probe, reporting how it ended rather than how long it took."""
+            nonlocal cancelled, finished
+            try:
+                await probe()
+                finished = True
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+
+        svc = _running_service()
+        svc.add_dependency("slow", watched, timeout=0.2)
+
+        # The listener never answers, so an unbounded probe hangs here. This
+        # wait is the hang guard, not the check: it turns a hang into a
+        # failure the run can report.
         health = await asyncio.wait_for(svc.health_check(), timeout=5)
-        elapsed = time.monotonic() - started
 
     assert health["status"] == "unhealthy", health
+    # The bound cut the probe off: it neither completed nor was left running.
+    assert cancelled is True
+    assert finished is False
+    # And the payload names the value the caller set, so an operator reading a
+    # failure knows which budget was spent.
     assert "timed out after 0.2s" in health["dependencies"]["slow"]["error"]
-    # The listener sleeps 30s. Anything near that means the bound did nothing.
-    assert elapsed < 5, elapsed
 
 
 @pytest.mark.asyncio
@@ -169,7 +187,9 @@ async def test_a_probe_that_raises_is_a_failed_dependency_not_a_dead_endpoint():
     async def broken():
         raise RuntimeError("probe itself is wrong")
 
-    svc = _running_service()
+    # Exposed deliberately: the assertion below is about the probe's own words,
+    # which the endpoint withholds by default.
+    svc = _running_service(expose_internal_errors=True)
     svc.add_dependency("broken", broken)
 
     health = await svc.health_check()
@@ -211,21 +231,37 @@ async def test_a_service_with_no_dependencies_is_unchanged():
 
 @pytest.mark.asyncio
 async def test_probes_run_concurrently_not_serially():
-    """Five 0.3s timeouts run serially are a 1.5s health endpoint."""
+    """Every probe is in flight together, so the endpoint costs one timeout."""
+    in_flight = 0
+    peak = 0
+
+    def counted(probe):
+        """The same probe, reporting how many of its siblings are in it."""
+
+        async def check():
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            try:
+                await probe()
+            finally:
+                in_flight -= 1
+
+        return check
+
     async with Listener(answer=False) as listener:
         svc = _running_service()
         for i in range(5):
-            svc.add_dependency(f"slow-{i}", listener.probe(), timeout=0.3)
+            svc.add_dependency(f"slow-{i}", counted(listener.probe()), timeout=0.3)
 
-        started = time.monotonic()
-        # Bound execution timeout.
+        # The hang guard, not the check: the listener never answers.
         health = await asyncio.wait_for(svc.health_check(), timeout=5)
-        elapsed = time.monotonic() - started
 
     assert len(health["dependencies"]) == 5
     assert all(not d["ok"] for d in health["dependencies"].values())
-    # Serial would be >= 1.5s; concurrent is one timeout plus overhead.
-    assert elapsed < 1.0, elapsed
+    # Run serially, each probe would start only once the one before it timed
+    # out, and the peak would be one however fast the host is.
+    assert peak == 5
 
 
 @pytest.mark.asyncio
@@ -245,7 +281,12 @@ async def test_every_dependency_is_reported_even_when_one_fails():
 
 @pytest.mark.asyncio
 async def test_latency_is_measured_and_plausible():
-    """Verify latency is recorded as float and reflects timeout duration."""
+    """A probe cut off at its 0.2 s timeout measures at least about that much, on the real clock.
+
+    A band like this is satisfied by any constant inside it, or by `timeout * 1000`; that a
+    latency is a MEASUREMENT is read, with a clock the test controls, in
+    `test_latency_is_the_time_the_probe_took_not_a_constant_or_its_timeout`.
+    """
     async with Listener(answer=False) as listener:
         svc = _running_service()
         svc.add_dependency("slow", listener.probe(), timeout=0.2)
@@ -253,7 +294,11 @@ async def test_latency_is_measured_and_plausible():
 
     latency = health["dependencies"]["slow"]["latency_ms"]
     assert isinstance(latency, float)
+    # Lower bound: 75% of the 0.2 s timeout, in ms; a latency of zero falls under it. Load can only
+    # lengthen it.
     assert latency >= 150.0, f"a 0.2s timeout should measure ~200ms, got {latency}"
+    # Upper bound. CI p99 201 ms (run 4712: eric-7, CPython 3.12.15, n=20, p99 = max); wait 200 ms,
+    # 1286x the overshoot.
     assert latency < 2000.0, latency
 
     # And the fast case still reports a real number rather than None.
@@ -263,6 +308,65 @@ async def test_latency_is_measured_and_plausible():
         health = await svc.health_check()
 
     assert isinstance(health["dependencies"]["target"]["latency_ms"], float)
+
+
+class _Clock:
+    """Stands in for the `time` module of `cliffracer.core.dependencies`, and only that one.
+
+    Patching `time.monotonic` itself would move the event loop's clock too. The module reads
+    `time.monotonic()` for both ends of the measurement; a change of clock source there
+    updates this stub with it.
+    """
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.mark.parametrize(
+    ("outcome", "elapsed_s", "timeout_s"),
+    [
+        ("answers", 0.02, 5.0),
+        ("answers", 0.35, 5.0),
+        ("raises", 0.05, 5.0),
+        ("times out", 0.5, 0.05),
+    ],
+)
+@pytest.mark.asyncio
+async def test_latency_is_the_time_the_probe_took_not_a_constant_or_its_timeout(
+    monkeypatch, outcome, elapsed_s, timeout_s
+):
+    """`latency_ms` is read from a clock the probe moves by a known amount.
+
+    Two answering probes that took 0.02 s and 0.35 s under the same 5 s timeout must read
+    20 and 350: a constant cannot be both, and `timeout * 1000` is neither. The probe that
+    raises and the probe that is cut off at a real 0.05 s (its clock reads 0.5 s) are
+    measured the same way, so the reading is not specific to the path that succeeds.
+    """
+    clock = _Clock()
+    monkeypatch.setattr(dependencies_module, "time", clock)
+
+    async def probe():
+        clock.advance(elapsed_s)
+        if outcome == "raises":
+            raise ConnectionRefusedError("refused")
+        if outcome == "times out":
+            await asyncio.sleep(3600)
+
+    svc = _running_service()
+    svc.add_dependency("target", probe, timeout=timeout_s)
+    health = await asyncio.wait_for(svc.health_check(), timeout=5)
+
+    result = health["dependencies"]["target"]
+    assert result["ok"] is (outcome == "answers"), result
+    if outcome == "times out":
+        assert result["error"].startswith("timed out"), result
+    assert result["latency_ms"] == pytest.approx(elapsed_s * 1000, abs=0.1), result
 
 
 @pytest.mark.asyncio
@@ -482,3 +586,60 @@ def test_two_mixins_claiming_one_name_are_refused():
 
     message = str(caught.value)
     assert "Storage._check_storage" in message and "Reporting._check_reporting" in message, message
+
+
+# --- a probe's own timeout is not this budget expiring -----------------------
+
+
+async def test_a_probe_that_times_out_on_its_own_does_not_claim_the_budget():
+    """`RpcTimeoutError` is a real `builtins.TimeoutError`, so it reached the
+    `wait_for` arm and was reported as `timed out after {bound}s` -- a budget of
+    30s named by a call that gave up at 0.5s, with the warning log suppressed so
+    the real duration was not recoverable either.
+
+    The comment above `bound` in `_run_one` exists to stop the message naming a
+    budget that was not spent; this is that defect arriving by a different route,
+    and the arm that routes a cliffracer error to the probe-failure path is what
+    keeps the two apart. It surfaced when `RpcTimeoutError` became catchable
+    as a `TimeoutError`, which is what routed it to the wrong arm.
+    """
+    from cliffracer.core.dependencies import Dependency, _run_one
+    from cliffracer.core.exceptions import RpcTimeoutError
+
+    async def probe() -> None:
+        raise RpcTimeoutError("svc.rpc.thing did not answer within 0.5s")
+
+    config = ServiceConfig(
+        name="x", health_port=0, health_listener=False, expose_internal_errors=True
+    )
+    result = await _run_one(Dependency(name="peer", probe=probe, timeout=30.0), config=config)
+
+    assert result["ok"] is False
+    assert "0.5s" in result["error"], result["error"]
+    assert "30.0s" not in result["error"], result["error"]
+
+
+async def test_CONTROL_the_budget_expiring_still_reports_the_budget():
+    """The arm that must keep working: `wait_for` giving up IS the budget spent."""
+    from cliffracer.core.dependencies import Dependency, _run_one
+
+    async def slow() -> None:
+        await asyncio.sleep(5)
+
+    result = await _run_one(Dependency(name="slow", probe=slow, timeout=0.05), config=None)
+
+    assert result["ok"] is False
+    assert result["error"] == "timed out after 0.05s", result["error"]
+
+
+async def test_CONTROL_a_probes_own_timeout_is_still_withheld_without_the_flag():
+    """Routing it to the probe-failure arm must not route it around the gate."""
+    from cliffracer.core.dependencies import Dependency, _run_one
+    from cliffracer.core.exceptions import RpcTimeoutError
+
+    async def probe() -> None:
+        raise RpcTimeoutError("svc.rpc.thing did not answer within 0.5s")
+
+    result = await _run_one(Dependency(name="peer", probe=probe, timeout=30.0), config=None)
+
+    assert result["error"] == "probe failed", result["error"]

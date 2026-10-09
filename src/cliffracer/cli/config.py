@@ -12,6 +12,9 @@ _MISSING_YAML = (
 
 _VALID_FIELDS = set(ServiceConfig.model_fields.keys())
 
+#: The top-level keys of a --config file.
+_SECTIONS = ("global", "services")
+
 
 class ConfigError(Exception):
     """Raised when a --config file is malformed or references unknown fields."""
@@ -44,6 +47,16 @@ def load_yaml_config(path: str | None) -> dict[str, Any]:
 
     if not isinstance(raw, dict):
         raise ConfigError(f"--config must contain a mapping, got {type(raw).__name__}")
+
+    # Refused, not dropped: a service's section written at the top level (or `service:`, `globals:`)
+    # would otherwise apply nothing, and the settings in it, credentials included, would never be set.
+    unknown = sorted(str(key) for key in raw if key not in _SECTIONS)
+    if unknown:
+        named = ", ".join(f"'{key}'" for key in unknown)
+        raise ConfigError(
+            f"unknown top-level key {named} in the --config file: the keys are 'global' and "
+            f"'services', and a service's own settings go under services.<name>"
+        )
 
     global_section = raw.get("global") or {}
     if not isinstance(global_section, dict):

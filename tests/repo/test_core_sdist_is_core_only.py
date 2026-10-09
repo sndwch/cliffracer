@@ -6,16 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from tests.repo.built_distributions import uv_build
+
 pytestmark = pytest.mark.repo
 
 ROOT = Path(__file__).resolve().parents[2]
 BLOCK = "[tool.hatch.build.targets.sdist]"
-
-
-@pytest.fixture(autouse=True)
-def _require_git():
-    if not (ROOT / ".git").is_dir():
-        pytest.skip("Not running inside a git repository (release tarball)")
 
 
 def _build_core_sdist(out: Path, cwd: Path) -> Path:
@@ -24,13 +20,7 @@ def _build_core_sdist(out: Path, cwd: Path) -> Path:
     Note `uv build --out-dir` also writes a `.gitignore` into the directory, so
     pick the artefact by suffix rather than by taking the only file there.
     """
-    proc = subprocess.run(
-        ["uv", "build", "--package", "cliffracer", "--sdist", "--out-dir", str(out)],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode == 0, f"uv build failed:\n{proc.stdout}\n{proc.stderr}"
+    uv_build(["--package", "cliffracer", "--sdist", "--out-dir", str(out)], cwd)
     sdists = [f for f in sorted(out.iterdir()) if f.name.endswith(".tar.gz")]
     assert len(sdists) == 1, f"expected exactly one sdist, got {[f.name for f in out.iterdir()]}"
     return sdists[0]
@@ -63,7 +53,7 @@ def test_core_sdist_contains_no_workspace_member(tmp_path):
 def test_the_sdist_is_an_allowlist_not_a_default(tmp_path):
     """Verify non-core directories are excluded from the sdist."""
     entries = _entries(_build_core_sdist(tmp_path / "dist", ROOT))
-    for unwanted in ("packages/", "tests/", "docs/", "examples/", "load-testing/", "deployment/"):
+    for unwanted in ("packages/", "tests/", "docs/", "examples/", "load-testing/"):
         assert not [e for e in entries if e.startswith(unwanted)], (
             f"{unwanted} is in core's sdist; the include list in "
             "[tool.hatch.build.targets.sdist] is what keeps it out"

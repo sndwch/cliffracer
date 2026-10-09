@@ -11,6 +11,7 @@ Stress-tests abortive startup cancellation race conditions:
 """
 
 import asyncio
+import collections
 import random
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -18,11 +19,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from cliffracer import CliffracerService, ServiceConfig
+from cliffracer.core.exceptions import ServiceLifecycleError
+from tests.phase_stubs import ServicePhases
 
 pytestmark = pytest.mark.unit
 
 
-class InstrumentedLifecycleService(CliffracerService):
+class InstrumentedLifecycleService(ServicePhases, CliffracerService):
     """Service instrumented to record exact counts of lifecycle events."""
 
     def __init__(self, config: ServiceConfig) -> None:
@@ -110,44 +113,54 @@ def assert_lifecycle_state(
         assert svc.container.lifecycle._startup_succeeded == startup_succeeded
 
 
+CHAOS_SEED = 20261001
+
+#: What start() and stop() may end in under this load. Anything else (a RuntimeError from a lock
+#: or state bug, say) is a defect, and used to be swallowed with the rest.
+ALLOWED_OUTCOMES = {"None", "ServiceLifecycleError", "CancelledError"}
+
+
 @pytest.mark.asyncio
 async def test_lifecycle_chaos_monkey_500_events():
     """500 randomized concurrent lifecycle events (start, stop, cancel) on a single service.
 
     Invariants:
-    1. At completion, connect_count == disconnect_count.
-    2. Final service state is non-running, stopped, not starting, and _start_task is None.
-    3. No deadlocks; all 500 events complete within deadline.
+    1. Every event ends in one of ALLOWED_OUTCOMES; the outcomes are counted, not discarded.
+    2. The service connected at least once, so connect_count == disconnect_count is not 0 == 0.
+    3. At completion, connect_count == disconnect_count.
+    4. Final service state is non-running, stopped, not starting, and _start_task is None.
+    5. No deadlocks; all 500 events complete within deadline.
+
+    The choice of action comes from a seeded generator (the seed is in every failure message), so
+    the sequence of choices a red used can be replayed. Which interleaving the loop makes of them
+    is still the event loop's.
     """
     cfg = ServiceConfig(name="chaos_svc", health_port=0)
     svc = InstrumentedLifecycleService(cfg)
+    rng = random.Random(CHAOS_SEED)
+    outcomes: collections.Counter[str] = collections.Counter()
 
-    events_run = 0
+    async def settled(awaitable) -> None:
+        try:
+            await awaitable
+        except (Exception, asyncio.CancelledError) as exc:
+            outcomes[type(exc).__name__] += 1
+        else:
+            outcomes["None"] += 1
 
     async def worker(worker_id: int):
-        nonlocal events_run
         for _ in range(10):
-            action = random.choice(["start", "stop", "start_and_cancel"])
+            action = rng.choice(["start", "stop", "start_and_cancel"])
             if action == "start":
-                try:
-                    await svc.start()
-                except (Exception, asyncio.CancelledError):
-                    pass
+                await settled(svc.start())
             elif action == "stop":
-                try:
-                    await svc.stop()
-                except (Exception, asyncio.CancelledError):
-                    pass
+                await settled(svc.stop())
             elif action == "start_and_cancel":
                 t = asyncio.create_task(svc.start())
-                await asyncio.sleep(random.uniform(0.0001, 0.002))
+                await asyncio.sleep(rng.uniform(0.0001, 0.002))
                 t.cancel()
-                try:
-                    await t
-                except (Exception, asyncio.CancelledError):
-                    pass
-            events_run += 1
-            await asyncio.sleep(random.uniform(0.0001, 0.001))
+                await settled(t)
+            await asyncio.sleep(rng.uniform(0.0001, 0.001))
 
     workers = [asyncio.create_task(worker(i)) for i in range(50)]
     await asyncio.wait_for(asyncio.gather(*workers), timeout=15.0)
@@ -155,12 +168,16 @@ async def test_lifecycle_chaos_monkey_500_events():
     # Ensure final clean stop
     await svc.stop()
 
-    assert events_run == 500
+    where = f"(seed {CHAOS_SEED}, outcomes {dict(outcomes)})"
+    assert sum(outcomes.values()) == 500, where
+    assert set(outcomes) <= ALLOWED_OUTCOMES, f"an unexpected outcome {where}"
+    assert svc.connect_count >= 1, f"the service never connected {where}"
     assert_lifecycle_state(svc, running=False, stopped=True, starting=False)
     assert svc._start_task is None
     # Critical resource invariant: every successful connect was cleaned up by a disconnect
     assert svc.connect_count == svc.disconnect_count, (
-        f"Resource leak: connect_count ({svc.connect_count}) != disconnect_count ({svc.disconnect_count})"
+        f"Resource leak: connect_count ({svc.connect_count}) != "
+        f"disconnect_count ({svc.disconnect_count}) {where}"
     )
 
 
@@ -173,7 +190,8 @@ async def test_cascading_abortive_startup_failures_with_concurrent_stops():
     1. start() ALWAYS raises the exact stage exception (never masked by CancelledError).
     2. All concurrent stop() calls complete cleanly returning None.
     3. disconnect() is called on every failure.
-    4. on_shutdown() is NEVER called because _startup_succeeded remains False.
+    4. on_shutdown() runs once when on_startup had returned (a failure in _start_extensions
+       or _setup_subscriptions) and never when on_startup itself failed.
     """
     failure_stages = [
         "_setup_extensions",
@@ -419,23 +437,34 @@ async def test_massive_start_cancellation_stampede():
     startup_barrier.set()
 
     # Gather all tasks
-    _ = await asyncio.gather(*start_tasks, return_exceptions=True)
+    start_results = await asyncio.gather(*start_tasks, return_exceptions=True)
     stop_results = await asyncio.gather(*stop_tasks, return_exceptions=True)
 
     for res in stop_results:
         assert res is None, f"Stop task failed: {res}"
 
+    # What the 100 starts ended in: the 50 that were cancelled raised CancelledError, and each of
+    # the rest either returned or was refused by the stop that arrived, and nothing else.
+    cancelled, others = start_results[:50], start_results[50:]
+    assert all(isinstance(r, asyncio.CancelledError) for r in cancelled), cancelled
+    unexpected = [r for r in others if r is not None and not isinstance(r, ServiceLifecycleError)]
+    assert not unexpected, unexpected
+
     # Verify service settled cleanly
     assert_lifecycle_state(svc, running=False, stopped=True, starting=False)
+    assert svc.connect_count >= 1, "no start ever connected, so the balance below is 0 == 0"
+    assert svc.setup_subscriptions_count <= 1, "a start set up the subscriptions twice"
     assert svc.connect_count == svc.disconnect_count
 
 
 @pytest.mark.asyncio
 async def test_repeated_cancellation_during_shielded_abortive_cleanup():
-    """Demonstrates defect: when start() receives cancellation while awaiting
-    asyncio.shield(self._stop_internal()), the shield raises CancelledError to start(),
-    causing start() to exit prematurely and release _lock while _stop_internal is
-    still actively running in the background.
+    """Regression guard: start() keeps waiting for its abortive cleanup however often it is cancelled.
+
+    A cancellation delivered while start() awaits `asyncio.shield(self._stop_internal())` makes the
+    shield raise CancelledError into start(). Without the retry loop around it, start() would exit
+    at that point and release the lifecycle lock while `_stop_internal` was still running in the
+    background. The assertion is that start() has not finished while the cleanup is still paused.
     """
     cfg = ServiceConfig(name="premature_exit_svc", health_port=0)
     svc = CliffracerService(cfg)

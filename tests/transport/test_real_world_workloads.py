@@ -2,7 +2,7 @@
 
 Implements 5 comprehensive production scenarios:
 1. Order Processing Pipeline (RPC -> Canonical Event -> JetStream Consumer -> KV Update -> Correlation Tracking).
-2. Telemetry Ingestion with KV Deduplication (High-frequency sensor events, idempotency, revision checking).
+2. Telemetry Ingestion with Sequence Deduplication (High-frequency sensor events, consumer-side idempotency).
 3. Resilient RPC with Circuit Breaking (Fault injection, circuit tripping to OPEN, fail-fast, recovery).
 4. Async Event Fanout with Distributed Correlation Tracing (Root event -> multi-worker fanout -> secondary events).
 5. Service Discovery & Schema Catalog (Cross-service introspection over NATS, schema validation, contract matching).
@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,8 +31,11 @@ from pydantic import BaseModel, Field
 from cliffracer import CliffracerService, rpc, validated_listener
 from cliffracer.core.correlation import CorrelationContext
 from cliffracer.core.exceptions import RPCTimeoutError
+from cliffracer.core.jetstream import StreamSpec
+from cliffracer.core.outputs import Output
+from cliffracer.testing import MockJetStreamContext, ServiceTestHarness
 
-from .conftest import MockJetStreamMsg, MockNatsTransport
+from .conftest import Connection, MockJetStreamMsg, started
 
 pytestmark = pytest.mark.unit
 
@@ -63,6 +68,14 @@ class OrderFulfilledEvent(BaseModel):
     fulfillment_timestamp: str
 
 
+class DifferentOrderCreatedEvent(BaseModel):
+    """What a consumer that drifted from `OrderCreatedEvent` expects: a string where it has a number."""
+
+    order_id: str
+    customer_id: str
+    total_amount: str
+
+
 class TelemetryReading(BaseModel):
     sensor_id: str
     seq: int = Field(ge=0)
@@ -76,6 +89,15 @@ class UserRegistrationEvent(BaseModel):
     username: str
 
 
+async def until(condition: Callable[[], bool], what: str, timeout: float = 2.0) -> None:
+    """Wait for `condition`, bounded, so a miss fails by name instead of hanging."""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out after {timeout}s waiting for {what}")
+        await asyncio.sleep(0.005)
+
+
 # ---------------------------------------------------------------------------
 # Scenario 1: Order Processing Pipeline
 # ---------------------------------------------------------------------------
@@ -84,6 +106,7 @@ class UserRegistrationEvent(BaseModel):
 @pytest.mark.asyncio
 async def test_scenario_1_order_processing_pipeline(
     transport_service_factory: Any,
+    mock_transport: Connection,
 ) -> None:
     """Scenario 1: End-to-end Order Processing Pipeline.
 
@@ -94,7 +117,7 @@ async def test_scenario_1_order_processing_pipeline(
        and publishes OrderFulfilledEvent.
     4. End-to-end correlation ID is strictly preserved across all hops.
     """
-    transport = MockNatsTransport()
+    transport = mock_transport
     trace_id = "trace-order-pipeline-9001"
 
     # 1. Order Ingestion Service
@@ -112,9 +135,15 @@ async def test_scenario_1_order_processing_pipeline(
             return {"order_id": order.order_id, "status": "accepted"}
 
     ingest_svc = transport_service_factory(
-        OrderIngestService, name="order_ingest", jetstream_enabled=True
+        OrderIngestService,
+        name="order_ingest",
+        jetstream_enabled=True,
+        jetstream_streams=[StreamSpec(name="ORDERS", subjects=["orders.>"])],
     )
+    # The broker does not model JetStream, so both services publish into one recording context.
+    js = MockJetStreamContext()
     ingest_svc.container.nc = transport
+    ingest_svc.container.js = js  # type: ignore[assignment]
     ingest_svc._discover_handlers()
 
     # 2. Fulfillment Service
@@ -134,9 +163,13 @@ async def test_scenario_1_order_processing_pipeline(
             )
 
     fulfill_svc = transport_service_factory(
-        FulfillmentService, name="order_fulfill", jetstream_enabled=True
+        FulfillmentService,
+        name="order_fulfill",
+        jetstream_enabled=True,
+        jetstream_streams=[StreamSpec(name="ORDERS", subjects=["orders.>"])],
     )
     fulfill_svc.container.nc = transport
+    fulfill_svc.container.js = js  # type: ignore[assignment]
     fulfill_svc._discover_handlers()
 
     # Client submits order via RPC
@@ -164,9 +197,10 @@ async def test_scenario_1_order_processing_pipeline(
     reply = json.loads(rpc_msg.response_data.decode())
     assert reply["success"] is True
     assert reply["correlation_id"] == trace_id
+    assert reply["result"] == {"order_id": "ORD-2026-001", "status": "accepted"}
 
     # Assert orders.created published message
-    created_events = [m for m in transport.published_messages if m[0] == "orders.created"]
+    created_events = [m for m in js.published if m[0] == "orders.created"]
     assert len(created_events) == 1
     envelope = json.loads(created_events[0][1].decode())
     assert envelope["correlation_id"] == trace_id
@@ -189,44 +223,59 @@ async def test_scenario_1_order_processing_pipeline(
     assert active_cid == trace_id
 
     # Verify orders.fulfilled published with matching correlation ID
-    fulfilled_events = [m for m in transport.published_messages if m[0] == "orders.fulfilled"]
+    fulfilled_events = [m for m in js.published if m[0] == "orders.fulfilled"]
     assert len(fulfilled_events) == 1
     fulfill_envelope = json.loads(fulfilled_events[0][1].decode())
     assert fulfill_envelope["correlation_id"] == trace_id
-    assert fulfill_envelope["data"]["status"] == "fulfilled"
+    # The whole event, by its schema: a payload missing a field, or carrying one more, fails here.
+    assert set(fulfill_envelope["data"]) == set(OrderFulfilledEvent.model_fields)
+    fulfilled = OrderFulfilledEvent.model_validate(fulfill_envelope["data"])
+    assert (fulfilled.order_id, fulfilled.status) == ("ORD-2026-001", "fulfilled")
+    # `_dispatch_event` is the core-subscription path, which makes no acknowledgement decision;
+    # one appearing here would be a JetStream disposition leaking into it. The JetStream path's
+    # ack, nak and term are asserted in test_wire_semantics.py.
+    assert (event_msg.ack_calls, event_msg.nak_calls, event_msg.term_calls) == (0, [], 0)
 
 
 # ---------------------------------------------------------------------------
-# Scenario 2: Telemetry Ingestion with KV Deduplication
+# Scenario 2: Telemetry Ingestion with Sequence Deduplication
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_scenario_2_telemetry_ingestion_with_kv_deduplication(
+async def test_scenario_2_telemetry_ingestion_with_sequence_deduplication(
     transport_service_factory: Any,
+    mock_transport: Connection,
 ) -> None:
-    """Scenario 2: Telemetry ingestion pipeline with sequence deduplication.
+    """Scenario 2: Telemetry ingestion pipeline with consumer-side sequence deduplication.
 
     Workflow:
     1. Sensors emit readings over NATS topic telemetry.readings.
     2. Network retries cause duplicate readings with identical seq numbers.
-    3. IngestionService tracks latest seq per sensor in mock KV store.
+    3. IngestionService tracks the latest seq per sensor in a dict of its own.
     4. Duplicate sequences are identified and dropped without duplicate processing.
     5. New sequence readings are processed and stored.
+
+    The dedup rule is the listener's own and runs on a plain dict: no cliffracer KV or
+    idempotency mechanism is involved. It also cannot see the framework delivering a message
+    twice, because a redelivery always has `seq <= last_seq` and is dropped like a retry. So
+    every INVOCATION is counted before the rule runs: six readings are sent, so six deliveries.
     """
-    transport = MockNatsTransport()
-    kv_store: dict[str, int] = {}  # Mock JetStream KV (sensor_id -> max_seq)
+    transport = mock_transport
+    last_seq_by_sensor: dict[str, int] = {}  # the listener's own bookkeeping
+    deliveries: list[TelemetryReading] = []  # counted before the dedup rule
     recorded_telemetry: list[TelemetryReading] = []
 
     class TelemetryIngestService(CliffracerService):
         @validated_listener("telemetry.readings", TelemetryReading, durable="telemetry_ingest")
         async def on_reading(self, message: TelemetryReading) -> None:
-            last_seq = kv_store.get(message.sensor_id, -1)
+            deliveries.append(message)
+            last_seq = last_seq_by_sensor.get(message.sensor_id, -1)
             if message.seq <= last_seq:
                 # Deduplication: already processed
                 return
 
-            kv_store[message.sensor_id] = message.seq
+            last_seq_by_sensor[message.sensor_id] = message.seq
             recorded_telemetry.append(message)
 
     svc = transport_service_factory(
@@ -262,10 +311,12 @@ async def test_scenario_2_telemetry_ingestion_with_kv_deduplication(
         )
         await svc.container._dispatch_event(msg)
 
-    # Expected: exactly 4 unique records (2 for alpha, 2 for beta)
+    # The framework delivered each of the six messages once, retries included...
+    assert len(deliveries) == len(readings) == 6, [(d.sensor_id, d.seq) for d in deliveries]
+    # ...and the listener's rule kept the 4 unique records (2 for alpha, 2 for beta)
     assert len(recorded_telemetry) == 4
-    assert kv_store["sensor-alpha"] == 2
-    assert kv_store["sensor-beta"] == 2
+    assert last_seq_by_sensor["sensor-alpha"] == 2
+    assert last_seq_by_sensor["sensor-beta"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -274,15 +325,23 @@ async def test_scenario_2_telemetry_ingestion_with_kv_deduplication(
 
 
 @pytest.mark.asyncio
-async def test_scenario_3_resilient_rpc_with_circuit_breaking() -> None:
-    """Scenario 3: Resilient RPC proxy with circuit breaking protection.
+async def test_scenario_3_a_circuit_breaker_trips_fails_fast_admits_one_probe_and_recovers() -> (
+    None
+):
+    """Scenario 3: a circuit breaker around a flaky downstream callable.
+
+    There is no RPC, transport or service here: the breaker wraps a local coroutine, and the
+    timeout it raises is raised by hand. How the breaker guards a real proxy is covered in the
+    resilience package's own tests.
 
     Workflow:
-    1. Caller invokes downstream payment service via CircuitBreaker.
-    2. Downstream service encounters transient outages, throwing failures.
+    1. Caller invokes a downstream payment function via CircuitBreaker.
+    2. The downstream encounters transient outages, throwing failures.
     3. After failure threshold (3 failures), circuit breaker trips to OPEN.
-    4. Subsequent calls fail fast with RpcCircuitOpenError without hitting downstream service.
-    5. After recovery timeout, circuit enters HALF-OPEN, allows test probe, and recovers to CLOSED.
+    4. Subsequent calls fail fast with RpcCircuitOpenError without hitting the downstream.
+    5. After recovery timeout, the circuit is HALF-OPEN and admits `half_open_max_calls` (one)
+       probe at a time: a second call while the probe is in flight is refused, not forwarded.
+    6. The probe succeeds and the circuit recovers to CLOSED.
     """
     config = CircuitBreakerConfig(
         failure_threshold=3,
@@ -294,12 +353,16 @@ async def test_scenario_3_resilient_rpc_with_circuit_breaking() -> None:
 
     downstream_calls: int = 0
     should_fail: bool = True
+    release_probe = asyncio.Event()
+    hold_probe: bool = False
 
     async def payment_service_charge(amount: float) -> dict[str, str]:
         nonlocal downstream_calls
         downstream_calls += 1
         if should_fail:
             raise RPCTimeoutError("Payment gateway database timeout")
+        if hold_probe:
+            await release_probe.wait()
         return {"status": "paid", "amount": str(amount)}
 
     # Failures 1, 2, 3
@@ -321,9 +384,21 @@ async def test_scenario_3_resilient_rpc_with_circuit_breaking() -> None:
     await asyncio.sleep(0.12)
     assert cb.state == HALF_OPEN
 
-    # Recovery: downstream heals
+    # Recovery: downstream heals, and the first probe is held in flight
     should_fail = False
-    result = await cb.call(payment_service_charge, 50.0)
+    hold_probe = True
+    probe = asyncio.create_task(cb.call(payment_service_charge, 50.0))
+    await until(lambda: downstream_calls == 4, "the probe to reach the downstream")
+
+    # The limit binds: a second call while the probe is in flight is refused, not forwarded.
+    # Bounded, so a breaker that forwarded it would fail here and not wait on the held probe.
+    try:
+        with pytest.raises(RpcCircuitOpenError):
+            await asyncio.wait_for(cb.call(payment_service_charge, 50.0), timeout=1.0)
+        assert downstream_calls == 4, "HALF_OPEN must not admit more than half_open_max_calls"
+    finally:
+        release_probe.set()
+    result = await probe
     assert result["status"] == "paid"
     assert downstream_calls == 4
     # Circuit recovered to CLOSED
@@ -338,6 +413,7 @@ async def test_scenario_3_resilient_rpc_with_circuit_breaking() -> None:
 @pytest.mark.asyncio
 async def test_scenario_4_async_event_fanout_with_correlation_tracing(
     transport_service_factory: Any,
+    mock_transport: Connection,
 ) -> None:
     """Scenario 4: 1-to-N event fanout with end-to-end correlation propagation.
 
@@ -353,7 +429,7 @@ async def test_scenario_4_async_event_fanout_with_correlation_tracing(
        - audit.entry_logged
     4. All three secondary events carry the identical X-Correlation-ID: trace-fanout-777.
     """
-    transport = MockNatsTransport()
+    transport = mock_transport
     trace_id = "trace-fanout-777"
 
     # Worker 1: Welcome Email
@@ -378,10 +454,6 @@ async def test_scenario_4_async_event_fanout_with_correlation_tracing(
     analytics_svc = transport_service_factory(AnalyticsWorker, name="analytics_svc")
     audit_svc = transport_service_factory(AuditWorker, name="audit_svc")
 
-    for svc in (email_svc, analytics_svc, audit_svc):
-        svc.container.nc = transport
-        svc._discover_handlers()
-
     # Original event emitted
     root_event_payload = {
         "data": {"user_id": "usr_99", "email": "alice@example.com", "username": "alice"},
@@ -391,22 +463,27 @@ async def test_scenario_4_async_event_fanout_with_correlation_tracing(
     }
     raw_event = json.dumps(root_event_payload).encode()
 
-    # Dispatch to all three workers (fanout)
-    for svc in (email_svc, analytics_svc, audit_svc):
-        msg = MockJetStreamMsg(
-            subject="users.registered",
-            data=raw_event,
-            headers={"X-Correlation-ID": trace_id},
+    secondary = {"email.dispatched", "analytics.user_indexed", "audit.entry_logged"}
+
+    def emitted() -> set[str]:
+        return {m.subject for m in transport.broker.published} & secondary
+
+    # The services start as they would on a broker, and the event is published ONCE: the broker
+    # delivers it to every subscription outside a queue group, so three secondary events means
+    # the one message reached three listeners. Dispatching to each service by hand would show
+    # only that each can handle the event.
+    async with started(transport, email_svc, analytics_svc, audit_svc):
+        # A fanout listener takes no queue group; with one, the broker, like a server, would hand
+        # the message to a single member of it.
+        asked = [s.queue for s in transport.broker.subscribed if s.subject == "users.registered"]
+        assert asked == [None, None, None], transport.broker.subscribed
+
+        await transport.publish(
+            "users.registered", raw_event, headers={"X-Correlation-ID": trace_id}
         )
-        await svc.container._dispatch_event(msg)
+        await until(lambda: emitted() == secondary, "all three secondary events")
 
-    # Inspect published secondary events
-    emitted_subjects = [m[0] for m in transport.published_messages]
-    assert "email.dispatched" in emitted_subjects
-    assert "analytics.user_indexed" in emitted_subjects
-    assert "audit.entry_logged" in emitted_subjects
-
-    for subj, data_bytes, _headers, _reply in transport.published_messages:
+    for subj, data_bytes in ((m.subject, m.data) for m in transport.broker.published):
         envelope = json.loads(data_bytes.decode())
         assert envelope["correlation_id"] == trace_id, (
             f"Event on '{subj}' MUST preserve correlation ID '{trace_id}'"
@@ -431,10 +508,11 @@ async def test_scenario_5_service_discovery_and_schema_catalog(
     4. Verifies contract compatibility: the payload schema emitted by OrderService matches
        the validated_listener schema expected by NotificationService.
     """
-    transport = MockNatsTransport()
 
     class OrderProducerService(CliffracerService):
         """Order producer service emitting customer orders."""
+
+        order_created = Output(OrderCreatedEvent, "orders.created")
 
         @rpc
         async def submit(self, order: OrderSubmitRequest) -> dict[str, str]:
@@ -456,40 +534,56 @@ async def test_scenario_5_service_discovery_and_schema_catalog(
         NotificationConsumerService, name="notif_cons", jetstream_enabled=True
     )
 
-    order_svc.container.nc = transport
-    notif_svc.container.nc = transport
+    # Read through the harness's own describe, not over the broker: the consumer's durable listener
+    # needs JetStream to start, and the broker does not model streams, so neither service is started.
+    async with ServiceTestHarness(order_svc) as order_h, ServiceTestHarness(notif_svc) as notif_h:
+        order_desc_data = await order_h.describe()
+        notif_desc_data = await notif_h.describe()
 
-    order_svc._discover_handlers()
-    notif_svc._discover_handlers()
-
-    await transport.subscribe("orders_prod.describe", order_svc.container._handle_describe_request)
-    await transport.subscribe("notif_cons.describe", notif_svc.container._handle_describe_request)
-
-    # Query describe for OrderProducerService over NATS transport
-    order_desc_msg = await transport.request(
-        "orders_prod.describe",
-        payload=b"",
-        headers={"X-Correlation-ID": "corr-catalog-01"},
-    )
-    assert order_desc_msg is not None and order_desc_msg.data is not None
-    order_desc_data = json.loads(order_desc_msg.data.decode())
-
-    # Verify Producer Description
+    # Producer: its methods, and the event it declares it emits
     assert order_desc_data["service"] == "orders_prod"
-    assert "methods" in order_desc_data
     submit_method = next((m for m in order_desc_data["methods"] if m["name"] == "submit"), None)
     assert submit_method is not None
     assert submit_method["doc"] == "Submit a new customer order for fulfillment."
+    (emitted,) = order_desc_data["outputs"]
+    assert emitted["subject"] == "orders.created", emitted
 
-    # Query describe for NotificationConsumerService over NATS transport
-    notif_desc_msg = await transport.request(
-        "notif_cons.describe",
-        payload=b"",
-        headers={"X-Correlation-ID": "corr-catalog-02"},
-    )
-    assert notif_desc_msg is not None and notif_desc_msg.data is not None
-    notif_desc_data = json.loads(notif_desc_msg.data.decode())
-
+    # Consumer: the listener it declares, as the catalog sees it
     assert notif_desc_data["service"] == "notif_cons"
-    assert "version" in notif_desc_data
-    assert "description_hash" in notif_desc_data
+    (listener,) = notif_desc_data["listeners"]
+    assert listener["pattern"] == "orders.created", listener
+    assert listener["durable"] == "notif_worker", listener
+    assert listener["schema"]["qualname"] == "OrderCreatedEvent", listener
+
+    # Contract compatibility: the schema the consumer validates is the one the producer emits
+    consumer_schema = notif_desc_data["components"][listener["schema"]["schema_hash"]]
+    assert consumer_schema == emitted["schema"]["validation"], (consumer_schema, emitted)
+    assert listener["pattern"] == emitted["subject"]
+
+
+@pytest.mark.asyncio
+async def test_CONTROL_a_consumer_expecting_another_schema_does_not_match_the_producer(
+    transport_service_factory: Any,
+) -> None:
+    """The comparison in scenario 5 is not vacuously true: a consumer whose model differs fails it."""
+
+    class OrderProducerService(CliffracerService):
+        order_created = Output(OrderCreatedEvent, "orders.created")
+
+    class DriftedConsumer(CliffracerService):
+        @validated_listener("orders.created", DifferentOrderCreatedEvent, durable="drifted")
+        async def on_order(self, message: DifferentOrderCreatedEvent) -> None:
+            pass
+
+    producer = transport_service_factory(OrderProducerService, name="orders_prod")
+    consumer = transport_service_factory(
+        DriftedConsumer, name="drifted_cons", jetstream_enabled=True
+    )
+
+    async with ServiceTestHarness(producer) as produced, ServiceTestHarness(consumer) as consumed:
+        (emitted,) = (await produced.describe())["outputs"]
+        consumer_desc = await consumed.describe()
+    (listener,) = consumer_desc["listeners"]
+
+    consumer_schema = consumer_desc["components"][listener["schema"]["schema_hash"]]
+    assert consumer_schema != emitted["schema"]["validation"]

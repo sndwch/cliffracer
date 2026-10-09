@@ -8,9 +8,13 @@ import asyncio
 import json
 
 import pytest
+from cliffracer_resilience import ResilienceExtension, rate_limit
+from nats.js.api import AckPolicy
 from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig, StreamSpec, listener, validated_listener
+from cliffracer.core.discovery import HandlerDiscovery
+from tests.broker_isolation import prefixed_name
 from tests.conftest import broker_url
 
 pytestmark = pytest.mark.integration
@@ -45,7 +49,7 @@ async def _clean_streams():
         js = nc.jetstream()
         for name in ("ITEST", "ITEST_DLQ", "NSTEST", "NSTEST_DLQ"):
             try:
-                await js.delete_stream(name)
+                await js.delete_stream(prefixed_name(name))
             except Exception:
                 pass
         await nc.close()
@@ -104,7 +108,16 @@ async def test_the_durable_consumer_survives_a_service_stop():
         async def on_ping(self, subject: str) -> None:
             pass
 
-    svc = Subscriber(_config("itest_sub"))
+    # Non-default tuning, so that what the server holds can only have come from this service's
+    # configuration: the defaults would be read back whether or not they were ever sent.
+    svc = Subscriber(
+        _config(
+            "itest_sub",
+            jetstream_ack_wait=7.0,
+            jetstream_max_deliver=4,
+            jetstream_max_ack_pending=11,
+        )
+    )
     await svc.start()
     await asyncio.sleep(0.2)
     await svc.stop()
@@ -112,8 +125,14 @@ async def test_the_durable_consumer_survives_a_service_stop():
     nc = await nats.connect(broker_url())
     js = nc.jetstream()
     try:
-        info = await js.consumer_info("ITEST", "itest-survivor")
-        assert info.name == "itest-survivor"
+        durable = prefixed_name("itest-survivor")
+        # Looked up by name, so a consumer that stop() deleted raises NotFoundError here; the
+        # returned name cannot disagree with the one asked for, so it is not what is asserted.
+        info = await js.consumer_info(prefixed_name("ITEST"), durable)
+        assert info.config.ack_policy == AckPolicy.EXPLICIT
+        assert info.config.ack_wait == 7.0
+        assert info.config.max_deliver == 4
+        assert info.config.max_ack_pending == 11
     finally:
         await nc.close()
 
@@ -144,7 +163,7 @@ async def test_a_raising_handler_redelivers_then_lands_on_the_dlq():
         async def _dlq_cb(msg):
             dlq.append(json.loads(msg.data.decode()))
 
-        await svc.nc.subscribe("dlq.itest_boom", cb=_dlq_cb)
+        await svc.nc.subscribe(HandlerDiscovery.dlq_subject(svc.config), cb=_dlq_cb)
         await asyncio.sleep(0.1)
 
         await svc.publish_event("itest.events.boom", seq=1)
@@ -154,10 +173,100 @@ async def test_a_raising_handler_redelivers_then_lands_on_the_dlq():
                 break
             await asyncio.sleep(0.1)
 
-        assert len(attempts) >= 3, f"expected at least 3 deliveries, saw {len(attempts)}"
+        # Exactly the configured number, not at least: `>=` is satisfied by a budget blown to
+        # nine attempts, which is the load every poison message would then put on the handler.
+        assert len(attempts) == 3, f"expected exactly 3 deliveries, saw {len(attempts)}"
         assert dlq, "message never reached the DLQ subject"
-        assert dlq[0]["original_subject"] == "itest.events.boom"
-        assert dlq[0]["deliveries"] >= 3
+        assert dlq[0]["original_subject"] == HandlerDiscovery.with_namespace(
+            svc.config, "itest.events.boom"
+        )
+        assert dlq[0]["deliveries"] == 3
+
+        # Dead-lettered means finished: past the ack wait and the longest backoff, the handler
+        # has not been called again and nothing else reached the DLQ.
+        await asyncio.sleep(cfg.jetstream_ack_wait * 2 + cfg.jetstream_max_backoff)
+        assert len(attempts) == 3, f"redelivered after the DLQ: {len(attempts)} attempts"
+        assert len(dlq) == 1, f"dead-lettered more than once: {len(dlq)}"
+    finally:
+        await svc.stop()
+
+
+@pytest.mark.nats_required
+@pytest.mark.asyncio
+async def test_the_server_side_consumer_carries_the_configured_tuning():
+    """Read the durable back from the broker: the tuning is what the SERVER enforces.
+
+    The redelivery count above shows `max_deliver` end to end; this is the one place that reads
+    the consumer the service created, so `ack_wait`, `max_ack_pending` and the ack policy are
+    seen where they decide and not only through their effects.
+    """
+
+    class Tuned(CliffracerService):
+        @listener("itest.events.tuned", durable="itest-tuned")
+        async def on_tuned(self, subject: str) -> None:
+            pass
+
+    svc = Tuned(
+        _config(
+            "itest_tuned",
+            jetstream_max_deliver=4,
+            jetstream_ack_wait=2.5,
+            jetstream_max_ack_pending=7,
+        )
+    )
+    await svc.start()
+    try:
+        info = await svc.js.consumer_info(prefixed_name("ITEST"), prefixed_name("itest-tuned"))
+    finally:
+        await svc.stop()
+
+    assert info.config.max_deliver == 4
+    assert info.config.ack_wait == 2.5
+    assert info.config.max_ack_pending == 7
+    assert info.config.ack_policy == AckPolicy.EXPLICIT
+
+
+@pytest.mark.nats_required
+@pytest.mark.asyncio
+async def test_durable_work_waits_for_rate_limit_capacity_and_then_runs():
+    processed: list[str] = []
+
+    class LimitedOrders(CliffracerService):
+        resilience = ResilienceExtension()
+
+        @listener("itest.events.limited", durable="itest-limited-orders")
+        @rate_limit(calls=1, window=0.25)
+        async def on_order(self, order_id: str) -> None:
+            processed.append(order_id)
+
+    svc = LimitedOrders(
+        _config(
+            "itest_limited",
+            jetstream_max_deliver=3,
+            jetstream_nak_backoff=0.05,
+            jetstream_max_backoff=0.1,
+            jetstream_ack_wait=1.0,
+        )
+    )
+    await svc.start()
+    try:
+        await svc.publish_event("itest.events.limited", order_id="order-1")
+        for _ in range(50):
+            if processed:
+                break
+            await asyncio.sleep(0.01)
+        assert processed == ["order-1"]
+
+        loop = asyncio.get_running_loop()
+        published_at = loop.time()
+        await svc.publish_event("itest.events.limited", order_id="order-2")
+        for _ in range(100):
+            if len(processed) == 2:
+                break
+            await asyncio.sleep(0.01)
+
+        assert processed == ["order-1", "order-2"]
+        assert loop.time() - published_at >= 0.15
     finally:
         await svc.stop()
 
@@ -194,7 +303,7 @@ async def test_a_namespaced_service_dead_letters_an_invalid_message_for_real():
         async def _dlq_cb(msg):
             dlq.append(json.loads(msg.data.decode()))
 
-        await svc.nc.subscribe("utils.dlq.ns_svc", cb=_dlq_cb)
+        await svc.nc.subscribe(HandlerDiscovery.dlq_subject(svc.config), cb=_dlq_cb)
         await asyncio.sleep(0.1)
 
         await svc.publish_event("events.ping", seq="not-a-number")
@@ -205,7 +314,13 @@ async def test_a_namespaced_service_dead_letters_an_invalid_message_for_real():
             await asyncio.sleep(0.1)
 
         assert dlq, "invalid message never reached the namespaced DLQ subject"
-        assert dlq[0]["original_subject"] == "utils.events.ping"
+        assert dlq[0]["original_subject"] == HandlerDiscovery.with_namespace(
+            svc.config, "events.ping"
+        )
+        # the body that failed validation, and why
+        assert dlq[0]["schema"] == "Ping", dlq[0]
+        assert dlq[0]["payload"]["data"]["seq"] == "not-a-number", dlq[0]
+        assert [tuple(e["loc"]) for e in dlq[0]["errors"]] == [("seq",)], dlq[0]
     finally:
         await svc.stop()
 
@@ -226,9 +341,10 @@ async def test_two_replicas_share_one_durable_consumer():
         return Replica(_config("itest_replica"))
 
     a, b = _make("a"), _make("b")
-    await a.start()
-    await b.start()
+    # Both starts are inside the try: a second start that raises must still stop the first.
     try:
+        await a.start()
+        await b.start()
         await asyncio.sleep(0.2)
         await a.publish_event("itest.events.shared", seq=1)
         await asyncio.sleep(1.0)
@@ -240,14 +356,38 @@ async def test_two_replicas_share_one_durable_consumer():
 
 @pytest.mark.nats_required
 @pytest.mark.asyncio
-async def test_an_identical_stream_declaration_from_two_services_is_a_no_op():
-    """A publisher and its consumer both declare the shared stream."""
+async def test_an_identical_stream_declaration_from_two_services_is_a_no_op(monkeypatch):
+    """A publisher and its consumer both declare the shared stream.
+
+    "No-op" is read from the server: the second service's start issues no `add_stream` and no
+    `update_stream` (a rewrite to the configuration the stream already has does not raise, and is
+    the boot-time churn the design exists to prevent), and the stream is unchanged.
+    """
+    from nats.js import JetStreamContext
+
     a = CliffracerService(_config("itest_a"))
     b = CliffracerService(_config("itest_b"))
     await a.start()
     try:
+        before = await a.container.connection.js.stream_info(prefixed_name("ITEST"))
+
+        calls: list[str] = []
+        for method in ("add_stream", "update_stream"):
+            real = getattr(JetStreamContext, method)
+
+            def recording(self, *args, _real=real, _name=method, **kwargs):
+                calls.append(_name)
+                return _real(self, *args, **kwargs)
+
+            monkeypatch.setattr(JetStreamContext, method, recording)
+
         await b.start()  # must not raise
         await b.stop()
+
+        after = await a.container.connection.js.stream_info(prefixed_name("ITEST"))
+        assert calls == [], f"the second service rewrote the shared stream: {calls}"
+        assert after.config == before.config
+        assert after.state.first_seq == before.state.first_seq
     finally:
         await a.stop()
 

@@ -1,5 +1,6 @@
 """Tests for native idempotency key generation and JetStream deduplication."""
 
+import hashlib
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -15,6 +16,19 @@ from cliffracer import (
     idempotent,
 )
 from cliffracer.core.idempotency import compute_payload_hash, format_nats_msg_id
+from cliffracer.core.jetstream import all_streams
+from tests.broker_isolation import prefixed_name, prefixed_subject
+
+
+def _effective(spec: StreamSpec) -> StreamSpec:
+    """The spec as the service will create it on the broker, under the prefix."""
+    return spec.model_copy(
+        update={
+            "name": prefixed_name(spec.name),
+            "subjects": [prefixed_subject(x) for x in spec.subjects],
+        }
+    )
+
 
 pytestmark = pytest.mark.unit
 
@@ -22,10 +36,6 @@ pytestmark = pytest.mark.unit
 class OrderRequest(BaseModel):
     order_id: str
     amount: float
-
-
-class NestedOrder(BaseModel):
-    data: OrderRequest
 
 
 class TestIdempotencyContext:
@@ -117,18 +127,34 @@ class TestFormatNatsMsgId:
         assert scoped == "orders.created:ord_101"
 
     def test_oversized_key_hashed(self):
-        """Keys or combined lengths exceeding 128 bytes are hashed to SHA-256."""
+        """A key over 128 bytes is replaced by its SHA-256 and the subject prefix is kept: the
+        prefix is what stops two subjects sharing one dedup id."""
         long_key = "a" * 200
         scoped = format_nats_msg_id("orders.created", long_key)
-        assert len(scoped) <= 128
-        assert not scoped.endswith(long_key)
+        assert scoped == f"orders.created:{hashlib.sha256(long_key.encode('utf-8')).hexdigest()}"
+
+    def test_a_scoped_value_over_the_bound_with_a_short_key_is_hashed_whole(self):
+        """The second branch: subject and key together over 128 bytes, each short enough alone.
+        The whole scoped value is hashed, so the result is the bare digest."""
+        subject = "orders." + "x" * 110
+        scoped = format_nats_msg_id(subject, "k" * 20)
+        assert scoped == hashlib.sha256(f"{subject}:{'k' * 20}".encode()).hexdigest()
 
     def test_hash_payload_format(self):
-        """When hash_payload=True, the formatted key is bounded and subject-scoped."""
-        payload_hash = compute_payload_hash({"x": 1})
-        scoped = format_nats_msg_id("orders.created", payload_hash, hash_payload=True)
-        assert len(scoped) <= 128
-        assert scoped.startswith("orders.created:")
+        """When hash_payload=True, the key is SHA-256 hashed even when within size bounds."""
+        key = "order_abc_123"
+        expected_hash = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        scoped = format_nats_msg_id("orders.created", key, hash_payload=True)
+
+        assert scoped == f"orders.created:{expected_hash}"
+        assert len(scoped) == len("orders.created:") + 64
+
+    def test_hash_payload_false_preserves_raw_key(self):
+        """When hash_payload=False, a short key is included directly in the header value."""
+        key = "order_abc_123"
+        scoped = format_nats_msg_id("orders.created", key, hash_payload=False)
+
+        assert scoped == f"orders.created:{key}"
 
 
 class TestIdempotentDecorator:
@@ -271,15 +297,15 @@ class TestStreamSpecDuplicateWindow:
         assert cfg.duplicate_window == 300.0
 
     def test_matches_checks_duplicate_window(self):
-        """StreamSpec.matches() compares duplicate_window."""
+        """Declared-field matching compares duplicate_window."""
         spec = StreamSpec(name="TEST", subjects=["test.*"], duplicate_window_seconds=300.0)
         matching_cfg = spec.to_stream_config()
-        assert spec.matches(matching_cfg)
+        assert spec.matches_declared_fields(matching_cfg)
 
         drifted_cfg = StreamSpec(
             name="TEST", subjects=["test.*"], duplicate_window_seconds=120.0
         ).to_stream_config()
-        assert not spec.matches(drifted_cfg)
+        assert not spec.matches_declared_fields(drifted_cfg)
 
 
 class TestPublishEventIdempotency:
@@ -362,42 +388,91 @@ class TestPublishEventIdempotency:
         payload_hash = compute_payload_hash({"order_id": "auto_789", "amount": 12.0})
         assert payload_hash in msg_id
 
+    @staticmethod
+    async def _msg_id(config_flag: bool = False, **publish_kwargs) -> str:
+        svc = CliffracerService(
+            ServiceConfig(
+                name="test_svc", jetstream_enabled=False, idempotent_publishing=config_flag
+            )
+        )
+        svc.nc = AsyncMock()
+        await svc.publish_event("orders.created", order_id="o1", amount=5.0, **publish_kwargs)
+        return svc.nc.publish.call_args.kwargs["headers"]["Nats-Msg-Id"]
 
+    @pytest.mark.asyncio
+    async def test_the_config_switch_and_the_call_site_switch_emit_one_id(self):
+        """Two services publishing the same event deduplicate whichever switch each uses."""
+        from_config = await self._msg_id(config_flag=True)
+        from_call_site = await self._msg_id(idempotent=True)
+
+        derived = f"orders.created:{compute_payload_hash({'order_id': 'o1', 'amount': 5.0})}"
+        assert from_config == derived
+        assert from_call_site == derived
+
+    @pytest.mark.asyncio
+    async def test_an_explicit_key_survives_the_idempotent_switch(self):
+        """The business key a caller passes is the id, with or without the switch."""
+        assert await self._msg_id(idempotency_key="k1") == "orders.created:k1"
+        assert await self._msg_id(idempotency_key="k1", idempotent=True) == "orders.created:k1"
+
+    @pytest.mark.asyncio
+    async def test_an_ambient_key_survives_the_idempotent_switch(self):
+        class Handler(CliffracerService):
+            @idempotent(key="order_id")
+            async def process(self, order_id: str) -> None:
+                await self.publish_event("orders.created", idempotent=True, order_id=order_id)
+
+        svc = Handler(ServiceConfig(name="test_svc", jetstream_enabled=False))
+        svc.nc = AsyncMock()
+        await svc.process("ambient_456")
+
+        assert svc.nc.publish.call_args.kwargs["headers"]["Nats-Msg-Id"] == (
+            "orders.created:ambient_456"
+        )
+
+
+@pytest.mark.nats_required
 @pytest.mark.asyncio
 async def test_live_jetstream_idempotent_deduplication():
     """Verify live NATS JetStream deduplication via Nats-Msg-Id within duplicate window."""
     import nats
 
+    from tests.conftest import broker_url
+
     stream_name = "IDEMP_LIVE_STREAM"
     dlq_stream_name = "IDEMP_LIVE_DLQ"
     subject = "idemp.live.event"
 
+    url = broker_url()
     try:
-        nc = await nats.connect("nats://127.0.0.1:4222", connect_timeout=2.0)
+        nc = await nats.connect(url, connect_timeout=2.0)
     except Exception:
-        pytest.skip("Local NATS broker not available on nats://127.0.0.1:4222")
+        pytest.skip(f"Local NATS broker not available on {url}")
 
     js = nc.jetstream()
 
     # Clean up any leftover stream
     for s in (stream_name, dlq_stream_name):
         try:
-            await js.delete_stream(s)
+            await js.delete_stream(prefixed_name(s))
         except Exception:
             pass
 
     # Declare stream with 60s duplicate window and DLQ stream
     spec = StreamSpec(name=stream_name, subjects=[subject], duplicate_window_seconds=60.0)
     dlq_spec = StreamSpec(name=dlq_stream_name, subjects=["dlq.*"])
-    await js.add_stream(spec.to_stream_config())
-    await js.add_stream(dlq_spec.to_stream_config())
+    # The bare specs still go to `ServiceConfig`, which applies the prefix
+    # itself; these raw pre-creations must address what the service will use, or
+    # the publish lands in a stream this test never reads.
+    await js.add_stream(_effective(spec).to_stream_config())
+    await js.add_stream(_effective(dlq_spec).to_stream_config())
 
     class IdempService(CliffracerService):
         def __init__(self):
             super().__init__(
                 ServiceConfig(
                     name="idemp_svc",
-                    nats_url="nats://127.0.0.1:4222",
+                    nats_url=url,
                     jetstream_enabled=True,
                     jetstream_streams=[spec, dlq_spec],
                 )
@@ -429,7 +504,7 @@ async def test_live_jetstream_idempotent_deduplication():
         assert ack2.seq == 1  # Sequence matches original message sequence
 
         # Verify stream message count is still 1
-        info = await js.stream_info(stream_name)
+        info = await js.stream_info(prefixed_name(stream_name))
         assert info.state.messages == 1
 
         # Publish 3 with DIFFERENT idempotency key
@@ -440,9 +515,25 @@ async def test_live_jetstream_idempotent_deduplication():
 
     finally:
         await svc.stop()
-        for s in (stream_name, dlq_stream_name):
+        # Delete what was actually CREATED, read back from the config rather
+        # than recomputed from the constants above. The container declares these
+        # specs through `ServiceConfig`, which renames them with `prefixed_name`,
+        # so the broker holds `t<session>_<module>_IDEMP_LIVE_STREAM` while a
+        # delete of the bare name asks for something that never existed -- and
+        # `except Exception: pass` made deleting nothing look exactly like
+        # deleting them. 181 runs left 362 streams on the shared broker that way.
+        for spec in svc.config.effective_jetstream_streams:
             try:
-                await js.delete_stream(s)
-            except Exception:
-                pass
+                await js.delete_stream(spec.name)
+            except Exception as exc:  # noqa: BLE001 - teardown must not fail a green run
+                print(f"teardown could not delete {spec.name!r}: {exc}")
+
+        # And assert it. A delete loop that reports its own failures still
+        # cannot say whether it named everything the run created.
+        left = [
+            info.config.name
+            for info in await all_streams(js)
+            if info.config.name.startswith(prefixed_name("IDEMP_LIVE"))
+        ]
         await nc.close()
+        assert not left, f"this module left {len(left)} stream(s) behind: {left}"

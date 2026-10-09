@@ -6,8 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from cliffracer import CliffracerService, ServiceConfig, listener, rpc
-from cliffracer.core.extension import Extension, RejectMessage, WorkerContext
+from cliffracer import (
+    CliffracerService,
+    Extension,
+    RejectMessage,
+    ServiceConfig,
+    WorkerContext,
+    listener,
+    rpc,
+)
+from cliffracer.core.discovery import HandlerDiscovery
 
 pytestmark = [pytest.mark.integration, pytest.mark.nats_required]
 
@@ -33,9 +41,10 @@ class AuditExtension(Extension):
 
     def __init__(self, *, require_signature: bool = False) -> None:
         self.require_signature = require_signature
-        # DECLARED here, CREATED in setup(). bind() is a shallow copy, so a
-        # dict built in __init__ is the SAME object in every bound copy, and
-        # two services would share each other's counts.
+        # DECLARED here, CREATED in setup(). bind() runs __init__ again for
+        # each service, so a dict built here would not be shared either; the
+        # counts start in setup() because that is where per-service state
+        # begins, and where a connection, timer or worker would have to go.
         self.counts: dict[str, int] | None = None
 
     async def setup(self, ctx) -> None:
@@ -118,7 +127,7 @@ async def _until(predicate, timeout=5.0) -> bool:
 async def _rpc(watcher, method: str, headers: dict | None = None, **kwargs) -> dict:
     """Invoke orders.rpc.<method> via nc.request with optional NATS headers."""
     reply = await watcher.nc.request(
-        f"orders.rpc.{method}",
+        HandlerDiscovery.outbound_subject(watcher.config, "orders", "rpc", method),
         json.dumps(kwargs).encode(),
         headers=headers,
         timeout=5,
@@ -148,7 +157,9 @@ async def test_a_signed_call_runs_and_is_audited(running):
     assert body.get("result") == {"placed": "widget"}, body
     assert await _until(lambda: seen), "no audit record was published"
     assert seen[-1]["kind"] == "rpc"
-    assert seen[-1]["on_subject"] == "orders.rpc.place"
+    assert seen[-1]["on_subject"] == HandlerDiscovery.outbound_subject(
+        watcher.config, "orders", "rpc", "place"
+    )
     assert orders.audit.counts == {"ok": 1, "failed": 0, "refused": 0}
 
 

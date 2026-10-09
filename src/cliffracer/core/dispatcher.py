@@ -17,11 +17,12 @@ from .dispatch import (
     DispatchOutcome,
     EventDispatcher,
     ExtensionPipeline,
+    HandlerLimits,
     JetStreamDispatcher,
     OutboundDispatcher,
     RpcDispatcher,
     _HandlerMeta,
-    _JetStreamHeartbeat,
+    default_max_queued,
 )
 from .extension import Extension, WorkerContext
 from .registry import ServiceRegistry
@@ -29,8 +30,6 @@ from .service_config import ServiceConfig
 
 __all__ = [
     "DispatchOutcome",
-    "_HandlerMeta",
-    "_JetStreamHeartbeat",
     "ExtensionPipeline",
     "DeadLetterPublisher",
     "RpcDispatcher",
@@ -41,6 +40,23 @@ __all__ = [
 ]
 
 
+class _FollowingLogger:
+    """Stands in for a logger and forwards every use to the logger `provider` returns now.
+
+    Each collaborator keeps one of these where it kept a logger, so none of them holds
+    a stale one. Attribute access is all a logger is used for here (`info`, `warning`,
+    `bind`, `opt`, ...), so forwarding it is the whole interface.
+    """
+
+    __slots__ = ("_provider",)
+
+    def __init__(self, provider: Callable[[], Any]) -> None:
+        object.__setattr__(self, "_provider", provider)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider(), name)
+
+
 class MessageDispatcher:
     """Composite facade coordinating isolated message dispatch collaborators.
 
@@ -48,10 +64,9 @@ class MessageDispatcher:
     - Composes 6 collaborator classes:
       (ExtensionPipeline, DeadLetterPublisher, RpcDispatcher, EventDispatcher,
        JetStreamDispatcher, OutboundDispatcher).
-    - Preserves 100% backward compatibility for Container, ServiceTestHarness,
-      and all external packages.
-    - Zero circular duck-typing checks into container.__dict__.
-    - Every class remains <= 500 statements and < 800 lines.
+    - Holds no reference back to the container, and reads nothing from its
+      `__dict__`: an override is installed on the dispatcher through the
+      container's compatibility properties.
     """
 
     def __init__(
@@ -64,28 +79,40 @@ class MessageDispatcher:
         service: Any = None,
         task_spawner: Callable[[Coroutine[Any, Any, Any], str | None], asyncio.Task[Any]]
         | None = None,
+        logger_provider: Callable[[], Any] | None = None,
+        stopping_provider: Callable[[], bool] | None = None,
     ) -> None:
         self.registry = registry
         self.config = config
         self.connection_provider = connection_provider
         self._extensions = extensions
-        self.logger = logger or global_logger.bind(service=config.name)
+        self._logger = logger or global_logger.bind(service=config.name)
+        self._logger_provider = logger_provider
         self.service = service
         self.task_spawner = task_spawner
-        self.container: Any | None = None
+
+        # The collaborators log through the dispatcher's logger as it is when they
+        # log, not as it was when they were built: a service that replaces its
+        # logger after construction gets the dispatch layer's lines too.
+        following = _FollowingLogger(lambda: self.logger)
+        # One per service, shared by the RPC and event paths: a method's limit spans both.
+        self.limits = HandlerLimits(lambda: default_max_queued(self.config.max_rpc_in_flight))
 
         # Instantiated isolated collaborators
-        self.pipeline = ExtensionPipeline(self._extensions, self.logger)
+        self.pipeline = ExtensionPipeline(self._extensions, following, self.config)
         self.dlq = DeadLetterPublisher(
-            self.config, self.connection_provider, self.logger, self.service
+            self.config, self.connection_provider, following, self.service
         )
         self.rpc = RpcDispatcher(
             self.registry,
             self.config,
             self.pipeline,
             self.task_spawner,
-            self.logger,
+            following,
             self.service,
+            stopping_provider,
+            self.limits,
+            lambda: self.nc,
         )
         self.events = EventDispatcher(
             self.registry,
@@ -93,7 +120,8 @@ class MessageDispatcher:
             self.pipeline,
             self.dlq,
             self.task_spawner,
-            self.logger,
+            following,
+            self.limits,
         )
         self.jetstream = JetStreamDispatcher(
             self.config,
@@ -101,12 +129,23 @@ class MessageDispatcher:
             self.events,
             self.dlq,
             self.task_spawner,
-            self.logger,
+            following,
             self.service,
+            stopping_provider,
         )
-        self.outbound = OutboundDispatcher(
-            self.config, self.connection_provider, self.pipeline, self.logger
-        )
+        self.outbound = OutboundDispatcher(self.config, self.pipeline)
+
+    @property
+    def logger(self) -> Any:
+        """The service's current logger when a provider was given, else the one set."""
+        if self._logger_provider is not None:
+            return self._logger_provider()
+        return self._logger
+
+    @logger.setter
+    def logger(self, value: Any) -> None:
+        self._logger = value
+        self._logger_provider = None
 
     @property
     def extensions(self) -> list[Extension]:
@@ -173,8 +212,8 @@ class MessageDispatcher:
         """Handle incoming NATS RPC subscription message."""
         await self.rpc.on_rpc_request(msg)
 
-    async def _bounded_handle_rpc(self, msg: Any, sem: asyncio.Semaphore) -> None:
-        await self.rpc._bounded_handle_rpc(msg, sem)
+    async def _bounded_handle_rpc(self, msg: Any) -> None:
+        await self.rpc._bounded_handle_rpc(msg)
 
     async def on_describe_request(self, msg: Any) -> None:
         """Handle incoming NATS describe subscription message."""
@@ -184,24 +223,22 @@ class MessageDispatcher:
         """Handle incoming NATS fire-and-forget async RPC subscription message."""
         await self.rpc.on_async_request(msg)
 
-    async def _bounded_handle_async_rpc(self, msg: Any, sem: asyncio.Semaphore) -> None:
-        await self.rpc._bounded_handle_async_rpc(msg, sem)
+    async def _bounded_handle_async_rpc(self, msg: Any) -> None:
+        await self.rpc._bounded_handle_async_rpc(msg)
 
     def make_event_callback(self, pattern: str) -> Callable[[Any], Awaitable[None]]:
         """Construct a NATS message callback dispatching core events for a pattern."""
         return self.events.make_event_callback(pattern)
 
-    async def _bounded_handle_event(self, msg: Any, pattern: str, sem: asyncio.Semaphore) -> None:
-        await self.events._bounded_handle_event(msg, pattern, sem)
+    async def _bounded_handle_event(self, msg: Any, pattern: str) -> None:
+        await self.events._bounded_handle_event(msg, pattern)
 
     def make_jetstream_event_callback(self, pattern: str) -> Callable[[Any], Awaitable[None]]:
         """Construct a NATS message callback dispatching JetStream events for a pattern."""
         return self.jetstream.make_event_callback(pattern)
 
-    async def _bounded_handle_jetstream_event(
-        self, msg: Any, pattern: str, sem: asyncio.Semaphore
-    ) -> None:
-        await self.jetstream._bounded_handle_jetstream_event(msg, pattern, sem)
+    async def _bounded_handle_jetstream_event(self, msg: Any, pattern: str) -> None:
+        await self.jetstream._bounded_handle_jetstream_event(msg, pattern)
 
     # ---- Core Dispatch Pipelines ----
 
@@ -241,13 +278,18 @@ class MessageDispatcher:
         *,
         pattern: str | None = None,
         is_running_fn: Callable[[], bool] | None = None,
+        unsubscribe: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Continually fetch batches from a JetStream pull consumer while running."""
-        await self.jetstream.pull_loop(sub, durable, pattern=pattern, is_running_fn=is_running_fn)
+        await self.jetstream.pull_loop(
+            sub, durable, pattern=pattern, is_running_fn=is_running_fn, unsubscribe=unsubscribe
+        )
 
-    async def report_consumer_drift(self, sub: Any, durable: str) -> None:
+    async def report_consumer_drift(
+        self, sub: Any, durable: str, *, pattern: str | None = None
+    ) -> None:
         """Warn when server consumer configuration diverges from service configuration."""
-        await self.jetstream.report_consumer_drift(sub, durable)
+        await self.jetstream.report_consumer_drift(sub, durable, pattern=pattern)
 
     # ---- Dead Letter Queue Publishing ----
 
@@ -265,11 +307,24 @@ class MessageDispatcher:
         """Publish an unroutable or error diagnostic message to the dead-letter queue."""
         await self.dlq.publish_dlq(subject, payload=payload, headers=headers, **kwargs)
 
-    async def _dead_letter_decode_error(self, msg: Any, error: Exception) -> None:
-        await self.dlq.dead_letter_decode_error(msg, error)
+    async def _dead_letter_decode_error(self, msg: Any, error: Exception) -> bool:
+        return await self.dlq.dead_letter_decode_error(msg, error)
 
-    async def _dead_letter_terminated(self, msg: Any, error: Any, num_delivered: int) -> None:
-        await self.dlq.dead_letter_terminated(msg, error, num_delivered)
+    async def _dead_letter_terminated(
+        self,
+        msg: Any,
+        error: Any,
+        num_delivered: int,
+        delivery_limit: str | None = None,
+        correlation_id: str | None = None,
+    ) -> bool:
+        return await self.dlq.dead_letter_terminated(
+            msg,
+            error,
+            num_delivered,
+            delivery_limit=delivery_limit,
+            correlation_id=correlation_id,
+        )
 
     async def _handle_invalid_message(
         self,
@@ -279,8 +334,8 @@ class MessageDispatcher:
         schema: Any,
         on_invalid: str | None,
         correlation_id: str | None = None,
-    ) -> None:
-        await self.dlq.handle_invalid_message(
+    ) -> bool:
+        return await self.dlq.handle_invalid_message(
             subject, payload, error, schema, on_invalid, correlation_id=correlation_id
         )
 
@@ -296,7 +351,7 @@ class MessageDispatcher:
 
     async def _run_send_hooks(self, ctx: WorkerContext, send: Callable[[], Awaitable[Any]]) -> Any:
         """Execute extension outbound hooks around send."""
-        return await self.pipeline.run_send_hooks(ctx, send)
+        return await self.outbound.run_send_hooks(ctx, send)
 
     def _send_context(
         self, kind: str, subject: str, payload: dict[str, Any], correlation_id: str

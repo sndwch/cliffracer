@@ -11,9 +11,12 @@ Validates:
 import asyncio
 import inspect
 import warnings
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from cliffracer_resilience import circuit_breaker as breaker_module
 from cliffracer_resilience.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
@@ -21,10 +24,12 @@ from cliffracer_resilience.circuit_breaker import (
     ResilientMethodProxy,
     RpcCircuitOpenError,
 )
+from loguru import logger
 from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig, listener, rpc, validated_listener
 from cliffracer.core.container import _JetStreamHeartbeat
+from cliffracer.core.extension import Extension
 from cliffracer.core.jetstream import StreamDeclarationError, StreamSpec
 
 pytestmark = pytest.mark.unit
@@ -46,7 +51,7 @@ class OrderPayload(BaseModel):
 
 @pytest.mark.asyncio
 async def test_adversarial_supervised_task_exception_matrix():
-    """Supervised background tasks trap diverse exceptions with zero 'never retrieved' warnings."""
+    """Supervised background tasks that raise are all removed from active accounting."""
     config = ServiceConfig(name="stress_svc")
     svc = CliffracerService(config)
 
@@ -62,36 +67,22 @@ async def test_adversarial_supervised_task_exception_matrix():
         await asyncio.sleep(0.001)
         raise exc
 
-    with warnings.catch_warnings(record=True) as captured_warnings:
-        warnings.simplefilter("always")
+    tasks = []
+    for i in range(50):
+        exc = exception_types[i % len(exception_types)]
+        task = svc.container._spawn_supervised_task(_failing_work(exc), name=f"failing_task_{i}")
+        tasks.append(task)
 
-        tasks = []
-        for i in range(50):
-            exc = exception_types[i % len(exception_types)]
-            task = svc.container._spawn_supervised_task(
-                _failing_work(exc), name=f"failing_task_{i}"
-            )
-            tasks.append(task)
+    # Confirm all are tracked in active tasks
+    assert len(svc.container._active_tasks) == 50
 
-        # Confirm all are tracked in active tasks
-        assert len(svc.container._active_tasks) == 50
+    # Wait for all tasks to finish. Whether each exception is retrieved and
+    # logged is test_a_crashed_supervised_task_is_reported.py's: gather here
+    # would retrieve it itself.
+    await asyncio.wait(tasks)
 
-        # Wait for all tasks to finish
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Confirm all tasks were discarded from active tasks
-        assert len(svc.container._active_tasks) == 0
-
-        # Verify that every task's exception was recorded
-        for i, task in enumerate(tasks):
-            expected_exc = exception_types[i % len(exception_types)]
-            assert isinstance(task.exception(), type(expected_exc))
-
-        # Check for unretrieved exception warnings
-        unretrieved_warnings = [
-            w for w in captured_warnings if "Task exception was never retrieved" in str(w.message)
-        ]
-        assert len(unretrieved_warnings) == 0
+    # Confirm all tasks were discarded from active tasks
+    assert len(svc.container._active_tasks) == 0
 
 
 @pytest.mark.asyncio
@@ -103,7 +94,16 @@ async def test_adversarial_supervised_task_cancellation():
     async def _long_sleeping_work():
         await asyncio.sleep(10.0)
 
-    with patch.object(svc.container.logger, "error") as mock_log_error:
+    logged: list[Any] = []
+    sink = logger.add(lambda message: logged.append(message.record), level="ERROR")
+    # The other way cancellation can go noisy: the done-callback itself RAISING (reading the
+    # exception of a cancelled task raises CancelledError). The loop reports that through its
+    # exception handler as "Exception in callback ...", not through the logger.
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    loop_errors: list[dict[str, Any]] = []
+    loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+    try:
         tasks = [
             svc.container._spawn_supervised_task(_long_sleeping_work(), name=f"sleep_{i}")
             for i in range(20)
@@ -115,11 +115,16 @@ async def test_adversarial_supervised_task_cancellation():
             t.cancel()
 
         await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.sleep(0)  # the done-callbacks run on the iteration after the tasks finish
 
         # Discarded cleanly
         assert len(svc.container._active_tasks) == 0
-        # No error logged for cancelled tasks
-        mock_log_error.assert_not_called()
+    finally:
+        loop.set_exception_handler(previous_handler)
+        logger.remove(sink)
+    # No error logged for cancelled tasks, and no callback raised out of the loop
+    assert logged == []
+    assert loop_errors == []
 
 
 # ============================================================================
@@ -316,30 +321,49 @@ async def test_adversarial_async_rpc_concurrency_flood_limit():
 
 @pytest.mark.asyncio
 async def test_adversarial_concurrency_semaphore_leak_under_failures_and_cancellations():
-    """Concurrency semaphores never leak permits under mixed successes, failures, and cancellations."""
+    """Concurrency semaphores never leak permits under mixed successes, failures, and cancellations.
+
+    The cancellations are not left to scheduling: the first four handlers to enter (the whole
+    bound) are held on a gate, so they are in flight when the test cancels exactly those four,
+    and the other 36 then run with failures mixed in.
+    """
+    limit = 4
     active_count = 0
     max_active_observed = 0
+    entered = 0
     lock = asyncio.Lock()
+    gate = asyncio.Event()
+    running: list[asyncio.Task[Any]] = []
+    cancelled: list[int] = []
 
     class MixedOutcomeService(CliffracerService):
         @listener("events.mixed", fanout=True)
         async def on_mixed(self, subject: str, index: int = 0):
-            nonlocal active_count, max_active_observed
+            nonlocal active_count, max_active_observed, entered
             async with lock:
                 active_count += 1
                 max_active_observed = max(max_active_observed, active_count)
+                order = entered
+                entered += 1
+                if order < limit:
+                    running.append(asyncio.current_task())  # type: ignore[arg-type]
 
             try:
+                if order < limit:
+                    await gate.wait()
                 await asyncio.sleep(0.01)
                 if index % 4 == 1:
                     raise ValueError(f"failure on index {index}")
                 elif index % 4 == 2:
                     raise RuntimeError(f"error on index {index}")
+            except asyncio.CancelledError:
+                cancelled.append(index)
+                raise
             finally:
                 async with lock:
                     active_count -= 1
 
-    config = ServiceConfig(name="mixed_svc", max_event_concurrency=4)
+    config = ServiceConfig(name="mixed_svc", max_event_concurrency=limit)
     svc = MixedOutcomeService(config)
     svc._discover_handlers()
     svc._running = True
@@ -354,25 +378,32 @@ async def test_adversarial_concurrency_semaphore_leak_under_failures_and_cancell
         for i in range(40)
     ]
 
-    # Dispatch tasks
     dispatch_tasks = [asyncio.create_task(cb(m)) for m in msgs]
-    await asyncio.gather(*dispatch_tasks)
 
-    # Cancel a subset of active tasks to simulate aborts
-    for i, task in enumerate(list(svc.container._active_tasks)):
-        if i % 4 == 3:
-            task.cancel()
+    # The four held handlers fill the bound, so the rest wait on the semaphore; cancel exactly
+    # those four, and the waiting ones then take the freed permits.
+    deadline = asyncio.get_running_loop().time() + 2.0
+    while len(running) < limit:
+        assert asyncio.get_running_loop().time() < deadline, "the held handlers never all started"
+        await asyncio.sleep(0.005)
+    for task in running:
+        task.cancel()
 
+    # Bounded: a permit lost to a cancelled handler would leave the rest waiting for ever.
+    await asyncio.wait_for(asyncio.gather(*dispatch_tasks), timeout=5.0)
     if svc.container._active_tasks:
-        await asyncio.gather(*list(svc.container._active_tasks), return_exceptions=True)
+        await asyncio.wait_for(
+            asyncio.gather(*list(svc.container._active_tasks), return_exceptions=True), timeout=5.0
+        )
 
-    assert max_active_observed <= 4
+    assert len(cancelled) == limit
+    assert max_active_observed == limit
     assert active_count == 0
 
-    # Ensure all permits are restored to 4
+    # Ensure all permits are restored to the limit
     sem = svc.container._get_event_semaphore()
     assert sem is not None
-    assert sem._value == 4
+    assert sem._value == limit
 
 
 # ============================================================================
@@ -436,17 +467,29 @@ async def test_adversarial_dlq_namespacing_malformed_and_validation():
 @pytest.mark.asyncio
 async def test_adversarial_dlq_outbound_hooks_bypassed_strictly():
     """_publish_dlq never triggers application outbound send hooks."""
-    hook_called = False
+    sent_through_hooks: list[str] = []
 
-    async def sample_send_hook(ctx, call):
-        nonlocal hook_called
-        hook_called = True
-        return await call()
+    # A real extension: `before_call` is what the outbound pipeline runs for a
+    # send. (It reaches the list through the closure, because the framework
+    # deep-copies an extension declared on a class.)
+    class SendWatcher(Extension):
+        async def before_call(self, ctx) -> None:
+            sent_through_hooks.append(ctx.kind)
+
+    class Catalog(CliffracerService):
+        watcher = SendWatcher()
 
     config = ServiceConfig(name="catalog", namespace="ecommerce")
-    svc = CliffracerService(config)
+    svc = Catalog(config)
     svc.container.nc = AsyncMock()
-    svc.container._send_hooks = [sample_send_hook]
+    await svc.container._setup_extensions()
+
+    # The control: an ordinary publish does go through the hook, so its silence
+    # for the dead-letter publish below means something.
+    await svc.publish_event("catalog.updated", sku="s1")
+    assert sent_through_hooks == ["publish_event"]
+    sent_through_hooks.clear()
+    svc.container.nc.publish.reset_mock()
 
     await svc.container._publish_dlq(
         "dlq.catalog",
@@ -454,7 +497,7 @@ async def test_adversarial_dlq_outbound_hooks_bypassed_strictly():
         headers={"Trace-Id": "123"},
     )
 
-    assert hook_called is False
+    assert sent_through_hooks == []
     svc.container.nc.publish.assert_awaited_once()
     call_subject = svc.container.nc.publish.call_args[0][0]
     assert call_subject == "dlq.catalog"
@@ -501,12 +544,12 @@ async def test_adversarial_resilience_proxy_call_async_coroutine():
     mock_service = MagicMock()
     call_executed = False
 
-    async def mock_call_rpc_no_wait(svc_name, method, namespace=None, **kwargs):
+    async def mock_call_async(svc_name, method, namespace=None, **kwargs):
         nonlocal call_executed
         call_executed = True
         return None
 
-    mock_service.call_rpc_no_wait = mock_call_rpc_no_wait
+    mock_service.call_async = mock_call_async
 
     cb = CircuitBreaker("test_breaker", CircuitBreakerConfig())
     proxy = ResilientMethodProxy(
@@ -537,18 +580,24 @@ async def test_adversarial_resilience_proxy_call_async_coroutine():
 
 
 @pytest.mark.asyncio
-async def test_adversarial_resilience_proxy_half_open_state_and_probe_isolation():
-    """Fire-and-forget call_async preserves HALF_OPEN state and does not consume probe quota."""
+async def test_adversarial_resilience_proxy_half_open_state_and_probe_isolation(monkeypatch):
+    """Fire-and-forget call_async preserves HALF_OPEN state and does not consume probe quota.
+
+    The breaker's clock is a counter this test advances, so the OPEN to HALF_OPEN transition
+    happens when the test says and never because a slow machine let a real timeout pass.
+    """
+    now = [1000.0]
+    monkeypatch.setattr(breaker_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
     mock_service = MagicMock()
 
-    async def mock_call_rpc_no_wait(svc_name, method, namespace=None, **kwargs):
+    async def mock_call_async(svc_name, method, namespace=None, **kwargs):
         return None
 
-    mock_service.call_rpc_no_wait = mock_call_rpc_no_wait
+    mock_service.call_async = mock_call_async
 
     cb_config = CircuitBreakerConfig(
         failure_threshold=1,
-        recovery_timeout=0.01,
+        recovery_timeout=1.0,
         half_open_max_calls=1,
     )
     cb = CircuitBreaker("probe_test_breaker", cb_config)
@@ -568,8 +617,8 @@ async def test_adversarial_resilience_proxy_half_open_state_and_probe_isolation(
     with pytest.raises(RpcCircuitOpenError):
         proxy.call_async(order_id="1")
 
-    # 2. Wait for recovery timeout to transition to HALF_OPEN
-    await asyncio.sleep(0.02)
+    # 2. Pass the recovery timeout to transition to HALF_OPEN
+    now[0] += 1.5
     assert cb.state == CircuitState.HALF_OPEN
 
     # 3. In HALF_OPEN, call_async multiple times
@@ -723,7 +772,7 @@ def test_adversarial_resilience_method_proxy_weakref_gc():
     import gc
 
     class DummyService:
-        def call_rpc_no_wait(self, *args, **kwargs):
+        def call_async(self, *args, **kwargs):
             pass
 
     dummy = DummyService()

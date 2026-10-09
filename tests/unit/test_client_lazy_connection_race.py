@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from cliffracer.client import ServiceClient
+from tests.conftest import broker_url
 
 pytestmark = pytest.mark.unit
 
@@ -32,10 +33,10 @@ async def test_concurrent_connection_calls_open_single_connection():
         created_connections.append(nc)
         return nc
 
-    client = ServiceClient(service="test_svc", nats_url="nats://localhost:4222", verify=False)
+    client = ServiceClient(service="test_svc", nats_url=broker_url(), verify=False)
     assert client._nc is None
 
-    with patch("cliffracer.client.nats.connect", side_effect=fake_connect):
+    with patch("cliffracer.core.dial.connect", side_effect=fake_connect):
         conns = await asyncio.gather(*[client._connection() for _ in range(10)])
 
     assert connect_calls == 1
@@ -55,7 +56,7 @@ async def test_subsequent_calls_reuse_existing_connection_without_lock_contentio
 
     client = ServiceClient(service="test_svc", verify=False)
 
-    with patch("cliffracer.client.nats.connect", AsyncMock(return_value=mock_nc)) as mock_connect:
+    with patch("cliffracer.core.dial.connect", AsyncMock(return_value=mock_nc)) as mock_connect:
         c1 = await client._connection()
         c2 = await client._connection()
         c3 = await client._connection()
@@ -71,7 +72,7 @@ async def test_pre_supplied_connection_is_reused_without_connecting():
     existing_nc = AsyncMock()
     client = ServiceClient(nc=existing_nc, service="test_svc", verify=False)
 
-    with patch("cliffracer.client.nats.connect") as mock_connect:
+    with patch("cliffracer.core.dial.connect") as mock_connect:
         conns = await asyncio.gather(*[client._connection() for _ in range(5)])
 
     mock_connect.assert_not_called()
@@ -94,7 +95,7 @@ async def test_connection_failure_releases_lock_allowing_retry():
 
     client = ServiceClient(service="test_svc", verify=False)
 
-    with patch("cliffracer.client.nats.connect", side_effect=flaky_connect):
+    with patch("cliffracer.core.dial.connect", side_effect=flaky_connect):
         with pytest.raises(ConnectionError, match="Broker unreachable"):
             await client._connection()
 
@@ -125,15 +126,26 @@ async def test_concurrent_verify_calls_open_single_connection():
                 "service": "test_svc",
                 "version": "1.0",
                 "description_hash": "sha256:abc",
-                "methods": [],
+                "methods": [
+                    {
+                        "name": "ping",
+                        "doc": None,
+                        "params": [],
+                        "returns": {"kind": "scalar", "name": "none"},
+                        "signature_hash": "sha256:abc",
+                    }
+                ],
             }
         ).encode()
         nc.request.return_value = MockReply(desc_payload)
         return nc
 
-    client = ServiceClient(service="test_svc", verify=True)
+    class VerifiableClient(ServiceClient):
+        SIGNATURES = {"ping": "sha256:abc"}
 
-    with patch("cliffracer.client.nats.connect", side_effect=fake_connect):
+    client = VerifiableClient(service="test_svc", verify=True)
+
+    with patch("cliffracer.core.dial.connect", side_effect=fake_connect):
         await asyncio.gather(*[client.verify() for _ in range(5)])
 
     assert connect_calls == 1

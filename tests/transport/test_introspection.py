@@ -1,9 +1,12 @@
-"""Introspection primitives, over the in-memory transport.
+"""Introspection primitives, read from a service's own registries.
+
+These reach no transport: introspection answers from the handlers a service
+has registered, so nothing here publishes or subscribes.
 
 Covers Tiers 1-3:
 - Tier 1: Feature verification for Pydantic component schema extraction, listener & stream describe discovery, full docstring preservation (>=5 per feature).
 - Tier 2: Boundary & corner cases (complex nested models, optional/union fields, unannotated vs annotated listeners, multi-paragraph markdown docstrings).
-- Tier 3: Introspection output validation against JSON Schema and AsyncAPI 3.0 requirements.
+- Tier 3: Introspection output validation against JSON Schema and the contract a service declares.
 """
 
 from __future__ import annotations
@@ -27,15 +30,6 @@ from cliffracer.core.typed_rpc import build_handler_spec
 from cliffracer.introspect import Description, describe
 
 pytestmark = pytest.mark.unit
-
-try:
-    from cliffracer.introspect import EventListenerDescription, StreamDescription
-
-    HAS_LISTENER_STREAM_DESC = True
-except ImportError:
-    EventListenerDescription = None  # type: ignore[assignment, misc]
-    StreamDescription = None  # type: ignore[assignment, misc]
-    HAS_LISTENER_STREAM_DESC = False
 
 
 # ---------------------------------------------------------------------------
@@ -70,13 +64,6 @@ class InventoryEvent(BaseModel):
 
     sku: str
     new_quantity: int
-
-
-class RecursiveNode(BaseModel):
-    """Tree node structure testing recursive schema handling."""
-
-    node_id: str
-    children: list[RecursiveNode] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -156,16 +143,21 @@ def _call_describe(cls: type, **kwargs: Any) -> Description:
 
 
 def test_tier1_314_01_components_dict_present_in_description() -> None:
-    """Verify Description includes top-level components dictionary."""
+    """Verify Description extracts a populated components dictionary with valid schema hashes."""
     desc = _call_describe(CatalogService)
-    assert hasattr(desc, "components"), "Description must have 'components' field"
-    assert isinstance(desc.components, dict)
+    assert len(desc.components) > 0, "Components dictionary must contain extracted schemas"
+    assert all(
+        isinstance(k, str) and len(k) == 16 and all(c in "0123456789abcdef" for c in k)
+        for k in desc.components.keys()
+    ), "All component keys must be 16-character hexadecimal schema hashes"
+    assert all(isinstance(v, dict) and "title" in v for v in desc.components.values()), (
+        "All component schemas must be valid schema dictionaries containing a title"
+    )
 
 
 def test_tier1_314_02_rpc_param_models_extracted_to_components() -> None:
     """Verify Pydantic models used in RPC parameters are collected in components."""
     desc = _call_describe(CatalogService)
-    assert hasattr(desc, "components"), "Description missing components field"
     # Find OrderRequest schema
     schemas = desc.components.values()
     titles = [s.get("title") for s in schemas if isinstance(s, dict)]
@@ -175,7 +167,6 @@ def test_tier1_314_02_rpc_param_models_extracted_to_components() -> None:
 def test_tier1_314_03_rpc_return_models_extracted_to_components() -> None:
     """Verify Pydantic models used in RPC returns are collected in components."""
     desc = _call_describe(CatalogService)
-    assert hasattr(desc, "components"), "Description missing components field"
     schemas = desc.components.values()
     titles = [s.get("title") for s in schemas if isinstance(s, dict)]
     assert "ReceiptResponse" in titles, "ReceiptResponse schema must be present in components"
@@ -184,7 +175,6 @@ def test_tier1_314_03_rpc_return_models_extracted_to_components() -> None:
 def test_tier1_314_04_nested_pydantic_submodels_collected() -> None:
     """Verify nested Pydantic submodels (ItemModel inside OrderRequest) are cataloged."""
     desc = _call_describe(CatalogService)
-    assert hasattr(desc, "components"), "Description missing components field"
     schemas = desc.components.values()
     titles = [s.get("title") for s in schemas if isinstance(s, dict)]
     assert "ItemModel" in titles, "Nested ItemModel schema must be collected in components"
@@ -193,15 +183,15 @@ def test_tier1_314_04_nested_pydantic_submodels_collected() -> None:
 def test_tier1_314_05_validated_listener_schemas_in_components() -> None:
     """Verify @validated_listener schemas are collected in components."""
     desc = _call_describe(CatalogService)
-    assert hasattr(desc, "components"), "Description missing components field"
     schemas = desc.components.values()
     titles = [s.get("title") for s in schemas if isinstance(s, dict)]
     assert "InventoryEvent" in titles, "InventoryEvent schema must be present in components"
 
 
 def test_tier1_314_06_components_serialization_round_trip() -> None:
-    """Verify Description.to_dict() and from_dict() preserve components map."""
+    """Verify Description serialization preserves a populated components map."""
     desc = _call_describe(CatalogService)
+    assert len(desc.components) > 0, "Prerequisite: components map must be populated"
     d_dict = desc.to_dict()
     assert "components" in d_dict
     restored = Description.from_dict(d_dict)
@@ -212,16 +202,18 @@ def test_tier1_314_06_components_serialization_round_trip() -> None:
 
 
 def test_tier1_315_01_listeners_list_present_in_description() -> None:
-    """Verify Description includes listeners list."""
+    """Verify Description extracts all declared listeners for the service."""
     desc = _call_describe(CatalogService)
-    assert hasattr(desc, "listeners"), "Description must have 'listeners' field"
-    assert isinstance(desc.listeners, list)
+    discovered_patterns = {
+        getattr(item, "pattern", item.get("pattern") if isinstance(item, dict) else None)
+        for item in desc.listeners
+    }
+    assert discovered_patterns == {"alerts.cluster", "inventory.updated", "system.broadcast"}
 
 
 def test_tier1_315_02_listener_discovery_durable_and_fanout() -> None:
     """Verify @listener methods are cataloged with patterns, durable, and fanout."""
     desc = _call_describe(CatalogService)
-    assert hasattr(desc, "listeners"), "Description missing listeners field"
     patterns = [
         getattr(item, "pattern", item.get("pattern") if isinstance(item, dict) else None)
         for item in desc.listeners
@@ -232,7 +224,6 @@ def test_tier1_315_02_listener_discovery_durable_and_fanout() -> None:
 def test_tier1_315_03_validated_listener_discovery_with_schema_ref() -> None:
     """Verify @validated_listener is discovered with schema TypeRef dictionary."""
     desc = _call_describe(CatalogService)
-    assert hasattr(desc, "listeners"), "Description missing listeners field"
     val_listener = next(
         (item for item in desc.listeners if getattr(item, "pattern", None) == "inventory.updated"),
         None,
@@ -246,7 +237,6 @@ def test_tier1_315_03_validated_listener_discovery_with_schema_ref() -> None:
 def test_tier1_315_04_broadcast_handler_discovery() -> None:
     """Verify @broadcast handler is discovered with fanout=True."""
     desc = _call_describe(CatalogService)
-    assert hasattr(desc, "listeners"), "Description missing listeners field"
     b_listener = next(
         (item for item in desc.listeners if getattr(item, "pattern", None) == "system.broadcast"),
         None,
@@ -266,7 +256,6 @@ def test_tier1_315_05_jetstream_stream_discovery_from_config() -> None:
         ],
     )
     desc = _call_describe(CatalogService, config=config)
-    assert hasattr(desc, "streams"), "Description must have 'streams' field"
     stream_names = [
         getattr(s, "name", s.get("name") if isinstance(s, dict) else None) for s in desc.streams
     ]
@@ -278,12 +267,15 @@ def test_tier1_315_05_jetstream_stream_discovery_from_config() -> None:
 
 
 def test_tier1_316_01_method_metadata_has_doc_summary_and_description() -> None:
-    """Verify Method dataclass has doc_summary and description fields."""
+    """Verify Method metadata distinguishes between short summary and detailed description."""
     desc = _call_describe(CatalogService)
     m = desc.method("create_order")
     assert m is not None
-    assert hasattr(m, "doc_summary"), "Method must have doc_summary"
-    assert hasattr(m, "description"), "Method must have description"
+    assert m.doc_summary == "Create a new order and generate a receipt."
+    assert m.description is not None
+    assert m.description != m.doc_summary
+    assert len(m.description) > len(m.doc_summary)
+    assert "### Detailed Business Logic" in m.description
 
 
 def test_tier1_316_02_single_line_docstring_preserved() -> None:
@@ -356,7 +348,6 @@ class ComplexTypesService(CliffracerService):
 def test_tier2_314_01_complex_generic_types_in_components() -> None:
     """Boundary: Models wrapped in Optional and dict are extracted into components."""
     desc = _call_describe(ComplexTypesService)
-    assert hasattr(desc, "components")
     schemas = desc.components.values()
     titles = [s.get("title") for s in schemas if isinstance(s, dict)]
     assert "ItemModel" in titles
@@ -386,11 +377,61 @@ def test_tier2_315_01_queue_group_invariant_for_push_vs_fanout() -> None:
     assert fanout_listener.queue_group is None
 
 
+class QueueGroupService(CliffracerService):
+    """Durable listeners that are also fanout or pull: the cases the queue_group rule is for."""
+
+    @listener("qg.fanout", durable="qg_fanout_worker", fanout=True)
+    async def on_fanout_durable(self, note: str) -> None:
+        pass
+
+    @listener("qg.pull", durable="qg_pull_worker", pull=True)
+    async def on_pull_durable(self, note: str) -> None:
+        pass
+
+    @validated_listener("qg.validated", InventoryEvent, durable="qg_validated_worker", fanout=True)
+    async def on_validated_fanout_durable(self, message: InventoryEvent) -> None:
+        pass
+
+    @listener("qg.push", durable="qg_push_worker")
+    async def on_push_durable(self, note: str) -> None:
+        pass
+
+
+def test_tier2_315_03_a_durable_that_is_fanout_or_pull_has_no_queue_group() -> None:
+    """The fanout and pull clauses of the rule, which a fanout listener with no durable never reaches.
+
+    Fanout and pull subscriptions are made without a queue group even when they name a durable
+    (the framework permits both together when JetStream is off), so describing one as
+    queue-grouped would publish the opposite of what the subscription does.
+    """
+    desc = _call_describe(QueueGroupService)
+    listeners = {item.pattern: item for item in desc.listeners}
+
+    assert {p: (item.durable, item.queue_group) for p, item in listeners.items()} == {
+        "qg.fanout": ("qg_fanout_worker", None),
+        "qg.pull": ("qg_pull_worker", None),
+        "qg.validated": ("qg_validated_worker", None),
+        # The control: a plain push durable is the case that does get one.
+        "qg.push": ("qg_push_worker", "qg_push_worker"),
+    }
+    assert (listeners["qg.fanout"].fanout, listeners["qg.pull"].pull) == (True, True)
+
+
 def test_tier2_315_02_describe_without_config_defaults_streams_empty() -> None:
-    """Boundary: describe(cls) without config defaults streams to empty list []."""
-    desc = _call_describe(CatalogService)
-    assert hasattr(desc, "streams")
-    assert desc.streams == []
+    """Verify streams defaults to empty without configuration and populates with declared streams."""
+    desc_default = _call_describe(CatalogService)
+    assert desc_default.streams == []
+
+    config = ServiceConfig(
+        name="catalog",
+        jetstream_enabled=True,
+        jetstream_streams=[
+            StreamSpec(name="CATALOG_ORDERS", subjects=["orders.>"]),
+        ],
+    )
+    desc_configured = _call_describe(CatalogService, config=config)
+    assert len(desc_configured.streams) == 1
+    assert desc_configured.streams[0].name == "CATALOG_ORDERS"
 
 
 def test_tier2_316_01_multiparagraph_markdown_indentation_normalized() -> None:
@@ -409,34 +450,102 @@ def test_tier2_316_01_multiparagraph_markdown_indentation_normalized() -> None:
 
 
 def test_tier3_components_schema_conforms_to_json_schema() -> None:
-    """Tier 3: All schemas in components contain valid JSON Schema object structure."""
+    """Tier 3: the components are the models CatalogService names, each a JSON Schema object."""
     desc = _call_describe(CatalogService)
+
+    # Pinned before iterating: an empty map has nothing to be wrong about, so a collector that
+    # found no models would otherwise read as conformance.
+    assert {s["title"] for s in desc.components.values()} == {
+        "InventoryEvent",
+        "ItemModel",
+        "OrderRequest",
+        "ReceiptResponse",
+    }
     for hash_key, schema in desc.components.items():
         assert isinstance(hash_key, str)
         assert len(hash_key) == 16, "schema_hash must be a 16-character hex string"
-        assert isinstance(schema, dict)
-        assert "type" in schema or "$ref" in schema or "properties" in schema or "title" in schema
+        # These are all models, so each is an object schema with its fields; a `title` alone
+        # (which any pydantic schema carries) says nothing about that.
+        assert schema["type"] == "object", schema["title"]
+        assert schema["properties"], schema["title"]
 
 
-def test_tier3_asyncapi_3_compatibility() -> None:
-    """Tier 3: Verify Description.to_dict() provides complete AsyncAPI 3.0 elements."""
-    desc = _call_describe(CatalogService)
-    d = desc.to_dict()
+def _assert_the_description_publishes_the_contract_of_catalog_service(d: dict[str, Any]) -> None:
+    """The expectations are written from `CatalogService`'s own declarations above, not read back
+    out of the description: a describe reply that published the RPC methods and nothing else, or
+    dropped the schemas the methods point at, fails here."""
+    assert d["service"] == "catalog" and d["version"] == "1.0.0"
+    assert d["description_hash"].startswith("sha256:")
 
-    # Operations & Channels mapped from methods and listeners
-    assert "methods" in d
-    assert "listeners" in d
-    assert "components" in d
+    assert {m["name"] for m in d["methods"]} == {
+        "get_item",
+        "create_order",
+        "simple_ping",
+        "unadorned_method",
+    }
 
-    # Each listener maps to an AsyncAPI channel and operation
-    for listener_entry in d["listeners"]:
-        assert "pattern" in listener_entry
-        assert "handler_name" in listener_entry
-        assert "fanout" in listener_entry
+    # Three listeners, each with the subject it listens on, its handler and its fanout flag
+    assert {(e["pattern"], e["handler_name"], e["fanout"]) for e in d["listeners"]} == {
+        ("inventory.updated", "on_inventory_updated", False),
+        ("alerts.cluster", "on_cluster_alert", True),
+        ("system.broadcast", "on_system_broadcast", True),
+    }
+    assert len(d["listeners"]) == 3
 
-    # Each component maps to AsyncAPI components.schemas
-    for _h, s in d["components"].items():
-        assert "title" in s
+    # The schemas: every model a method or listener names, once each, titled by its class
+    assert sorted(schema["title"] for schema in d["components"].values()) == [
+        "InventoryEvent",
+        "ItemModel",
+        "OrderRequest",
+        "ReceiptResponse",
+    ]
+
+    # Every schema a method or listener points at is one of those published schemas
+    referenced = {
+        ref["schema_hash"]
+        for m in d["methods"]
+        for ref in (m["returns"], *(param["type"] for param in m["params"]))
+        if ref.get("kind") == "model"
+    } | {e["schema"]["schema_hash"] for e in d["listeners"] if e["schema"]}
+    assert referenced == set(d["components"]), (referenced, set(d["components"]))
+
+
+def test_tier3_the_description_publishes_the_contract_the_service_declares() -> None:
+    """Tier 3: the published description carries every method, listener and schema declared.
+
+    Nothing in this repository derives an AsyncAPI document from a description, so this reads the
+    contract the description itself makes.
+    """
+    _assert_the_description_publishes_the_contract_of_catalog_service(
+        _call_describe(CatalogService).to_dict()
+    )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        lambda d: {**d, "listeners": []},
+        lambda d: {**d, "components": {}},
+        lambda d: {**d, "listeners": d["listeners"][:2]},
+        lambda d: {**d, "methods": d["methods"][:1]},
+        lambda d: {**d, "listeners": [{**e, "fanout": not e["fanout"]} for e in d["listeners"]]},
+        lambda d: {**d, "components": dict(list(d["components"].items())[:-1])},
+    ],
+    ids=[
+        "no-listeners",
+        "no-components",
+        "a-listener-lost",
+        "methods-lost",
+        "fanout-flags-flipped",
+        "a-schema-lost",
+    ],
+)
+def test_CONTROL_a_damaged_description_fails_the_contract(damage) -> None:
+    """The contract check above is not vacuous: each loss it names makes it fail."""
+    full = _call_describe(CatalogService).to_dict()
+
+    with pytest.raises(AssertionError):
+        _assert_the_description_publishes_the_contract_of_catalog_service(damage(full))
 
 
 def test_tier3_deterministic_description_hash() -> None:
@@ -455,5 +564,22 @@ def test_tier3_legacy_client_backwards_compatibility() -> None:
         assert isinstance(m.params, list)
         assert isinstance(m.returns, dict)
         assert isinstance(m.signature_hash, str)
-        # Old 'doc' attribute remains present
-        assert hasattr(m, "doc")
+
+    # The legacy `doc` attribute still carries the handler's docstring. Asserting
+    # it is present cannot fail: `doc` is a declared field on a frozen dataclass,
+    # so it exists whatever `describe()` puts there. Reading the value on a
+    # documented and an undocumented handler is what a legacy consumer depends
+    # on, and it fails in both directions.
+    documented = desc.method("simple_ping")
+    assert documented is not None
+    assert documented.doc == "Single line ping docstring.", (
+        f"simple_ping is documented but describe() gave doc={documented.doc!r}; "
+        "the handler's docstring is what the legacy attribute carries"
+    )
+
+    undocumented = desc.method("unadorned_method")
+    assert undocumented is not None
+    assert undocumented.doc is None, (
+        f"unadorned_method has no docstring but describe() gave "
+        f"doc={undocumented.doc!r}; absence reports None, not a placeholder"
+    )

@@ -14,6 +14,7 @@ and realistic business logic with error scenarios.
 """
 
 import asyncio
+import os
 import random
 import time
 from datetime import UTC, datetime
@@ -21,7 +22,6 @@ from decimal import Decimal
 from enum import Enum
 from uuid import uuid4
 
-from cliffracer_http import HttpExtension
 from cliffracer_logging import LoggingConfig
 from cliffracer_metrics import MetricsExtension
 from pydantic import BaseModel, EmailStr, Field
@@ -34,6 +34,18 @@ from cliffracer import (
     rpc,
     validated_listener,
 )
+
+
+def _port(fixed: int) -> int:
+    """The port to bind, or 0 to let the operating system choose one.
+
+    The fixed numbers in this file are what its URLs refer to, so they stay
+    readable as documentation. Setting `CLIFFRACER_EXAMPLE_PORTS=auto` asks for
+    a free port instead, which is what lets two copies of this example run at
+    the same time -- `tests/integration/test_examples_run.py` sets it, and
+    without it a second copy cannot bind and never starts.
+    """
+    return 0 if os.environ.get("CLIFFRACER_EXAMPLE_PORTS") == "auto" else fixed
 
 
 # Data Models
@@ -184,9 +196,7 @@ class MonitoredService(CliffracerService):
 
 
 class OrderService(MonitoredService):
-    """Order processing service with HTTP endpoints and NATS messaging"""
-
-    http = HttpExtension(port=8001)
+    """Order processing service with NATS messaging"""
 
     def __init__(self):
         config = ServiceConfig(
@@ -198,22 +208,6 @@ class OrderService(MonitoredService):
 
         self.orders: dict[str, Order] = {}
         self.order_counter = 0
-
-    # HTTP endpoints declared on the HttpExtension instance.
-    @http.post("/orders", response_model=Order)
-    async def create_order_http(self, request: CreateOrderRequest) -> Order:
-        """HTTP endpoint for creating orders"""
-        return await self.create_order(request)
-
-    @http.get("/orders/{order_id}")
-    async def get_order_http(self, order_id: str) -> Order | None:
-        """HTTP endpoint for retrieving orders"""
-        return await self.get_order(order_id)
-
-    @http.get("/orders")
-    async def list_orders_http(self) -> dict[str, list[Order]]:
-        """HTTP endpoint for listing all orders"""
-        return {"orders": list(self.orders.values())}
 
     async def on_startup(self):
         """Service startup initialization"""
@@ -716,6 +710,7 @@ class LoadGeneratorService(MonitoredService):
         ]
 
         # order_counter = 1  # Unused variable
+        created = 0
 
         while self.running:
             try:
@@ -754,6 +749,10 @@ class LoadGeneratorService(MonitoredService):
                 )
 
                 await self.record_metric("load_generator.orders_created", 1)
+                created += 1
+                if created == 1:
+                    # The line the examples test waits for: an order has gone through the system.
+                    print("EXAMPLE READY: first order created", flush=True)
 
                 # Wait before next order (2-10 seconds)
                 await asyncio.sleep(random.uniform(2, 10))
@@ -766,8 +765,8 @@ class LoadGeneratorService(MonitoredService):
                 await asyncio.sleep(5)
 
 
-async def main():
-    """Run the complete e-commerce system"""
+def main():
+    """Run the complete e-commerce system until it is stopped by a signal"""
     print("[INFO] Starting Cliffracer E-commerce System with Live Monitoring")
     print("=" * 70)
 
@@ -779,22 +778,25 @@ async def main():
 
     # Add all services
     services = [
-        (OrderService, ServiceConfig(name="order_service", health_port=8010, auto_restart=True)),
+        (
+            OrderService,
+            ServiceConfig(name="order_service", health_port=_port(8010), auto_restart=True),
+        ),
         (
             InventoryService,
-            ServiceConfig(name="inventory_service", health_port=8011, auto_restart=True),
+            ServiceConfig(name="inventory_service", health_port=_port(8011), auto_restart=True),
         ),
         (
             PaymentService,
-            ServiceConfig(name="payment_service", health_port=8012, auto_restart=True),
+            ServiceConfig(name="payment_service", health_port=_port(8012), auto_restart=True),
         ),
         (
             NotificationService,
-            ServiceConfig(name="notification_service", health_port=8013, auto_restart=True),
+            ServiceConfig(name="notification_service", health_port=_port(8013), auto_restart=True),
         ),
         (
             LoadGeneratorService,
-            ServiceConfig(name="load_generator", health_port=8014, auto_restart=True),
+            ServiceConfig(name="load_generator", health_port=_port(8014), auto_restart=True),
         ),
     ]
 
@@ -802,19 +804,16 @@ async def main():
         orchestrator.add_service(service_class, config)
 
     print("\n[METRICS] Service Information:")
-    print("- Order Service API: http://localhost:8001/docs")
     print("- NATS Monitoring: http://localhost:8222")
     print("- Service Logs: Check terminal output for structured JSON logs")
     print("\n[INFO] The system will automatically generate orders every 2-10 seconds")
     print("\nPress Ctrl+C to stop all services")
     print("=" * 70)
 
-    try:
-        await orchestrator.run()
-    except KeyboardInterrupt:
-        print("\n[STOP] Shutting down services...")
-        await orchestrator.stop()
+    # The entry point that owns the process: it installs the SIGTERM and SIGINT handlers and runs
+    # every service until one arrives.
+    orchestrator.run_forever()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

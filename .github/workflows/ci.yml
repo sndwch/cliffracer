@@ -1,3 +1,20 @@
+# This file is the pipeline that runs ON THE MIRROR. It is not executed on the
+# Gitea instance this tree is developed on: Gitea reads `.gitea/workflows/` and
+# falls back here only when that directory is absent, and it is present.
+#
+# It is load-bearing rather than a leftover. Contributors on the mirror expect
+# its tests to pass, and its release job is what publishes the public PyPI
+# packages.
+#
+# It is not a copy of `.gitea/workflows/ci.yml` either. There is no benchmark
+# job here, because GitHub's hosted runners are shared and a measurement against
+# a recorded baseline means nothing on unknown hardware; the runner setup action
+# resolves upstream rather than through a mirror, so its version differs; and
+# the private-term secret this instance supplies has no counterpart here.
+#
+# The `test` job's gate commands must match the other platform's, and
+# tests/repo/test_ci_workflows_run_the_same_gates.py asserts that along with
+# each difference that is deliberate.
 name: CI
 
 on:
@@ -15,11 +32,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NATS_NAME: cliffracer-ci-nats-${{ github.run_id }}-${{ github.run_attempt }}
+      KV_NATS_NAME: cliffracer-ci-kv-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Start NATS (JetStream + monitoring)
         run: |
+          # Pinned version ensures consistent JetStream server behavior across runs.
           docker run -d --name "$NATS_NAME" -p 4222:4222 -p 8222:8222 nats:2.10.29-alpine -js -m 8222
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8222/healthz >/dev/null; then echo "NATS ready"; break; fi
@@ -46,25 +65,109 @@ jobs:
       - name: Type check with mypy
         run: uv run mypy src/ packages/*/src
 
-      - name: Run tests
-        run: uv run pytest -p no:cacheprovider --tb=short
+      # A pull request's commit messages go through the same history patterns
+      # the documents follow. The check runs here rather than in the suite
+      # because the range needs the base branch, which only this checkout has.
+      # The step is unconditional and the script decides whether the event is a
+      # pull request, so the gate list stays readable.
+      - name: Check commit messages
         env:
-          CLIFFRACER_TEST_NATS_URL: nats://localhost:4222
-        timeout-minutes: 10
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          # The pull request's head, not the merge commit checked out: see head_commit().
+          COMMIT_CHECK_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: uv run python scripts/check_commit_messages.py
 
-      - name: Verify continuous benchmark performance thresholds
-        run: |
-          uv run python scripts/run_benchmarks.py --runs 3 --output /tmp/current_benchmark.json --nats-url "$CLIFFRACER_TEST_NATS_URL"
-          uv run python scripts/check_benchmark_regression.py --baseline benchmark_baseline.json --current /tmp/current_benchmark.json --threshold 0.15
+      # A pull request that changes src/ or packages/*/src/ adds a changelog
+      # fragment under changelog.d/, or a commit carries the trailer
+      # `Changelog: none`. Unconditional for the same reason as the step above:
+      # the script decides whether the event is a pull request.
+      - name: Check for a changelog fragment
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: uv run python scripts/check_changelog_fragment.py
+
+      - name: Run tests
+        # Deselected to match the other platform's gate exactly. There is no
+        # benchmark job here to run the tier instead, and deliberately so: this
+        # platform's runners are shared and vary, which is the same reason no
+        # measurement is scored here at all. A throughput floor on unknown
+        # hardware reports the runner, not the code.
+        run: uv run pytest -m "not benchmark" -p no:cacheprovider --tb=short
         env:
           CLIFFRACER_TEST_NATS_URL: nats://localhost:4222
+        # Allow the complete suite to finish on slower shared runners.
+        # Pytest separately bounds each test to catch individual hangs.
+        timeout-minutes: 20
+
+      # This is a PR gate on the supported expiry floor, after the full suite.
+      - name: Check KV broker compatibility
+        run: uv run python scripts/check_kv_compatibility.py
+        timeout-minutes: 5
+
+      # A PR gate on message schedules, which need nats-server 2.12 or later, after the full suite.
+      - name: Check the message-schedule broker contract
+        run: uv run python scripts/check_message_schedules.py
+        timeout-minutes: 5
+
+      - name: Cleanup service containers
+        if: always()
+        run: |
+          docker rm -f "$NATS_NAME" || true
+          docker rm -f "$KV_NATS_NAME" || true
+
+  # The suite on the lowest Python the packages declare (`requires-python`).
+  # The `test` job runs every gate on 3.13; this one runs the suite again on
+  # 3.12, where the standard library differs (C callables report other
+  # signatures, for one), so a change that holds only on 3.13 is a red build.
+  # Lint, types, the commit and fragment checks and the KV compatibility gate
+  # read the tree, not the interpreter, and run once, in `test`.
+  test-3_12:
+    name: test-3.12
+    runs-on: ubuntu-latest
+    # A broker of its own, started in this job as `test` starts one.
+    env:
+      NATS_NAME: cliffracer-ci-nats-312-${{ github.run_id }}-${{ github.run_attempt }}
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start NATS (JetStream + monitoring)
+        run: |
+          # Pinned version ensures consistent JetStream server behavior across runs.
+          docker run -d --name "$NATS_NAME" -p 4222:4222 -p 8222:8222 nats:2.10.29-alpine -js -m 8222
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8222/healthz >/dev/null; then echo "NATS ready"; break; fi
+            echo "waiting for NATS..."; sleep 1
+          done
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra dev
+
+      - name: Report the interpreter
+        run: uv run python -c "import sys; print(sys.version); assert sys.version_info[:2] == (3, 12), sys.version"
+
+      - name: Run tests
+        run: uv run pytest -m "not benchmark" -p no:cacheprovider --tb=short
+        env:
+          CLIFFRACER_TEST_NATS_URL: nats://localhost:4222
+        timeout-minutes: 20
 
       - name: Cleanup service containers
         if: always()
         run: docker rm -f "$NATS_NAME" || true
 
   release:
-    needs: test
+    needs: [test, test-3_12]
     if: github.ref == 'refs/heads/main' && github.repository == 'sndwch/cliffracer'
     runs-on: ubuntu-latest
     permissions:
@@ -85,15 +188,46 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      # This job decides from the commits, and that is deliberate: these are
+      # the public releases and nothing here forces a level.
+      #
+      # A tool that FAILS must not read as a tool that found nothing to do.
+      # `2>/dev/null` discards the reason and `|| true` discards the exit
+      # status; with both, those two outcomes yield the same empty NEXT, the
+      # same sentence and the same green job. A real computation exits 0 and
+      # prints a tag, a failure exits non-zero and prints nothing, so this
+      # step tells them apart and says which.
       - name: Decide whether a release is warranted
         id: decide
         run: |
-          NEXT="$(uv run semantic-release -c pyproject.toml version --print-tag 2>/dev/null || true)"
-          LAST="$(uv run semantic-release -c pyproject.toml version --print-last-released-tag 2>/dev/null || true)"
+          set -uo pipefail
+          # `env -u GITHUB_OUTPUT`: semantic-release writes its OWN `released=`
+          # and `tag=` into that file whenever it is set, even for a
+          # --print-tag run that changes nothing. Leaving it set would make
+          # this step's outputs depend on which duplicate key the runner
+          # keeps, and on a run that releases nothing it would still publish
+          # a `tag=` naming the version already released. The decision below
+          # is this step's to state, so the tool is given nowhere to state one.
+          if ! NEXT="$(env -u GITHUB_OUTPUT uv run semantic-release -c pyproject.toml version --print-tag)"; then
+            echo "::error::THE RELEASE TOOL FAILED. semantic-release could not"
+            echo "  compute a version; its own output is above. This is not"
+            echo "  'no release warranted' -- nothing was decided at all."
+            exit 1
+          fi
+          if ! LAST="$(env -u GITHUB_OUTPUT uv run semantic-release -c pyproject.toml version --print-last-released-tag)"; then
+            echo "::error::THE RELEASE TOOL FAILED reading the last released tag."
+            exit 1
+          fi
+          if [ -z "$NEXT" ]; then
+            echo "::error::semantic-release exited 0 and printed no tag. It"
+            echo "  succeeded and decided nothing, which it should not be able"
+            echo "  to do; treat this as a broken toolchain, not as silence."
+            exit 1
+          fi
           echo "last=$LAST next=$NEXT"
-          if [ -z "$NEXT" ] || [ "$NEXT" = "$LAST" ]; then
+          if [ "$NEXT" = "$LAST" ]; then
             echo "released=false" >> "$GITHUB_OUTPUT"
-            echo "No release warranted."
+            echo "No release warranted: the commit parser found nothing to bump."
           else
             echo "released=true" >> "$GITHUB_OUTPUT"
             echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
@@ -113,7 +247,14 @@ jobs:
       - name: Publish to PyPI
         id: publish
         if: steps.decide.outputs.released == 'true'
-        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/ dist/*
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -n "${UV_PUBLISH_TOKEN:-}" ]; then
+            uv publish dist/*
+          else
+            echo "::warning::PYPI_API_TOKEN secret not set; skipping public PyPI publish."
+          fi
 
       - name: Delete the tag if publishing failed
         if: failure() && steps.decide.outputs.released == 'true'
@@ -132,6 +273,10 @@ jobs:
           TAG="${{ steps.decide.outputs.tag }}"
           PREV="$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)"
           if [ -n "$PREV" ]; then RANGE="$PREV..$TAG"; else RANGE="$TAG"; fi
-          NOTES="$(python3 scripts/release_note.py "$RANGE" || true)"
-          if [ -z "$NOTES" ]; then NOTES="Release $TAG"; fi
-          gh release create "$TAG" dist/* --title "$TAG" --notes "$NOTES"
+          # The note goes to gh as a file, never as an argument: one argument
+          # holds at most 128 KiB (MAX_ARG_STRLEN), a release's note runs past
+          # that, and exec then fails with "Argument list too long".
+          NOTE="$(mktemp)"
+          python3 scripts/release_note.py "$RANGE" --fragments-at "$TAG" > "$NOTE" || true
+          if ! grep -q . "$NOTE"; then printf 'Release %s\n' "$TAG" > "$NOTE"; fi
+          gh release create "$TAG" dist/* --title "$TAG" --notes-file "$NOTE"

@@ -18,10 +18,12 @@ class TestServiceConfigAuthKwargs:
         assert cfg.nats_auth_kwargs() == {"user": "u", "password": "p"}
 
     def test_token_and_credentials_file_map_to_nats_py_names(self):
-        cfg = ServiceConfig(name="s", nats_token="t", nats_credentials_file="/c.creds")
-        assert cfg.nats_auth_kwargs() == {"token": "t", "user_credentials": "/c.creds"}
+        assert ServiceConfig(name="s", nats_token="t").nats_auth_kwargs() == {"token": "t"}
+        assert ServiceConfig(name="s", nats_credentials_file="/c.creds").nats_auth_kwargs() == {
+            "user_credentials": "/c.creds"
+        }
 
     def test_absent_keys_are_omitted_not_none(self):
         """Ensure unconfigured authentication keys are excluded from the mapping."""
-        keys = ServiceConfig(name="s", nats_user="u").nats_auth_kwargs()
-        assert set(keys) == {"user"}
+        keys = ServiceConfig(name="s", nats_user="u", nats_password="p").nats_auth_kwargs()
+        assert set(keys) == {"user", "password"}

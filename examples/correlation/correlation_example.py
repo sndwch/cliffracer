@@ -7,10 +7,10 @@ architecture, enabling distributed request tracing across multiple services.
 """
 
 import asyncio
+import os
 import random
 from datetime import UTC, datetime
 
-from cliffracer_http import HttpExtension
 from cliffracer_logging import setup_correlation_logging
 from loguru import logger
 from pydantic import BaseModel
@@ -20,8 +20,20 @@ from cliffracer import (
     ServiceConfig,
     listener,
     rpc,
-    with_correlation_id,
+    set_correlation_id,
 )
+
+
+def _port(fixed: int) -> int:
+    """The port to bind, or 0 to let the operating system choose one.
+
+    The fixed numbers in this file are what its URLs refer to, so they stay
+    readable as documentation. Setting `CLIFFRACER_EXAMPLE_PORTS=auto` asks for
+    a free port instead, which is what lets two copies of this example run at
+    the same time -- `tests/integration/test_examples_run.py` sets it, and
+    without it a second copy cannot bind and never starts.
+    """
+    return 0 if os.environ.get("CLIFFRACER_EXAMPLE_PORTS") == "auto" else fixed
 
 
 # Pydantic models
@@ -29,18 +41,6 @@ class OrderRequest(BaseModel):
     product_id: str
     quantity: int
     customer_id: str
-
-
-class PaymentRequest(BaseModel):
-    order_id: str
-    amount: float
-    customer_id: str
-
-
-class OrderResponse(BaseModel):
-    order_id: str
-    status: str
-    correlation_id: str
 
 
 # Order Service
@@ -83,31 +83,11 @@ class OrderService(CliffracerService):
     Demonstrates correlation ID propagation through service calls.
     """
 
-    http = HttpExtension(port=8081)
-
     def __init__(self):
-        config = ServiceConfig(name="order_service")
+        config = ServiceConfig(name="order_service", health_port=_port(8081))
         super().__init__(config)
 
         self.orders = {}
-
-    @http.post("/orders")
-    @with_correlation_id
-    async def create_order_http(self, order: OrderRequest, correlation_id: str = None):
-        """HTTP endpoint for creating orders"""
-        logger.info(f"HTTP order request received for customer {order.customer_id}")
-
-        # Process order through RPC (will maintain correlation ID)
-        result = await self.create_order(
-            product_id=order.product_id,
-            quantity=order.quantity,
-            customer_id=order.customer_id,
-            correlation_id=correlation_id,
-        )
-
-        return OrderResponse(
-            order_id=result["order_id"], status=result["status"], correlation_id=correlation_id
-        )
 
     @rpc
     async def create_order(
@@ -211,14 +191,6 @@ class OrderService(CliffracerService):
                 correlation_id=correlation_id,
             )
 
-    @http.get("/orders/{order_id}")
-    async def get_order(self, order_id: str):
-        """Get order details"""
-        if order_id not in self.orders:
-            return {"error": "Order not found"}
-
-        return self.orders[order_id]
-
     @listener("orders.events.*", fanout=True)
     async def handle_order_events(self, subject: str, correlation_id: str | None = None) -> None:
         """Handle order-related events"""
@@ -229,10 +201,8 @@ class OrderService(CliffracerService):
 class InventoryService(CliffracerService):
     """Inventory service that manages product availability"""
 
-    http = HttpExtension(port=8082)
-
     def __init__(self):
-        config = ServiceConfig(name="inventory_service")
+        config = ServiceConfig(name="inventory_service", health_port=_port(8082))
         super().__init__(config)
 
         # Mock inventory
@@ -293,10 +263,8 @@ class InventoryService(CliffracerService):
 class PricingService(CliffracerService):
     """Pricing service that calculates order prices"""
 
-    http = HttpExtension(port=8083)
-
     def __init__(self):
-        config = ServiceConfig(name="pricing_service")
+        config = ServiceConfig(name="pricing_service", health_port=_port(8083))
         super().__init__(config)
 
         # Mock pricing
@@ -348,10 +316,8 @@ class PricingService(CliffracerService):
 class PaymentService(CliffracerService):
     """Payment service that processes payments"""
 
-    http = HttpExtension(port=8084)
-
     def __init__(self):
-        config = ServiceConfig(name="payment_service")
+        config = ServiceConfig(name="payment_service", health_port=_port(8084))
         super().__init__(config)
 
         self.payments = {}
@@ -419,25 +385,18 @@ async def main():
             await service.start()
             print(f"[OK] {service.config.name} started")
 
-        print("\n[INFO] Available endpoints:")
-        print("  • POST http://localhost:8081/orders - Create new order")
-        print("  • GET  http://localhost:8081/orders/{order_id} - Get order details")
-        print("  • GET  http://localhost:8081/health - Order service health")
-        print("  • GET  http://localhost:8082/health - Inventory service health")
-        print("  • GET  http://localhost:8083/health - Pricing service health")
-        print("  • GET  http://localhost:8084/health - Payment service health")
-
-        print("\n[INFO] Example order request:")
-        print("""
-curl -X POST http://localhost:8081/orders \\
-  -H "Content-Type: application/json" \\
-  -H "X-Correlation-ID: manual-test-123" \\
-  -d '{
-    "product_id": "PROD-001",
-    "quantity": 2,
-    "customer_id": "CUST-VIP"
-  }'
-        """)
+        print("\n[INFO] Placing an order under a correlation id of our own...")
+        set_correlation_id("my-test-request-123")
+        order = await order_service.call_rpc(
+            "order_service",
+            "create_order",
+            product_id="PROD-001",
+            quantity=2,
+            customer_id="CUST-VIP",
+        )
+        print(f"[OK] order {order['order_id']}: {order['status']}")
+        # The line the examples test waits for: a call has carried the caller's correlation id.
+        print("EXAMPLE READY: order placed under the caller's correlation id", flush=True)
 
         print("\n[INFO] Watch the logs to see correlation IDs flow through services!")
         print("[NOTE] Each log entry shows: timestamp | level | service | correlation_id | message")

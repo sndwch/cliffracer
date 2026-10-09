@@ -26,8 +26,8 @@ from cliffracer import (
     validated_listener,
 )
 from cliffracer.client import (
-    ClientError,
     RpcRefused,
+    RpcServerError,
     RpcUnknownMethod,
     RpcValidationError,
     ServiceClient,
@@ -37,6 +37,7 @@ from cliffracer.core.correlation import (
     CorrelationContext,
 )
 from cliffracer.core.extension import Extension, RejectMessage, WorkerContext
+from cliffracer.testing import refuse_a_reply_with_no_subject
 
 pytestmark = pytest.mark.unit
 
@@ -63,6 +64,7 @@ class MockMsg:
         self.response_headers: dict[str, str] | None = None
 
     async def respond(self, data: bytes) -> None:
+        refuse_a_reply_with_no_subject(self)
         self.response_bytes = data
         self.response_headers = dict(self.headers)
 
@@ -177,8 +179,9 @@ class TestAdversarialCorrelationExtraction:
             ("trace-id", "prio-7"),
         ]
 
-        # Build dict with all candidates
-        headers = dict(ladder)
+        # Build dict with all candidates, inserted LOWEST priority first, so the first key of the
+        # caller's dict is never the winner and iterating that dict cannot pass for the ladder.
+        headers = dict(reversed(ladder))
         for k, expected in ladder:
             assert CorrelationContext.extract_from_headers(headers) == expected
             del headers[k]
@@ -191,15 +194,29 @@ class TestAdversarialCorrelationExtraction:
         assert CorrelationContext.extract_from_headers(headers) == "corr-strip-me-123"
 
     def test_extract_stress_huge_headers(self) -> None:
-        """Performance & robustness with huge headers and large correlation values."""
-        # 100,000 character correlation ID
+        """Robustness with huge headers and large correlation values, and one pass over them.
+
+        Cost is bounded structurally, not by a clock: the headers are walked once however many
+        candidate header names there are, so a change that normalised them again for each of the
+        seven names fails here on any machine.
+        """
+        # A 100,000 character correlation ID is refused, not truncated and not an error, and is
+        # read in one pass like any other.
         huge_id = "cid_" + "x" * 100_000
-        assert CorrelationContext.extract_from_headers({"X-Correlation-ID": huge_id}) == huge_id
+        assert CorrelationContext.extract_from_headers({"X-Correlation-ID": huge_id}) is None
+
+        class CountingHeaders(dict):
+            walks = 0
+
+            def items(self):
+                type(self).walks += 1
+                return super().items()
 
         # 5,000 unrelated headers
-        huge_dict = {f"X-Custom-Header-{i}": f"value-{i}" for i in range(5_000)}
+        huge_dict = CountingHeaders({f"X-Custom-Header-{i}": f"value-{i}" for i in range(5_000)})
         huge_dict["X-Correlation-ID"] = "needle-in-haystack"
         assert CorrelationContext.extract_from_headers(huge_dict) == "needle-in-haystack"
+        assert CountingHeaders.walks == 1
 
     def test_extract_unicode_and_special_chars(self) -> None:
         """Unicode, emoji, and punctuation in correlation headers must be preserved."""
@@ -350,13 +367,13 @@ class TestAdversarialEventEnvelopeUnwrapping:
 
     @pytest.mark.asyncio
     async def test_envelope_empty_dict_payload(self) -> None:
-        """Empty dict payload is handled gracefully without uncaught exceptions."""
-        called = []
+        """An empty dict payload reaches the handler, which is called once with what it declares."""
+        called: list[str] = []
 
         class EmptyDictConsumer(CliffracerService):
             @listener("events.empty", fanout=True)
-            async def on_empty(self) -> None:
-                called.append({})
+            async def on_empty(self, subject: str) -> None:
+                called.append(subject)
 
         svc = EmptyDictConsumer(ServiceConfig(name="empty_svc", version="1.0.0"))
         svc._discover_handlers()
@@ -364,8 +381,9 @@ class TestAdversarialEventEnvelopeUnwrapping:
         msg = MockMsg("events.empty", b"{}")
         outcome = await svc.container._dispatch_event(msg, pattern="events.empty")
         assert outcome == DispatchOutcome.OK
-        assert len(called) == 1
-        assert called[0] == {}
+        # What the dispatcher delivered, not a value the test wrote. Only the handler having run
+        # rules out a swallowed failure: the outcome is OK either way when errors are not raised.
+        assert called == ["events.empty"]
 
     @pytest.mark.asyncio
     async def test_envelope_data_as_string(self) -> None:
@@ -436,8 +454,13 @@ class TestAdversarialEventEnvelopeUnwrapping:
         assert list_received == [[10, 20, 30, 40], [10, 20, 30, 40]]
 
     @pytest.mark.asyncio
-    async def test_envelope_decode_error_deadletters_and_returns_invalid(self) -> None:
-        """Malformed byte payloads trigger dead-lettering and return DispatchOutcome.INVALID."""
+    async def test_envelope_decode_error_deadletters_and_returns_invalid(self, caplog) -> None:
+        """Malformed byte payloads are dead-lettered and return DispatchOutcome.INVALID.
+
+        The dead letter is read where it leaves the service, on the connection's
+        publish, so it is the record a DLQ consumer would receive.
+        """
+        from loguru import logger
 
         class DlqService(CliffracerService):
             @listener("events.bad", fanout=True)
@@ -447,18 +470,42 @@ class TestAdversarialEventEnvelopeUnwrapping:
         svc = DlqService(
             ServiceConfig(name="dlq_svc", version="1.0.0", dlq_subject="dlq.{service}")
         )
+        svc.nc = AsyncMock()
+        svc.container.nc = svc.nc
         svc._discover_handlers()
-        svc.container._dead_letter_decode_error = AsyncMock()  # type: ignore[method-assign]
 
         bad_msg = MockMsg(
             "events.bad", b"not valid json {{{", headers={"X-Correlation-ID": "c-bad"}
         )
-        outcome = await svc.container._dispatch_event(bad_msg, pattern="events.bad")
+        handler_id = logger.add(caplog.handler, level="ERROR", format="{message}")
+        try:
+            outcome = await svc.container._dispatch_event(bad_msg, pattern="events.bad")
+        finally:
+            logger.remove(handler_id)
+
         assert outcome == DispatchOutcome.INVALID
+        assert not [r for r in caplog.records if "Failed to dead-letter" in r.getMessage()]
+        published = [
+            (call.args[0], json.loads(call.args[1]), call.kwargs["headers"])
+            for call in svc.nc.publish.await_args_list
+        ]
+        assert len(published) == 1, published
+        subject, body, headers = published[0]
+        assert subject == "dlq.dlq_svc"
+        assert body["payload"] == {"raw": "not valid json {{{"}
+        assert body["error"].startswith("Decode error:"), body
+        assert body["original_subject"] == "events.bad"
+        assert body["correlation_id"] == "c-bad"
+        assert headers["X-Correlation-ID"] == "c-bad"
+        assert headers["correlation_id"] == "c-bad"
 
     @pytest.mark.asyncio
     async def test_header_correlation_id_takes_precedence_over_envelope(self) -> None:
-        """Wire header X-Correlation-ID takes precedence over envelope correlation_id."""
+        """Wire header X-Correlation-ID takes precedence over envelope correlation_id.
+
+        `CorrelationExtension.worker_setup` decides this, before dispatch builds
+        the handler's arguments.
+        """
         cids = []
 
         class CorrService(CliffracerService):
@@ -704,16 +751,28 @@ class TestAdversarialRpcErrorEnvelopes:
 
             assert res["success"] is False
             assert isinstance(res["error"], str) and len(res["error"]) > 0
-            assert "introspection generation failed" in res["error"]
+            # The envelope is this test's subject; the exception's TEXT is not,
+            # and asserting it here was one of three places holding the describe
+            # path's missing policy gate in place. This service leaves
+            # expose_internal_errors at its default, so the message is withheld
+            # and the fixed sentence is what keeps `error` non-empty.
+            assert res["error"] == "Internal server error (correlation_id: corr-desc-crash)"
+            assert "introspection generation failed" not in res["error"]
             assert res["correlation_id"] == "corr-desc-crash"
 
     @pytest.mark.asyncio
-    async def test_boundary_bare_exception_error_string(self, svc: AdversarialRpcService) -> None:
-        """Adversarial check: what happens when a handler raises a bare exception without message?
+    @pytest.mark.parametrize("expose", [False, True], ids=["withheld", "exposed"])
+    async def test_boundary_bare_exception_error_string(self, expose: bool) -> None:
+        """A handler raising a bare `RuntimeError()` still answers a non-empty error.
 
-        If a handler raises `raise RuntimeError()`, `str(e)` produces an empty string.
-        An empty error string violates the invariant that `res['error']` must be a non-empty string.
+        `str(e)` is empty for it. Withheld, the error is the fixed sentence and
+        not even the class name leaves; exposed, the class name stands in for
+        the missing message.
         """
+        svc = AdversarialRpcService(
+            ServiceConfig(name="adv_svc", version="1.0.0", expose_internal_errors=expose)
+        )
+        svc._discover_handlers()
         msg = MockRpcMsg(
             subject="adv_svc.throw_bare",
             data=b"{}",
@@ -725,19 +784,18 @@ class TestAdversarialRpcErrorEnvelopes:
 
         assert res["success"] is False
         assert res["correlation_id"] == "corr-bare-exc"
-        # Observation of current behavior: str(e) yields empty string for bare exceptions
-        # We verify whether error is empty and document it
-        is_non_empty = bool(res.get("error"))
-        # Document current behavior for finding report:
-        if not is_non_empty:
-            pytest.skip(
-                f"VULNERABILITY DETECTED: bare exception produced empty error string {res['error']!r}"
-            )
+        if expose:
+            assert res["error"] == "RuntimeError", res
+        else:
+            assert res["error"] == "Internal server error (correlation_id: corr-bare-exc)", res
 
     @pytest.mark.asyncio
-    async def test_boundary_describe_bare_exception_error_string(self) -> None:
-        """Adversarial check: describe request failure with bare exception produces empty error string."""
-        svc_desc = CliffracerService(ServiceConfig(name="desc_bare_svc", version="1.0.0"))
+    @pytest.mark.parametrize("expose", [False, True], ids=["withheld", "exposed"])
+    async def test_boundary_describe_bare_exception_error_string(self, expose: bool) -> None:
+        """A describe that fails with a bare `RuntimeError()` still answers a non-empty error."""
+        svc_desc = CliffracerService(
+            ServiceConfig(name="desc_bare_svc", version="1.0.0", expose_internal_errors=expose)
+        )
         svc_desc._discover_handlers()
 
         with patch("cliffracer.introspect.describe", side_effect=RuntimeError()):
@@ -752,10 +810,10 @@ class TestAdversarialRpcErrorEnvelopes:
 
             assert res["success"] is False
             assert res["correlation_id"] == "corr-desc-bare"
-            if not bool(res.get("error")):
-                pytest.skip(
-                    f"VULNERABILITY DETECTED: describe bare exception produced empty error string {res['error']!r}"
-                )
+            if expose:
+                assert res["error"] == "RuntimeError", res
+            else:
+                assert res["error"] == "Internal server error (correlation_id: corr-desc-bare)", res
 
     @pytest.mark.asyncio
     async def test_error_envelope_preserves_mixed_case_and_legacy_headers(
@@ -845,8 +903,8 @@ class TestAdversarialRpcErrorEnvelopes:
             )
         assert "rate limited" in str(exc3.value)
 
-        # 4. Unhandled server exception
-        with pytest.raises(ClientError) as exc4:
+        # 4. Unhandled server exception -- the remote's fault, so RpcServerError
+        with pytest.raises(RpcServerError) as exc4:
             client._raise_for_error(
                 {"success": False, "error": "db timeout", "correlation_id": "c4"},
                 "adv_svc.throw_with_message",
@@ -854,8 +912,16 @@ class TestAdversarialRpcErrorEnvelopes:
         assert "db timeout" in str(exc4.value)
 
     @pytest.mark.asyncio
-    async def test_rpc_concurrent_error_stress(self, svc: AdversarialRpcService) -> None:
-        """Concurrent burst of 100 mixed error RPC requests preserves isolation and correlation IDs."""
+    async def test_a_burst_of_concurrent_error_requests_each_answers_its_own_correlation_id(
+        self, svc: AdversarialRpcService
+    ) -> None:
+        """100 concurrent error requests of four kinds, each answered with the id it sent.
+
+        Not a test of correlation isolation. `gather` runs each request in its
+        own task with its own copy of the context, so an extension that read the
+        ambient id and never reset it would still pass here. That is guarded by
+        dispatching in one task, in `test_correlation_per_message.py`.
+        """
 
         async def single_call(idx: int) -> None:
             cid = f"burst-cid-{idx}"

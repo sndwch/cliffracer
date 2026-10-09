@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import Any, cast
+from typing import Any
 
 import nats
 from loguru import logger
@@ -19,16 +19,27 @@ from .connection import (
     _CLOSED_STOP_TIMEOUT,
     BrokerConnectionState,
     ConnectionManager,
+    flush_through_buffered_commands,
     redact_nats_url,
 )
 from .discovery import HandlerDiscovery
-from .dispatcher import DispatchOutcome, MessageDispatcher, _JetStreamHeartbeat
-from .extension import Extension, ExtensionSetupContext, WorkerContext
-from .jetstream import consumer_config_for, ensure_streams
-from .lifecycle import LifecycleHooks, LifecycleManager
+from .dispatch import _JetStreamHeartbeat
+from .dispatcher import DispatchOutcome, MessageDispatcher
+from .exceptions import ConfigurationError, ServiceLifecycleError
+from .extension import RESERVED_PAYLOAD_KEYS, Extension, ExtensionSetupContext, WorkerContext
+from .jetstream import (
+    ensure_streams,
+    stream_for_subject,
+    validate_bound_consumer,
+    validate_bound_streams,
+)
+from .lifecycle import LifecycleHooks, LifecycleManager, bounded_shutdown_timeout
+from .listener_pause import ListenerPauses
+from .listener_subscriptions import ListenerSubscriptions
 from .registry import ServiceRegistry
 from .service_config import ServiceConfig
 from .subjects import subject_matches
+from .typed_events import build_registered_event_spec
 from .typed_rpc import HandlerSpec
 
 __all__ = [
@@ -39,6 +50,25 @@ __all__ = [
     "_CLOSED_STOP_TIMEOUT",
     "_JetStreamHeartbeat",
 ]
+
+
+def _refuse_a_registration_after_start(started: bool, pattern: str, service_name: str) -> None:
+    """Refuse a broadcast handler registered once the service has started: it would never be called."""
+    if started:
+        raise ServiceLifecycleError(
+            f"register_broadcast_handler({pattern!r}) was called after service "
+            f"'{service_name}' started. Subscriptions are created once, at start, so the "
+            f"handler would never be called. Register it in __init__ or on_startup."
+        )
+
+
+async def _stop_in_reverse(extensions: list[Extension], log: Any) -> None:
+    """Stop `extensions` last to first, logging a failure and going on to the next."""
+    for ext in reversed(extensions):
+        try:
+            await ext.stop()
+        except Exception as exc:
+            log.error(f"extension {ext.name} failed to stop: {exc}")
 
 
 class Container:
@@ -61,11 +91,21 @@ class Container:
         # 1. Registry
         self.registry = ServiceRegistry()
 
-        # 2. Extensions and entrypoints
+        # 2. Extensions
         self.extensions: list[Extension] = []
-        self._entrypoint_kinds: dict[str, Callable[..., Any]] = {}
+        #: Core's validation extension, kept last in `extensions`; see `_bind_extension`.
+        self._validation_extension: Extension | None = None
         self._extensions_set_up = False
+        #: Extensions whose `setup()` was begun, in order. `stop()` pairs with `setup()`, so only
+        #: these are stopped: one that failed in `setup()` may hold part of what it was building,
+        #: and one after it never started building anything.
+        self._extensions_setup_begun: list[Extension] = []
         self._handlers_discovered = False
+        self._discovery_refusal: Exception | None = None
+        #: Each event listener's subscription, which a `pause_when_down` pause drops and restores.
+        self.listener_subscriptions = ListenerSubscriptions(self)
+        #: The background probe for listeners declared with `pause_when_down`, once started.
+        self.listener_pauses: ListenerPauses | None = None
 
         # 3. Connection Manager
         self.connection = ConnectionManager(
@@ -74,6 +114,10 @@ class Container:
             on_closed_handler=self.stop,
             is_running_fn=lambda: self.is_running,
             logger_provider=lambda: self.logger,
+            on_connection_lost=lambda: self.extension_pipeline.run_connection_hook("on_disconnect"),
+            on_connection_regained=lambda: self.extension_pipeline.run_connection_hook(
+                "on_reconnect"
+            ),
         )
 
         # 4. Message Dispatcher
@@ -85,8 +129,9 @@ class Container:
             logger=self.logger,
             service=self.service,
             task_spawner=self._spawn_supervised_task,
+            logger_provider=lambda: self.logger,
+            stopping_provider=lambda: self.is_stopped or self.lifecycle.stop_requested,
         )
-        self.dispatcher.container = self
         self.rpc_dispatcher = self.dispatcher.rpc
         self.event_dispatcher = self.dispatcher.events
         self.jetstream_dispatcher = self.dispatcher.jetstream
@@ -95,32 +140,27 @@ class Container:
         self.outbound_dispatcher = self.dispatcher.outbound
 
         # 5. Lifecycle Manager
-        def _get_svc_method(
-            method_name: str, default_callable: Callable[..., Any]
-        ) -> Callable[..., Any]:
-            if self.service is not None and hasattr(self.service, method_name):
-                return cast(Callable[..., Any], getattr(self.service, method_name))
-            return default_callable
-
+        # The phases are the container's own. They are looked up when they run, not when this
+        # is built, so a test can replace one on the container; they are never looked up on the
+        # service, whose methods share the container's private names by accident as easily as by
+        # intent, and a service that defined one would have switched the phase off.
         hooks = LifecycleHooks(
-            setup_extensions=lambda: _get_svc_method("_setup_extensions", self._setup_extensions)(),
-            discover_handlers=self.discover_handlers,
+            setup_extensions=lambda: self._setup_extensions(),
+            discover_handlers=self._discover_for_startup,
             connect=lambda: self.service.connect() if self.service is not None else self.connect(),
             ensure_streams=self._ensure_streams,
             validate_dlq=lambda: HandlerDiscovery.validate_dlq_coverage(self.config),
             is_jetstream_active=lambda: self.connection.jetstream_active,
             on_startup=self._on_service_startup,
-            start_extensions=lambda: _get_svc_method("_start_extensions", self._start_extensions)(),
+            start_extensions=lambda: self._start_extensions(),
             start_health_listener=self._start_health_listener,
             start_timers=self._start_timers,
-            setup_subscriptions=lambda: _get_svc_method(
-                "_setup_subscriptions", self.setup_subscriptions
-            )(),
-            stop_timers=lambda: _get_svc_method("_stop_timers", self._stop_timers)(),
+            setup_subscriptions=lambda: self.setup_subscriptions(),
+            stop_timers=lambda: self._stop_timers(),
             stop_health_listener=self._stop_health_listener,
             cancel_subscriptions=lambda: self.connection.unsubscribe_all(),
             on_shutdown=self._on_service_shutdown,
-            stop_extensions=lambda: _get_svc_method("_stop_extensions", self._stop_extensions)(),
+            stop_extensions=lambda: self._stop_extensions(),
             disconnect=lambda: self.service.disconnect()
             if self.service is not None
             else self.disconnect(),
@@ -206,7 +246,7 @@ class Container:
         self.lifecycle._starting = value
 
     @property
-    def _active_tasks(self) -> set[asyncio.Task[Any]]:
+    def _active_tasks(self) -> frozenset[asyncio.Task[Any]]:
         return self.lifecycle.active_tasks
 
     @_active_tasks.setter
@@ -248,7 +288,7 @@ class Container:
         return self.registry.event_handlers
 
     @property
-    def _event_schemas(self) -> dict[Callable[..., Any], tuple[type[BaseModel], str | None]]:
+    def _event_schemas(self) -> dict[str, tuple[type[BaseModel], str | None]]:
         return self.registry.event_schemas
 
     @property
@@ -272,10 +312,16 @@ class Container:
         return self.registry.broadcast_handlers
 
     def register_broadcast_handler(self, pattern: str, handler: Callable[..., Any]) -> None:
-        """Register a broadcast handler for message patterns."""
-        self.registry.broadcast_handlers[pattern] = handler
-        self.registry.event_handlers[pattern] = handler
-        self.registry.event_fanout.add(pattern)
+        """Register a broadcast handler for `pattern`, under the subject broadcasts publish to.
+
+        Subscriptions are created once, when the service starts, so a handler registered after
+        that would never be called; the call is refused. Register it in `__init__` or in
+        `on_startup`.
+        """
+        _refuse_a_registration_after_start(self.lifecycle.is_running, pattern, self.config.name)
+        subject = HandlerDiscovery.effective_event_subject(self.config, pattern, False)
+        spec = build_registered_event_spec(handler, owner=type(self.service))
+        self.registry.add_broadcast_handler(subject, handler, spec)
 
     @property
     def _timers(self) -> list[Any]:
@@ -301,26 +347,7 @@ class Container:
         return self.dispatcher._get_event_semaphore()
 
     async def _on_rpc_request(self, msg: Any) -> None:
-        sem = self._get_rpc_semaphore()
-        if sem is not None:
-            await sem.acquire()
-            self._spawn_supervised_task(
-                self._bounded_handle_rpc(msg, sem),
-                name="rpc_bounded_request",
-            )
-        else:
-            self._spawn_supervised_task(
-                self._handle_rpc_request(msg),
-                name="rpc_request",
-            )
-
-    async def _bounded_handle_rpc(self, msg: Any, sem: asyncio.Semaphore) -> None:
-        try:
-            await self._handle_rpc_request(msg)
-        except Exception as e:
-            self.logger.debug(f"RPC request failed: {e}")
-        finally:
-            sem.release()
+        await self.dispatcher.on_rpc_request(msg)
 
     async def _on_describe_request(self, msg: Any) -> None:
         await self.dispatcher.on_describe_request(msg)
@@ -329,27 +356,7 @@ class Container:
         await self.dispatcher.on_async_request(msg)
 
     def _make_event_callback(self, pattern: str) -> Callable[[Any], Awaitable[None]]:
-        async def _cb(msg: Any) -> None:
-            sem = self._get_event_semaphore()
-            if sem is not None:
-                await sem.acquire()
-                self._spawn_supervised_task(
-                    self._bounded_handle_event(msg, pattern, sem),
-                    name=f"event_bounded:{pattern}",
-                )
-            else:
-                self._spawn_supervised_task(
-                    self._dispatch_event(msg, pattern=pattern, raise_on_error=False),
-                    name=f"event:{pattern}",
-                )
-
-        return _cb
-
-    async def _bounded_handle_event(self, msg: Any, pattern: str, sem: asyncio.Semaphore) -> None:
-        try:
-            await self._dispatch_event(msg, pattern=pattern, raise_on_error=False)
-        finally:
-            sem.release()
+        return self.dispatcher.make_event_callback(pattern)
 
     def _make_jetstream_event_callback(self, pattern: str) -> Callable[[Any], Awaitable[None]]:
         return self.dispatcher.make_jetstream_event_callback(pattern)
@@ -454,11 +461,29 @@ class Container:
     def _safe_in_progress(self) -> None:
         pass
 
-    async def _dead_letter_terminated(self, msg: Any, error: Any, num_delivered: int) -> None:
-        await self.dispatcher._dead_letter_terminated(msg, error, num_delivered)
+    async def _dead_letter_terminated(
+        self,
+        msg: Any,
+        error: Any,
+        num_delivered: int,
+        delivery_limit: str | None = None,
+        correlation_id: str | None = None,
+    ) -> bool:
+        return await self.dispatcher._dead_letter_terminated(
+            msg,
+            error,
+            num_delivered,
+            delivery_limit=delivery_limit,
+            correlation_id=correlation_id,
+        )
 
-    async def _dead_letter_decode_error(self, msg: Any, error: Exception) -> None:
-        await self.dispatcher._dead_letter_decode_error(msg, error)
+    async def _dead_letter_decode_error(self, msg: Any, error: Exception) -> bool:
+        return await self.dispatcher._dead_letter_decode_error(msg, error)
+
+    @property
+    def dead_letters_lost(self) -> int:
+        """How many dead letters could not be published since the service was built."""
+        return self.dispatcher.dlq.lost
 
     @property
     def _publish_dlq(self) -> Any:
@@ -483,14 +508,29 @@ class Container:
             is_running_fn=lambda: getattr(self.service, "_running", self.is_running),
         )
 
-    async def _report_consumer_drift(self, sub: Any, durable: str) -> None:
-        await self.dispatcher.report_consumer_drift(sub, durable)
+    async def _report_consumer_drift(
+        self, sub: Any, durable: str, *, pattern: str | None = None
+    ) -> None:
+        await self.dispatcher.report_consumer_drift(sub, durable, pattern=pattern)
 
     def _format_dlq_subject(self) -> str:
         return self.dispatcher.format_dlq_subject()
 
     def _assert_dlq_covered(self) -> None:
         HandlerDiscovery.validate_dlq_coverage(self.config)
+
+    def _discover_for_startup(self) -> None:
+        """The discovery step of `start()`: the handlers, then the checks that need a config.
+
+        Before the connection is made, so a configuration that cannot start fails
+        before `on_startup` or a timer has run. `discover_handlers` alone stays a
+        scan of the class: stream coverage is judged where startup is, as the
+        dead-letter subject's is.
+        """
+        self.discover_handlers()
+        HandlerDiscovery.validate_durable_coverage(self.registry, self.config)
+        HandlerDiscovery.validate_workqueue_consumers(self.registry, self.config)
+        HandlerDiscovery.validate_serialization_available(self.config)
 
     def _with_namespace(self, subject: str) -> str:
         return HandlerDiscovery.with_namespace(self.config, subject)
@@ -508,8 +548,11 @@ class Container:
     @_run_worker.setter
     def _run_worker(self, value: Any) -> None:
         self.dispatcher._run_worker = value  # type: ignore[method-assign]
-        if hasattr(self.dispatcher, "rpc"):
-            self.dispatcher.rpc._run_worker = value  # type: ignore[method-assign]
+        # Each collaborator that dispatches a message keeps its own delegate, and the
+        # dispatch paths call that one; every one of them has to be written.
+        for collaborator in ("rpc", "events"):
+            if hasattr(self.dispatcher, collaborator):
+                getattr(self.dispatcher, collaborator)._run_worker = value
 
     @_run_worker.deleter
     def _run_worker(self) -> None:
@@ -526,25 +569,59 @@ class Container:
     # ---- Internal Coordination Hooks ----
 
     def discover_handlers(self) -> None:
+        """Discover this service's handlers once; a refusal is raised on every call, not just the first.
+
+        Discovery fills the registry as it goes and judges the whole at the end, so a refusal
+        part-way would leave the refused handlers in it. The registry is put back as it was, and
+        the refusal is remembered and raised again rather than letting a retry take the "already
+        discovered" exit and succeed with the refused handler registered.
+        """
+        if self._discovery_refusal is not None:
+            raise self._discovery_refusal
         if self._handlers_discovered:
             return
         self._handlers_discovered = True
-        HandlerDiscovery.discover(
-            self.service,
-            self.config,
-            extensions=self.extensions,
-            entrypoint_kinds=self._entrypoint_kinds,
-            registry=self.registry,
-        )
+        before = self.registry.snapshot()
+        try:
+            HandlerDiscovery.discover(
+                self.service,
+                self.config,
+                extensions=self.extensions,
+                registry=self.registry,
+            )
+        except Exception as refusal:
+            # Put back what was there before, so a refused topology is not left in the registry
+            # for `describe`, `/info` and anything else that reads it to advertise.
+            self.registry.restore(before)
+            self._discovery_refusal = refusal
+            raise
 
     def _bind_extension(self, ext: Extension, name: str) -> Extension:
+        if name in RESERVED_PAYLOAD_KEYS:
+            raise ConfigurationError(
+                f"extension {name!r} on {type(self.service).__name__} is named for a key the "
+                f"health and info payloads carry. Its contribution is published under its "
+                f"name, so it would replace that key (an extension named 'status' pins "
+                f"/health at 503). Rename the attribute."
+            )
         bound = ext.bind(self.service, name)
+        # A class-declared specification is already frozen by `__set_name__`;
+        # one handed to `add_extension` is frozen here, once its arguments are
+        # captured in the runtime instance.
+        ext.freeze()
         setattr(self.service, name, bound)
-        self.extensions.append(bound)
-        for kind, binder in bound.entrypoint_kinds().items():
-            if kind in self._entrypoint_kinds:
-                raise TypeError(f"entrypoint kind {kind!r} registered twice ({name})")
-            self._entrypoint_kinds[kind] = binder
+        # `_validation` stays last, so that it runs after every other extension's `worker_setup`:
+        # an extension bound after it (through `add_extension`) goes in front of it. It is found by
+        # identity, not by name: another extension's `name` is not this method's to read.
+        if name == "_validation":
+            self._validation_extension = bound
+            self.extensions.append(bound)
+        elif (
+            self._validation_extension is None or self._validation_extension not in self.extensions
+        ):
+            self.extensions.append(bound)
+        else:
+            self.extensions.insert(self.extensions.index(self._validation_extension), bound)
         return bound
 
     async def _setup_extensions(self) -> None:
@@ -557,6 +634,7 @@ class Container:
                 broker_url=self.config.nats_url,
                 service=self.service,
             )
+            self._extensions_setup_begun.append(ext)
             await ext.setup(ctx)
 
     async def _start_extensions(self) -> None:
@@ -564,12 +642,8 @@ class Container:
             await ext.start()
 
     async def _stop_extensions(self) -> None:
-        for ext in reversed(self.extensions):
-            try:
-                await ext.stop()
-            except Exception as exc:
-                self.logger.error(f"extension {ext.name} failed to stop: {exc}")
-        self._extensions_set_up = False
+        await _stop_in_reverse(self._extensions_setup_begun, self.logger)
+        self._extensions_setup_begun, self._extensions_set_up = [], False
 
     async def setup_extensions(self) -> None:
         """Initialize all registered extensions."""
@@ -585,12 +659,37 @@ class Container:
 
     async def _ensure_streams(self) -> None:
         if self.connection.jetstream_active:
+            if self.config.jetstream_resource_mode == "bind":
+                await validate_bound_streams(
+                    self.connection.js,
+                    self.config.effective_jetstream_streams,
+                )
+                return
             await ensure_streams(
                 self.connection.js,
-                self.config.jetstream_streams,
+                # Provision under the prefix, so two environments on one broker
+                # create their own streams rather than fighting over one name.
+                self.config.effective_jetstream_streams,
                 allow_update=self.config.jetstream_update_streams,
                 logger=self.logger,
             )
+
+    async def _bound_consumer_for(
+        self, pattern: str, durable: str, *, pull: bool
+    ) -> tuple[str, Any] | None:
+        if self.config.jetstream_resource_mode != "bind":
+            return None
+        assert self.connection.js is not None
+        stream = stream_for_subject(self.config.effective_jetstream_streams, pattern)
+        info = await validate_bound_consumer(
+            self.connection.js,
+            stream=stream.name,
+            durable=durable,
+            subject=pattern,
+            pull=pull,
+            config=self.config,
+        )
+        return stream.name, info
 
     async def _on_service_startup(self) -> None:
         if hasattr(self.service, "on_startup") and callable(self.service.on_startup):
@@ -615,8 +714,28 @@ class Container:
             await timer_instance.start(self.service)
 
     async def _stop_timers(self) -> None:
-        for timer_instance in self.registry.timers:
-            await timer_instance.stop()
+        """Stop every timer at once, giving a run already in flight `shutdown_timeout` to finish.
+
+        The grace is the budget the drain spends next, spent here first and concurrently, so the
+        timers wait one grace between them and not one each. `shutdown_timeout=None` sets no
+        deadline, as in the drain, and waits for the runs; one at or below zero is bounded at
+        `ON_SHUTDOWN_CEILING` with a warning (`bounded_shutdown_timeout`). A run that is cancelled and does not
+        finish is handed to the lifecycle, so the drain that follows waits for it, cancels it
+        again and reports it like any other task that refuses to stop.
+        """
+        grace = bounded_shutdown_timeout(
+            self.config.shutdown_timeout, self.logger, "Stopping the timers"
+        )
+        results = await asyncio.gather(
+            *(
+                timer_instance.stop(grace=grace, hand_over=self.lifecycle.adopt_task)
+                for timer_instance in self.registry.timers
+            ),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
 
     async def _setup_subscriptions(self) -> None:
         assert self.connection.nc is not None
@@ -627,6 +746,7 @@ class Container:
         sub = await self.connection.nc.subscribe(
             rpc_subject, queue=rpc_queue, cb=self.dispatcher.on_rpc_request
         )
+        self.connection.track_subscription(sub)
         self.connection.subscriptions.add(asyncio.create_task(self._subscription_handler(sub)))
 
         # Describe subscription
@@ -635,6 +755,7 @@ class Container:
         sub = await self.connection.nc.subscribe(
             desc_subject, queue=desc_queue, cb=self.dispatcher.on_describe_request
         )
+        self.connection.track_subscription(sub)
         self.connection.subscriptions.add(asyncio.create_task(self._subscription_handler(sub)))
 
         # Async RPC subscription
@@ -643,48 +764,16 @@ class Container:
         sub = await self.connection.nc.subscribe(
             async_subject, queue=async_queue, cb=self.dispatcher.on_async_request
         )
+        self.connection.track_subscription(sub)
         self.connection.subscriptions.add(asyncio.create_task(self._subscription_handler(sub)))
 
         # Event subscriptions
         for pattern in self.registry.event_handlers:
-            durable = self.registry.event_durables.get(pattern)
-            if self.connection.jetstream_active and durable and pattern in self.registry.event_pull:
-                assert self.connection.js is not None
-                pull_sub = await self.connection.js.pull_subscribe(
-                    pattern,
-                    durable=durable,
-                    config=consumer_config_for(self.config),
-                )
-                await self.dispatcher.report_consumer_drift(pull_sub, durable)
-                self.connection.subscriptions.add(
-                    asyncio.create_task(
-                        self.dispatcher.pull_loop(
-                            pull_sub,
-                            durable,
-                            pattern=pattern,
-                            is_running_fn=lambda: self.is_running,
-                        )
-                    )
-                )
-                continue
-            if self.connection.jetstream_active and durable:
-                assert self.connection.js is not None
-                sub = await self.connection.js.subscribe(
-                    pattern,
-                    queue=durable,
-                    cb=self.dispatcher.make_jetstream_event_callback(pattern),
-                    durable=durable,
-                    manual_ack=True,
-                    config=consumer_config_for(self.config),
-                )
-                await self.dispatcher.report_consumer_drift(sub, durable)
-            else:
-                sub = await self.connection.nc.subscribe(
-                    pattern, cb=self.dispatcher.make_event_callback(pattern)
-                )
-            self.connection.subscriptions.add(asyncio.create_task(self._subscription_handler(sub)))
+            await self.listener_subscriptions.subscribe(pattern)
 
-        await self.connection.nc.flush()
+        await flush_through_buffered_commands(self.connection.nc)
+        if self.registry.event_pause_when_down:
+            self.listener_pauses = self.listener_subscriptions.start_pauses()
 
     async def setup_subscriptions(self) -> None:
         """Set up all NATS subscriptions for RPC and event handlers."""
@@ -695,12 +784,4 @@ class Container:
             while self.is_running:
                 await asyncio.sleep(1)
         finally:
-            if (
-                self.connection.nc
-                and self.connection.broker_state != BrokerConnectionState.CLOSED
-                and not getattr(self.connection.nc, "is_draining", False)
-            ):
-                try:
-                    await sub.unsubscribe()
-                except Exception:
-                    pass
+            await self.connection.unsubscribe(sub)

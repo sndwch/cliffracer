@@ -8,6 +8,8 @@ Empirically verifies:
 4. JetStream DLQ stream coverage, wildcard pattern matching, and namespacing alignment.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 from pydantic import BaseModel
 
@@ -52,7 +54,8 @@ def test_fanout_and_durable_conflict_with_jetstream_enabled_raises() -> None:
 
 
 def test_fanout_and_durable_conflict_with_jetstream_disabled_is_permitted() -> None:
-    """When jetstream_enabled=False, fanout=True + durable is permitted per commit 7b6da13."""
+    """When jetstream_enabled=False, fanout=True with a durable is permitted: the durable
+    is inert without JetStream, so it describes intent rather than a subscription."""
 
     class ConflictDisabledService(CliffracerService):
         @listener("orders.created", durable="order_worker", fanout=True)
@@ -93,30 +96,53 @@ def test_validated_listener_fanout_and_durable_conflict_raises() -> None:
     assert "declare(s) BOTH a durable and fanout=True" in str(exc_info.value)
 
 
-def test_broadcast_and_durable_on_same_subject_conflict_raises() -> None:
-    """Declaring @broadcast and @listener(durable=...) on the same subject conflicts and raises."""
+def _broadcast_and_durable_service(first: str, second: str) -> type[CliffracerService]:
+    """Both handlers claim 'alerts.general'. Members are visited by name, so `first` runs first."""
+    handlers = {
+        "broadcast": (broadcast("alerts.general"), "a broadcast"),
+        "listener": (listener("alerts.general", durable="alert_durable"), "a durable listener"),
+    }
 
-    class BroadcastDurableConflictService(CliffracerService):
-        @broadcast("alerts.general")
-        async def on_broadcast(self) -> None:
-            pass
+    async def first_handler(self) -> None:
+        pass
 
-        @listener("alerts.general", durable="alert_durable")
-        async def on_listener(self) -> None:
-            pass
+    async def second_handler(self) -> None:
+        pass
 
+    namespace = {
+        f"a_{first}": handlers[first][0](first_handler),
+        f"b_{second}": handlers[second][0](second_handler),
+    }
+    return type("BroadcastDurableConflictService", (CliffracerService,), namespace)
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [("broadcast", "listener"), ("listener", "broadcast")],
+    ids=["broadcast-then-listener", "listener-then-broadcast"],
+)
+def test_broadcast_and_durable_on_same_subject_conflict_raises(first, second) -> None:
+    """A @broadcast and a @listener(durable=...) on one subject conflict: whichever is
+    discovered second is refused as a duplicate of the subject, naming both handlers.
+
+    That is the refusal that fires; it comes before the durable-versus-fanout invariant is
+    reached, so the message must be this one and not either of two.
+    """
+    service_class = _broadcast_and_durable_service(first, second)
     cfg = ServiceConfig(
         name="bc_conflict_svc",
         jetstream_enabled=True,
         jetstream_streams=[StreamSpec(name="DLQ", subjects=["dlq.*"])],
     )
-    svc = BroadcastDurableConflictService(cfg)
+    svc = service_class(cfg)
     with pytest.raises(ConfigurationError) as exc_info:
         HandlerDiscovery.discover(svc, cfg)
 
-    assert "declare(s) BOTH a durable and fanout=True" in str(
-        exc_info.value
-    ) or "Duplicate event listener declared on subject 'alerts.general'" in str(exc_info.value)
+    msg = str(exc_info.value)
+    assert (
+        f"Duplicate event listener declared on subject 'alerts.general': "
+        f"'b_{second}' conflicts with 'a_{first}'"
+    ) in msg
 
 
 def test_unspecified_listener_semantics_raises_configuration_error() -> None:
@@ -326,14 +352,16 @@ def test_pull_consumer_with_jetstream_disabled_raises() -> None:
     assert "declares pull=True but this service has jetstream_enabled=False" in str(exc_info.value)
 
 
-def test_pull_consumer_subject_not_validated_against_stream_specs_gap() -> None:
-    """ARCHITECTURAL GAP: HandlerDiscovery does NOT assert pull consumer subjects match declared streams.
+def test_discovery_alone_does_not_check_a_consumers_subject_against_the_declared_streams() -> None:
+    """`discover` scans the class and does not judge stream coverage: it accepts a durable (here
+    a pull consumer) whose subject no declared stream carries.
 
-    Unlike DLQ coverage (which asserts subject_covered_by(config.jetstream_streams, dlq_subject)),
-    pull consumers (and push durable consumers) do NOT have their subjects validated
-    against config.jetstream_streams during discovery. This permits startup with
-    uncovered pull consumers if another service owns the stream, but causes runtime
-    failures if the stream does not exist.
+    Startup does judge it: `Container._discover_for_startup` calls `validate_durable_coverage`,
+    which refuses an uncovered durable listener in either resource mode (pinned by
+    `test_a_durable_listener_with_no_covering_stream_is_refused_at_startup.py`). What `provision`
+    mode leaves to the server is the binding of the consumer to a stream, and `bind` mode
+    resolves the stream from the declared ones and refuses a subject none claims: the two tests
+    below pin those.
     """
 
     class PullUncoveredStreamService(CliffracerService):
@@ -349,10 +377,42 @@ def test_pull_consumer_subject_not_validated_against_stream_specs_gap() -> None:
     )
     svc = PullUncoveredStreamService(cfg)
 
-    # Discovery passes without validating that 'uncovered.pull.event' belongs to any declared stream
     reg = HandlerDiscovery.discover(svc, cfg)
     assert "uncovered.pull.event" in reg.event_pull
     assert reg.event_durables.get("uncovered.pull.event") == "pull_worker"
+
+
+def _uncovered_pull_service(mode: str):
+    class UncoveredPull(CliffracerService):
+        @listener("uncovered.pull.event", durable="pull_worker", pull=True)
+        async def on_pull(self) -> None:
+            pass
+
+    cfg = ServiceConfig(
+        name="pull_uncovered_svc",
+        jetstream_enabled=True,
+        jetstream_resource_mode=mode,
+        jetstream_streams=[StreamSpec(name="DLQ", subjects=["dlq.*"])],
+    )
+    svc = UncoveredPull(cfg)
+    svc.container.js = AsyncMock()
+    return svc
+
+
+async def test_bind_mode_refuses_a_consumer_subject_no_declared_stream_claims() -> None:
+    svc = _uncovered_pull_service("bind")
+
+    with pytest.raises(StreamDeclarationError, match="needs exactly one declared stream"):
+        await svc.container._bound_consumer_for("uncovered.pull.event", "pull_worker", pull=True)
+
+
+async def test_CONTROL_provision_mode_leaves_the_consumer_to_the_server() -> None:
+    svc = _uncovered_pull_service("provision")
+
+    assert (
+        await svc.container._bound_consumer_for("uncovered.pull.event", "pull_worker", pull=True)
+        is None
+    )
 
 
 # ==============================================================================
@@ -425,13 +485,79 @@ def test_dlq_coverage_skipped_when_jetstream_disabled() -> None:
     HandlerDiscovery.validate_dlq_coverage(cfg)
 
 
-def test_validate_subject_type_refuses_non_string_subjects() -> None:
-    """HandlerDiscovery._validate_subject_type raises TypeError if a non-string subject is supplied."""
-    cfg = ServiceConfig(name="test_svc")
+def test_the_decorators_refuse_a_non_string_subject_when_the_class_is_defined() -> None:
+    """The check that protects a real service: a decorator refuses a non-str subject at once.
+
+    `_validate_subject_type` in discovery is a backstop behind these, reachable only
+    through a marker written by hand (next test).
+    """
+    for decorator, args in (
+        (listener, (12345,)),
+        (broadcast, (12345,)),
+        (validated_listener, (12345, _SubjectModel)),
+    ):
+        with pytest.raises(ConfigurationError, match="takes a NATS subject string, not int"):
+            decorator(*args)
+
+
+class _SubjectModel(BaseModel):
+    value: int
+
+
+@pytest.mark.parametrize(
+    ("marker", "value"),
+    [
+        ("_cliffracer_events", [12345]),
+        ("_cliffracer_validated_events", [(12345, _SubjectModel, None)]),
+        ("_cliffracer_broadcast", 12345),
+    ],
+    ids=["listener", "validated_listener", "broadcast"],
+)
+def test_discovery_refuses_a_non_string_subject_in_a_marker_written_by_hand(marker, value) -> None:
+    """Each of the three discovery sites checks its marker's subject, through `discover`.
+
+    Calling `_validate_subject_type` directly stays green with those call sites
+    deleted, so this goes in by the route a service takes.
+    """
 
     class WeirdSubjectService(CliffracerService):
-        pass
+        async def handler(self, message: _SubjectModel) -> None:
+            pass
 
-    svc = WeirdSubjectService(cfg)
-    with pytest.raises(TypeError, match="event subject must be a str"):
-        HandlerDiscovery._validate_subject_type(svc, 12345, lambda: None)
+    setattr(WeirdSubjectService.handler, marker, value)
+    svc = WeirdSubjectService(ServiceConfig(name="test_svc"))
+
+    with pytest.raises(TypeError, match="event subject must be a str") as caught:
+        svc._discover_handlers()
+    assert "handler" in str(caught.value)
+
+
+def test_a_validated_listener_cannot_ask_for_pull_so_discovery_has_nothing_to_ignore():
+    """Tripwire for the day `validated_listener` gains `pull=`.
+
+    The validated branch of `HandlerDiscovery.discover` reads the cross-namespace, durable and
+    fanout markers but not the pull marker, which is harmless only while the decorator cannot set
+    one. Adding the parameter without teaching that branch to read it would bind a pull listener
+    as a push subscription, every replica handling every message, which is the outcome
+    `validate_pull_is_usable` exists to prevent. If this fails, read `_cliffracer_event_pull` in
+    the validated branch and add a test that a validated pull listener without a durable is
+    refused, then delete this one.
+    """
+    import inspect
+
+    assert "pull" not in inspect.signature(validated_listener).parameters
+
+
+def test_a_validated_listener_is_registered_with_its_event_spec():
+    class Ev(BaseModel):
+        n: int
+
+    class Svc(CliffracerService):
+        @validated_listener("v.x", Ev, fanout=True)
+        async def on_v(self, ev: Ev) -> None: ...
+
+    svc = Svc(ServiceConfig(name="v_svc", health_port=0))
+    svc._discover_handlers()
+    registry = svc.container.registry
+
+    assert "v.x" in registry.event_specs_by_subject

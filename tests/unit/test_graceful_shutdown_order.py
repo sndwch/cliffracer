@@ -8,14 +8,18 @@ prematurely closed extension resources (e.g. database pools, KV stores).
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from loguru import logger
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
 from cliffracer.core.extension import Extension
+from cliffracer.testing import refuse_a_reply_with_no_subject
+from tests.phase_stubs import ServicePhases
 
 pytestmark = pytest.mark.unit
 
@@ -50,6 +54,10 @@ class DatabaseExtension(Extension):
 class _MockMsg:
     """Mock NATS message for testing RPC dispatch and response."""
 
+    #: Every dispatcher path reads this; a double without one let a
+    #: reply be recorded that production would have refused.
+    reply: str | None = "_INBOX.test"
+
     def __init__(self, subject: str, data: dict[str, Any]) -> None:
         self.subject = subject
         self.data = json.dumps(data).encode()
@@ -57,6 +65,7 @@ class _MockMsg:
         self.response: dict[str, Any] | None = None
 
     async def respond(self, payload: bytes) -> None:
+        refuse_a_reply_with_no_subject(self)
         self.response = json.loads(payload.decode())
 
 
@@ -86,7 +95,7 @@ async def test_active_rpc_finishes_before_extensions_are_stopped() -> None:
     mock_nc.is_connecting = False
     mock_nc.is_reconnecting = False
 
-    with patch("nats.connect", return_value=mock_nc):
+    with patch("cliffracer.core.dial.connect", return_value=mock_nc):
         svc = OrderService(ServiceConfig(name="order_service", health_port=0))
         await svc.start()
 
@@ -152,7 +161,7 @@ async def test_handle_rpc_request_drains_before_extension_teardown() -> None:
     mock_nc.is_connecting = False
     mock_nc.is_reconnecting = False
 
-    with patch("nats.connect", return_value=mock_nc):
+    with patch("cliffracer.core.dial.connect", return_value=mock_nc):
         svc = PaymentService(ServiceConfig(name="payment_svc", health_port=0))
         await svc.start()
 
@@ -190,7 +199,7 @@ async def test_shutdown_sequence_comprehensive_order() -> None:
         async def stop(self) -> None:
             events.append("extensions_stopped")
 
-    class FullLifecycleService(CliffracerService):
+    class FullLifecycleService(ServicePhases, CliffracerService):
         ext = LoggingExtension()
 
         async def _stop_timers(self) -> None:
@@ -211,7 +220,7 @@ async def test_shutdown_sequence_comprehensive_order() -> None:
     mock_nc.is_connecting = False
     mock_nc.is_reconnecting = False
 
-    with patch("nats.connect", return_value=mock_nc):
+    with patch("cliffracer.core.dial.connect", return_value=mock_nc):
         svc = FullLifecycleService(ServiceConfig(name="full_svc", health_port=0))
         await svc.start()
 
@@ -223,6 +232,16 @@ async def test_shutdown_sequence_comprehensive_order() -> None:
             await orig_health_stop()
 
         svc.health_listener.stop = logged_health_stop  # type: ignore[assignment]
+
+        # Subscription cancellation, step 3 of shutdown, into the same timeline
+        connection = svc.container.connection
+        orig_unsubscribe_all = connection.unsubscribe_all
+
+        async def logged_unsubscribe_all() -> None:
+            events.append("subscriptions_cancelled")
+            await orig_unsubscribe_all()
+
+        connection.unsubscribe_all = logged_unsubscribe_all  # type: ignore[method-assign]
 
         # Register an active task that finishes during drain
         async def background_worker() -> None:
@@ -238,6 +257,7 @@ async def test_shutdown_sequence_comprehensive_order() -> None:
         expected = [
             "timers_stopped",
             "health_listener_stopped",
+            "subscriptions_cancelled",
             "task_started",
             "task_completed",
             "on_shutdown",
@@ -256,7 +276,7 @@ async def test_shutdown_without_active_tasks_is_clean() -> None:
     mock_nc.is_connecting = False
     mock_nc.is_reconnecting = False
 
-    with patch("nats.connect", return_value=mock_nc):
+    with patch("cliffracer.core.dial.connect", return_value=mock_nc):
         svc = CliffracerService(ServiceConfig(name="clean_svc", health_port=0))
         await svc.start()
         # _active_tasks attribute absent or empty
@@ -288,7 +308,7 @@ async def test_active_task_exception_during_drain_does_not_abort_teardown() -> N
     mock_nc.is_connecting = False
     mock_nc.is_reconnecting = False
 
-    with patch("nats.connect", return_value=mock_nc):
+    with patch("cliffracer.core.dial.connect", return_value=mock_nc):
         svc = FailingTaskService(ServiceConfig(name="failing_task_svc", health_port=0))
         await svc.start()
 
@@ -296,11 +316,32 @@ async def test_active_task_exception_during_drain_does_not_abort_teardown() -> N
             await asyncio.sleep(0.01)
             raise ValueError("In-flight task failed")
 
-        task = asyncio.create_task(failing_worker())
-        svc.container._active_tasks = {task}
+        # Through the supervised path, so the framework's completion callback
+        # retrieves and logs the failure; a bare task assigned into the active
+        # set would skip it and leave the exception unretrieved.
+        logged: list[str] = []
+        loop_errors: list[dict[str, Any]] = []
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+        sink_id = logger.add(
+            lambda message: logged.append(message.record["message"]),
+            level="ERROR",
+            format="{message}",
+        )
+        try:
+            svc.container.lifecycle.spawn_supervised_task(failing_worker(), name="failing_worker")
 
-        await svc.stop()
+            await svc.stop()
 
+            gc.collect()
+            await asyncio.sleep(0)
+        finally:
+            logger.remove(sink_id)
+            loop.set_exception_handler(previous_handler)
+
+        assert any("task 'failing_worker': In-flight task failed" in m for m in logged)
+        assert loop_errors == []
         assert svc.ext.stopped is True
         assert svc._stopped is True
         assert mock_nc.close.called

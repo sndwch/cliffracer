@@ -5,7 +5,6 @@ from cliffracer.core.extension import (
     ExtensionIsolationError,
     SharedDependency,
     WorkerContext,
-    entrypoint,
 )
 
 pytestmark = pytest.mark.unit
@@ -33,11 +32,15 @@ async def test_default_hooks_are_no_ops_and_details_are_none():
     await ext.start()
     await ext.worker_setup(ctx)
     await ext.worker_result(ctx, None, None)
-    await ext.worker_teardown(ctx)
+    assert await ext.worker_teardown(ctx) is None
     await ext.stop()
+    # The send-side defaults too: the pipeline logs and swallows a hook that raises, so a default
+    # that stopped being a no-op would show only as an error line on every outbound call.
+    assert await ext.before_call(ctx) is None
+    assert await ext.after_call(ctx, "result", None) is None
+    assert await ext.after_call(ctx, None, RuntimeError("send failed")) is None
     assert ext.health_details() is None
     assert ext.info_details() is None
-    assert ext.entrypoint_kinds() == {}
 
 
 async def test_per_instance_state_created_in_setup_is_not_shared_between_services():
@@ -72,16 +75,6 @@ def test_extension_specification_is_immutable():
     origin.freeze()
     with pytest.raises(AttributeError, match="Cannot mutate attribute"):
         origin.calls = ["mutated"]
-
-
-def test_entrypoint_marker_records_kind_spec_and_owner():
-    owner = Recorder()
-
-    @entrypoint("thing", owner=owner, path="/x")
-    def handler():
-        pass
-
-    assert handler._cliffracer_entrypoints == [("thing", {"path": "/x"}, owner)]
 
 
 def test_arbitrary_object_dependencies_are_deepcopied_per_bound_instance():
@@ -138,8 +131,10 @@ def test_callable_factories_are_invoked_per_bound_instance():
     assert b.client.client_id == 2
 
 
-def test_uncopyable_dependencies_fallback_safely_without_crash():
-    """Verify uncopyable dependencies (e.g. threading.Lock) raise ExtensionIsolationError unless wrapped in SharedDependency."""
+def test_an_uncopyable_dependency_is_refused_and_a_shared_one_is_passed_by_reference():
+    """An argument that cannot be deep-copied (e.g. holds a threading.Lock) raises
+    `ExtensionIsolationError` rather than being shared by accident; wrapped in `SharedDependency`
+    it is passed through as the very same object."""
     import threading
 
     class UncopyableDep:

@@ -39,19 +39,18 @@ The `nats-py` library provides the transport client. Cliffracer wraps it with ty
 ## Design Tenets
 
 1.  **Explicit Over Permissive:** When multiple interpretations have materially different operational consequences, Cliffracer requires the developer to choose rather than applying a convenient default.
-2.  **Message-First:** Services communicate via NATS subjects. HTTP ingress is handled by `cliffracer-http` as an edge protocol.
-3.  **Opt-in Extensions:** Capabilities such as authentication, HTTP routing, metrics, and logging are packaged and loaded as separate extensions.
+2.  **Message-First:** Services communicate via NATS subjects.
+3.  **Opt-in Extensions:** Capabilities such as authentication, metrics, and logging are packaged and loaded as separate extensions.
 4.  **Typed Contracts:** Handler parameters and returns are validated against Pydantic types, and typed client SDKs are generated directly from handler signatures.
 5.  **Operational Resilience:** Explicit timeouts, bounded startup connections, queue draining on shutdown, and fail-at-startup validation for ambiguous configurations.
 
 ## Broker-Native vs. Broker-Agnostic
 
-Generic messaging frameworks abstract multiple brokers (Kafka, RabbitMQ, Redis, NATS) behind a unified interface to prioritize portability. FastStream is the strongest broker-agnostic option; choose it if you might not stay on NATS.
+Generic messaging frameworks abstract multiple brokers (Kafka, RabbitMQ, Redis, NATS) behind a unified interface to prioritize portability. If you might not stay on NATS, choose one of them.
 
 Cliffracer rejects broker portability. It is strictly NATS-native, for two reasons:
 
-1. **Explicit Failure Semantics:** Abstractions hide the network. Cliffracer exposes JetStream-specific failure modes natively. Unhandled Python exceptions map to JetStream `NAK` with backoff; explicit `RejectMessage` exceptions map to `TERM` (dead-letter queue). A portability layer flattening these into generic ack/nack semantics obscures operational control.
+1. **Explicit Failure Semantics:** Abstractions hide the network. Cliffracer exposes JetStream-specific failure modes natively. Unhandled Python exceptions and transient `RetryMessage` decisions map to JetStream `NAK` with backoff; terminal `RejectMessage` decisions are acknowledged, and exhausted or invalid messages reach the dead-letter path. A portability layer flattening these into generic ack/nack semantics obscures operational control.
 2. **The Entire Capabilities Set:** A portability layer can only offer what every broker shares—the lowest common denominator. Being NATS-native allows Cliffracer to expose JetStream KV, NATS request-reply, queue-group replica semantics, and subject wildcards as first-class primitives.
 
 The cost is that leaving NATS means rewriting the messaging layer; the bet is that you won't want to.
-

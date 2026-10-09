@@ -1,8 +1,10 @@
 """The three auth decorators, which the docs called removed and which had no tests.
 
-They are real, and exported from cliffracer.auth. What is true is narrower than
-"supported": the context they read is set only by AuthMiddleware on the HTTP
-path, so a decorated NATS RPC handler always raises.
+They are real, and exported from cliffracer.auth. They read the auth context a
+request carries: `AuthExtension.worker_setup` sets it on a NATS dispatch (the
+dispatch path is exercised in test_auth_context_propagation.py) and
+`AuthMiddleware` sets it on HTTP. With none set, a decorated handler raises
+AuthenticationError, which is what the tests here read.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -159,17 +161,3 @@ class TestRequiresPermissions:
 
         _authenticate(permissions={"orders:write"})
         assert await handler() == "ok"
-
-
-def test_the_documented_limitation_holds():
-    """Nothing sets the auth context on the NATS RPC path — only AuthMiddleware,
-    on HTTP. This pins the limitation KNOWN_LIMITATIONS.md now states, so it
-    cannot change silently and leave the doc wrong again."""
-
-    @requires_auth
-    def rpc_style_handler():
-        return "ok"
-
-    clear_current_context()
-    with pytest.raises(AuthenticationError):
-        rpc_style_handler()

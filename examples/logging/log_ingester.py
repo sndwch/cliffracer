@@ -2,7 +2,9 @@
 """
 Log Ingester Service - Ships logs from NATS to OpenObserve
 
-This service subscribes to all log events on the NATS "logs.>" topic
+This service subscribes to log events on the NATS "logs.>" pattern, which
+resolves to "<prefix>.<namespace>.logs.>" for a service that sets either --
+so it reads its own namespace, not every namespace on the broker
 and forwards them to OpenObserve for centralized log aggregation and analysis.
 
 Usage:
@@ -51,7 +53,10 @@ class LogIngester(CliffracerService):
 
     def __init__(self):
         # Configuration
-        nats_url = os.getenv("NATS_URL", "nats://localhost:4222")
+        nats_url = os.getenv(
+            "CLIFFRACER_TEST_NATS_URL",
+            ServiceConfig.model_fields["nats_url"].default,
+        )
         self.openobserve_url = os.getenv("OPENOBSERVE_URL", "http://localhost:5080")
         self.openobserve_org = os.getenv("OPENOBSERVE_ORG", "default")
         self.openobserve_stream = os.getenv("OPENOBSERVE_STREAM", "cliffracer_logs")
@@ -59,6 +64,7 @@ class LogIngester(CliffracerService):
         self.openobserve_password = os.getenv("OPENOBSERVE_PASSWORD", "password")
         self.batch_size = int(os.getenv("BATCH_SIZE", "100"))
         self.flush_interval = int(os.getenv("FLUSH_INTERVAL", "5"))
+        self.flush_runs = 0
 
         # Build OpenObserve API endpoint
         # Format: http://host:port/api/{org}/{stream}/_json
@@ -71,7 +77,6 @@ class LogIngester(CliffracerService):
         config = ServiceConfig(
             name="log_ingester",
             nats_url=nats_url,
-            log_level="INFO",
         )
         super().__init__(config)
 
@@ -95,7 +100,11 @@ class LogIngester(CliffracerService):
         """
         Receive log events from NATS and buffer them for batching.
 
-        This handler receives all logs published to topics matching "logs.*"
+        This handler receives every log line published within this service's
+        own namespace. The declared pattern is "logs.>"; the namespace and
+        environment prefix are applied by the same builder the log sink uses,
+        so the two ends cannot disagree. An ingester that should read every
+        namespace wants cross_namespace=True, which is a deliberate choice.
         (e.g., logs.user_service.info, logs.order_service.error).
         """
         async with self.buffer_lock:
@@ -112,6 +121,10 @@ class LogIngester(CliffracerService):
         async with self.buffer_lock:
             if self.buffer:
                 await self._flush_to_openobserve()
+        self.flush_runs += 1
+        if self.flush_runs == 1:
+            # The line the examples test waits for: the periodic flush has run.
+            print("EXAMPLE READY: first flush run", flush=True)
 
     async def _flush_to_openobserve(self):
         """

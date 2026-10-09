@@ -37,3 +37,17 @@ def test_broadcast_falls_back_to_a_plain_event_handler():
     svc.register_broadcast_handler("things.*", handler)
 
     assert svc.container.registry.event_handlers["things.*"] is handler
+
+
+def test_a_broadcast_handler_registered_programmatically_passes_discovery_validation():
+    """The fanout marker is what lets discovery accept it: without it every start would refuse."""
+    svc = _service()
+
+    def handler():
+        return None
+
+    svc.register_broadcast_handler("things.*", handler)
+
+    svc._discover_handlers()  # raises ConfigurationError if the handler is neither durable nor fanout
+
+    assert "things.*" in svc.container.registry.event_fanout

@@ -1,9 +1,13 @@
 """Adversarial validation and boundary tests for ServiceConfig.
 
 Tests verify strict numeric bounds, type rejection, and assignment validation
-across all ServiceConfig fields, ensuring non-positive concurrency limits,
-negative timeouts, and illegal runtime mutations raise pydantic.ValidationError
-immediately and preserve instance integrity.
+across the numeric, delay, name, namespace and `dlq_subject` fields, ensuring non-positive
+concurrency limits, negative timeouts, and illegal runtime mutations raise
+pydantic.ValidationError immediately and preserve instance integrity.
+
+The free-text `nats_url` and `health_host` are among them too: a value nats-py cannot connect to
+or asyncio cannot bind is refused at construction, with the reasons pinned in
+`test_a_nats_url_and_a_health_host_that_cannot_work_are_refused.py`.
 """
 
 import asyncio
@@ -156,6 +160,25 @@ def test_delays_accept_zero_and_positive_instantiation(field: str) -> None:
             ],
         ),
         ("namespace", ["", "ns.dot", "ns*wildcard", "ns>wildcard", "ns space", 123]),
+        ("nats_url", ["", "   ", "http://not-nats", "nats://", "nats://h:notaport", 123, None]),
+        ("health_host", ["not a host", "bad/host", "a..b", "[::1]", 123, None]),
+        # A template rather than a subject, rendered straight into the dead-letter publish: an
+        # illegal result is refused here, because a publish to one raises nothing client-side and
+        # the dead letters routed to it would vanish.
+        (
+            "dlq_subject",
+            [
+                "",
+                "dlq with spaces.*>",
+                ".dlq.{service}",
+                "dlq.{service}.",
+                "dlq..{service}",
+                "dlq.{nope}",
+                "{namespace}.dlq.{service}",  # no namespace set: renders `.dlq.valid_name`
+                123,
+                None,
+            ],
+        ),
     ],
 )
 def test_specialized_field_bounds_reject_invalid_instantiation(
@@ -268,8 +291,23 @@ def test_post_instantiation_mutations_accept_valid_values() -> None:
     assert cfg.namespace is None
 
 
-def test_container_initializes_and_enforces_concurrency_semaphores() -> None:
-    """Container derives distinct semaphores from configuration and bounds active executions."""
+async def _permits_that_can_be_taken(sem: asyncio.Semaphore, ceiling: int = 10) -> int:
+    """How many permits `sem` hands out before it blocks, read through `acquire()` and not `_value`."""
+    taken = 0
+    while taken < ceiling:
+        try:
+            await asyncio.wait_for(sem.acquire(), timeout=0.02)
+        except TimeoutError:
+            break
+        taken += 1
+    return taken
+
+
+async def test_container_derives_distinct_cached_semaphores_that_bound_executions() -> None:
+    """Three semaphores from three configured limits, each created once and then handed back, and
+    each blocking at its limit. A getter that built a new semaphore per call would satisfy a read
+    of a fresh semaphore's counter and throttle nothing, and the counter is asyncio's private
+    state besides: what is asserted here is what `acquire()` does."""
     service = MagicMock()
     service.name = "concurrency_service"
 
@@ -285,12 +323,18 @@ def test_container_initializes_and_enforces_concurrency_semaphores() -> None:
     sem_event = container._get_event_semaphore()
     sem_async = container._get_async_rpc_semaphore()
 
-    assert sem_rpc is not None
-    assert sem_rpc._value == 3
-    assert sem_event is not None
-    assert sem_event._value == 4
-    assert sem_async is not None
-    assert sem_async._value == 2
+    # Created once: the same object on every later call, and a different one per kind
+    assert container._get_rpc_semaphore() is sem_rpc
+    assert container._get_event_semaphore() is sem_event
+    assert container._get_async_rpc_semaphore() is sem_async
+    assert len({id(sem_rpc), id(sem_event), id(sem_async)}) == 3
+
+    # Each blocks at its own configured limit
+    assert sem_rpc is not None and sem_event is not None and sem_async is not None
+    assert await _permits_that_can_be_taken(sem_rpc) == 3
+    assert await _permits_that_can_be_taken(sem_event) == 4
+    assert await _permits_that_can_be_taken(sem_async) == 2
+    assert sem_rpc.locked() and sem_event.locked() and sem_async.locked()
 
 
 def test_container_concurrency_fallback_to_rpc_limit() -> None:
@@ -338,7 +382,7 @@ async def test_container_empirical_rpc_concurrency_throttling() -> None:
     max_observed = 0
     lock = asyncio.Lock()
 
-    async def mock_handle_rpc(msg: Any) -> None:
+    async def mock_handle_rpc(msg: Any, **_dispatch: Any) -> None:
         nonlocal active_count, max_observed
         async with lock:
             active_count += 1
@@ -352,9 +396,12 @@ async def test_container_empirical_rpc_concurrency_throttling() -> None:
 
     cfg = ServiceConfig(name="throttled_rpc_service", max_rpc_concurrency=2)
     container = Container(service, cfg)
-    container._handle_rpc_request = mock_handle_rpc  # type: ignore[method-assign,assignment]
+    # The handler the subscribed callback spawns, so the bound read is the live one.
+    container.dispatcher.rpc.handle_rpc_request = mock_handle_rpc  # type: ignore[method-assign]
 
-    tasks = [asyncio.create_task(container._on_rpc_request(MagicMock())) for _ in range(8)]
+    tasks = [
+        asyncio.create_task(container.dispatcher.on_rpc_request(MagicMock())) for _ in range(8)
+    ]
     await asyncio.gather(*tasks)
     await asyncio.gather(*container._active_tasks)
 
@@ -386,9 +433,10 @@ async def test_container_empirical_event_concurrency_throttling() -> None:
     service.container = None
     cfg = ServiceConfig(name="throttled_event_service", max_event_concurrency=3)
     container = Container(service, cfg)
-    container._dispatch_event = mock_dispatch_event  # type: ignore[method-assign,assignment]
+    # The handler the subscribed callback spawns, so the bound read is the live one.
+    container.dispatcher.events.handle_event = mock_dispatch_event  # type: ignore[method-assign,assignment]
 
-    callback = container._make_event_callback("orders.*")
+    callback = container.dispatcher.make_event_callback("orders.*")
 
     async def invoke_callback() -> None:
         await callback(MagicMock())

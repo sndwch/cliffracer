@@ -206,10 +206,48 @@ def test_bound_instances_retain_full_runtime_mutability() -> None:
     assert spec.items == ["item_4"]
     assert spec.metadata == {"version": 1, "nested": {"counter": 0}}
     assert spec.tags == {"tag_a", "tag_b"}
-    assert spec.name == ""
-    assert spec.service is None
+    # (`spec.name` and `spec.service` are not read here: a frozen spec never has them set, so they
+    # answer with the class defaults whatever bind() did.)
     assert not hasattr(spec, "dynamic_prop")
     assert not hasattr(spec, "runtime_cache")
+
+
+class DeclaredStateExtension(Extension):
+    """Keeps the mutable objects it was DECLARED with, so they are the specification's own."""
+
+    def __init__(self, items: list[str], metadata: dict[str, Any]) -> None:
+        self.items = items
+        self.metadata = metadata
+
+
+def test_bound_instances_get_their_own_copies_of_the_declaration_arguments() -> None:
+    """The isolation this file is about: what a bound instance holds is a copy of what was declared.
+
+    `SampleStressExtension` builds its own lists in `__init__` and takes only an int, so a bound
+    instance is separate from the spec whether or not `bind()` copies anything. Here the lists
+    are declaration arguments: without the copy a bound instance's list IS the declaration's.
+    """
+    items = ["declared"]
+    metadata: dict[str, Any] = {"nested": {"counter": 0}}
+    spec = DeclaredStateExtension(items=items, metadata=metadata)
+    spec.freeze()
+
+    bound_a = cast(DeclaredStateExtension, spec.bind("svc_a", "ext_a"))
+    bound_b = cast(DeclaredStateExtension, spec.bind("svc_b", "ext_b"))
+
+    assert bound_a.items == ["declared"] and bound_a.metadata == {"nested": {"counter": 0}}
+    assert bound_a.items is not spec.items and bound_a.items is not bound_b.items
+    assert bound_a.metadata["nested"] is not spec.metadata["nested"]
+    assert bound_a.metadata["nested"] is not bound_b.metadata["nested"]
+
+    bound_a.items.append("from_a")
+    bound_a.metadata["nested"]["counter"] += 1
+
+    assert bound_b.items == ["declared"] and bound_b.metadata["nested"]["counter"] == 0
+    assert spec.items == ["declared"] and spec.metadata["nested"]["counter"] == 0
+    assert items == ["declared"] and metadata["nested"]["counter"] == 0, (
+        "the caller's objects moved"
+    )
 
 
 def test_multi_bound_isolation_under_adversarial_mutations() -> None:
@@ -277,11 +315,10 @@ def test_freeze_idempotence_and_bound_freezing() -> None:
     spec = SampleStressExtension(seed=6)
     spec.freeze()
 
-    # Calling freeze() a second time on an already frozen spec:
-    # Because self._spec_frozen is already True, self._spec_frozen = True
-    # in freeze() triggers __setattr__, raising AttributeError!
-    with pytest.raises(AttributeError, match="Cannot mutate attribute '_spec_frozen'"):
-        spec.freeze()
+    # A second freeze() on a frozen spec is a no-op and leaves it frozen.
+    spec.freeze()
+    with pytest.raises(AttributeError, match="Cannot mutate attribute 'seed'"):
+        spec.seed = 7
 
     # Freezing a bound instance:
     bound: Any = spec.bind("svc", "ext")

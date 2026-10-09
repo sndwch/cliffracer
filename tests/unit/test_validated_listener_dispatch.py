@@ -4,9 +4,11 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
+from loguru import logger
 from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig, validated_listener
+from cliffracer.core.dispatch.events import DispatchOutcome
 
 pytestmark = pytest.mark.unit
 
@@ -39,10 +41,29 @@ def _make_service(on_invalid=None, default="deadletter"):
     return svc
 
 
-def test_discovery_registers_schema():
-    svc = _make_service()
-    assert "orders.created" in svc.container.registry.event_handlers
-    assert any(s is OrderCreated for s, _ in svc.container.registry.event_schemas.values())
+@pytest.fixture
+def warnings_logged():
+    """The warnings the framework logs, as text, for the length of one test."""
+    lines: list[str] = []
+    sink = logger.add(lambda message: lines.append(message.record["message"]), level="WARNING")
+    yield lines
+    logger.remove(sink)
+
+
+async def _handle(svc, msg):
+    """Dispatch with errors allowed to escape: a crash on the validated path must not be
+    swallowed and logged, which is what the default does."""
+    return await svc.container._handle_event(msg, raise_on_error=True)
+
+
+@pytest.mark.parametrize("on_invalid", [None, "drop"])
+def test_discovery_registers_schema(on_invalid):
+    """The schema is keyed by the subject the handler is bound to, with its on_invalid."""
+    svc = _make_service(on_invalid=on_invalid)
+    registry = svc.container.registry
+    assert "orders.created" in registry.event_handlers
+    assert registry.event_schemas["orders.created"] == (OrderCreated, on_invalid)
+    assert set(registry.event_schemas) == {"orders.created"}
 
 
 @pytest.mark.asyncio
@@ -72,18 +93,46 @@ async def test_invalid_message_dead_letters():
 
 
 @pytest.mark.asyncio
-async def test_drop_does_not_publish():
+async def test_an_invalid_message_is_dropped_under_the_drop_policy(warnings_logged):
     svc = _make_service(on_invalid="drop")
-    await svc.container._handle_event(_MockMsg("orders.created", {"order_id": "o1"}))  # invalid
+
+    outcome = await _handle(svc, _MockMsg("orders.created", {"order_id": "o1"}))  # missing amount
+
+    assert outcome is DispatchOutcome.INVALID
     assert svc.received == []
-    svc.publish_event.assert_not_called()
     svc.container._publish_dlq.assert_not_called()
+    # The decision is recorded: dropping is not the same as never having validated.
+    assert any("Dropped invalid message on 'orders.created'" in line for line in warnings_logged)
+    assert not any("Dead-lettered" in line for line in warnings_logged)
 
 
 @pytest.mark.asyncio
-async def test_non_dict_message_routes_to_on_invalid_policy():
-    """Verify non-dict payload routes to on_invalid policy without TypeError."""
-    svc = _make_service(on_invalid="drop")
-    await svc.container._handle_event(_MockMsg("orders.created", 123))
+async def test_an_invalid_message_is_judged_invalid_when_it_is_dead_lettered():
+    svc = _make_service(on_invalid="deadletter")
+
+    outcome = await _handle(svc, _MockMsg("orders.created", {"order_id": "o1"}))
+
+    assert outcome is DispatchOutcome.INVALID
+    svc.container._publish_dlq.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["drop", "deadletter"])
+async def test_non_dict_message_routes_to_on_invalid_policy(policy, warnings_logged):
+    """A payload that is not an object is judged invalid and handled by the declared policy.
+
+    Both policies are run, so the one that was applied is what the assertions read.
+    """
+    svc = _make_service(on_invalid=policy)
+
+    outcome = await _handle(svc, _MockMsg("orders.created", 123))
+
+    assert outcome is DispatchOutcome.INVALID
     assert svc.received == []
-    svc.publish_event.assert_not_called()
+    dropped = any("Dropped invalid message" in line for line in warnings_logged)
+    if policy == "drop":
+        svc.container._publish_dlq.assert_not_called()
+        assert dropped
+    else:
+        svc.container._publish_dlq.assert_called_once()
+        assert not dropped

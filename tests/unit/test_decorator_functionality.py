@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import json
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -28,6 +29,7 @@ from cliffracer.core.decorators import (
     listener as extended_listener,
 )
 from cliffracer.core.typed_rpc import build_handler_spec
+from cliffracer.testing import MockMessage
 
 pytestmark = pytest.mark.unit
 
@@ -146,32 +148,30 @@ class TestDecoratorFunctionality:
         assert "order.*" in listener_multi._cliffracer_events
         assert "payment.*" in listener_multi._cliffracer_events
 
-    def test_decorator_stacking(self):
-        """Test that decorators can be stacked"""
+    def test_rpc_marks_the_method_and_preserves_its_docstring(self):
+        """`@rpc` sets the marker and leaves the docstring alone. Stacking with another decorator
+        is `test_custom_decorator_compatibility` and the double `@listener` above."""
 
-        # This is a bit contrived but tests decorator compatibility
         @rpc
-        async def multi_decorated_method(self, x: int) -> int:
-            """A method with multiple decorators"""
+        async def documented_method(self, x: int) -> int:
+            """A documented method"""
             return x * 2
 
-        # Should still have RPC metadata
-        assert hasattr(multi_decorated_method, "_cliffracer_rpc")
-        assert multi_decorated_method._cliffracer_rpc is True
+        assert documented_method._cliffracer_rpc is True
+        assert documented_method.__doc__ == "A documented method"
 
-        # Should preserve docstring
-        assert multi_decorated_method.__doc__ == "A method with multiple decorators"
+    def test_rpc_marks_a_sync_method_and_leaves_it_synchronous(self):
+        """`@rpc` accepts a plain `def` handler and does not turn it into a coroutine function.
+        Dispatching a sync handler is the `iscoroutinefunction` branch of the RPC dispatcher, which
+        other tests drive."""
 
-    def test_decorator_on_sync_method(self):
-        """Test decorators handle sync methods appropriately"""
-
-        # RPC decorator on sync method (should work)
         @rpc
         def sync_rpc_method(self, x: int) -> int:
             return x + 1
 
-        assert hasattr(sync_rpc_method, "_cliffracer_rpc")
+        assert sync_rpc_method._cliffracer_rpc is True
         assert not inspect.iscoroutinefunction(sync_rpc_method)
+        assert sync_rpc_method(None, 1) == 2
 
     @pytest.mark.asyncio
     async def test_decorator_integration_with_service(self):
@@ -218,21 +218,6 @@ class TestDecoratorFunctionality:
         assert "system.broadcasts" in service.container.registry.event_handlers
         assert all(isinstance(k, str) for k in service.container.registry.event_handlers)
 
-    def test_decorator_error_handling(self):
-        """Test decorator behavior with invalid usage"""
-
-        # A decorator does not validate at decoration time; it validates at
-        # runtime, from the annotations. So test something else.
-
-        # Test that decorators preserve function identity
-        @rpc
-        async def decorated_func(self) -> None:
-            pass
-
-        # Should still be a callable
-        assert callable(decorated_func)
-        assert hasattr(decorated_func, "_cliffracer_rpc")
-
     def test_decorator_preserves_type_hints(self):
         """Test that decorators preserve type hints"""
 
@@ -274,24 +259,36 @@ class TestDecoratorFunctionality:
 
     @pytest.mark.asyncio
     async def test_broadcast_decorator_execution(self):
-        """Test broadcast decorator execution flow"""
+        """A broadcast another service publishes reaches a @broadcast handler through dispatch.
 
-        class OrderEvent(BroadcastMessage):
-            order_id: str
-            amount: float
+        `@broadcast` marks a method as a fanout listener on the subject `broadcast_message`
+        publishes to; it does not publish. So the test publishes with a second service and
+        replays the bytes it put on the wire into the first one's dispatcher.
+        """
+        received = []
 
         class BroadcastService(CliffracerService):
             @broadcast("order.events.created")
-            async def create_order_event(self, order_id: str, amount: float):
-                return OrderEvent(source_service=self.config.name, order_id=order_id, amount=amount)
+            async def on_order_event(self, order_id: str, amount: float) -> None:
+                received.append((order_id, amount))
 
         service = BroadcastService(ServiceConfig(name="broadcast_test"))
+        service._discover_handlers()
+        registry = service.container.registry
+        assert "order.events.created" in registry.event_handlers
+        assert "order.events.created" in registry.event_fanout
+        assert set(registry.broadcast_handlers) == {"order.events.created"}
 
-        # Execute broadcast method
-        result = await service.create_order_event("ORD123", 99.99)
+        sender = CliffracerService(ServiceConfig(name="sender"))
+        sender.nc = AsyncMock()
+        await sender.broadcast_message("order.events.created", order_id="ORD123", amount=99.99)
+        (call,) = sender.nc.publish.call_args_list
+        subject, data = call.args[:2]
+        assert subject == "order.events.created"
 
-        # Verify result
-        assert isinstance(result, OrderEvent)
-        assert result.order_id == "ORD123"
-        assert result.amount == 99.99
-        assert result.source_service == "broadcast_test"
+        await service.container._dispatch_event(
+            MockMessage(subject=subject, data=data, headers=dict(call.kwargs.get("headers") or {})),
+            raise_on_error=True,
+        )
+
+        assert received == [("ORD123", 99.99)]

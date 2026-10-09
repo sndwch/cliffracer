@@ -6,12 +6,15 @@ build-backend = "hatchling.build"
 name = "cliffracer-resilience"
 dynamic = ["version"]
 description = "Circuit breaking and rate limiting for Cliffracer services"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 readme = "README.md"
 license = {text = "MIT"}
 dependencies = [
     "cliffracer",
 ]
+
+[tool.cliffracer]
+lifecycle = "incubating"
 
 [tool.hatch.version]
 source = "vcs"

@@ -1,6 +1,8 @@
 """Tests for health listener port binding behavior and contention resolution."""
 
 import asyncio
+import errno
+import json
 import socket
 
 import pytest
@@ -26,10 +28,23 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _default_to(svc, port: int) -> None:
-    """Configure a port while simulating default configuration semantics."""
+def _health_port(svc, port: int) -> None:
+    """Point a constructed service's health listener at `port`.
+
+    `start()` re-reads `config.health_port`, so this is what decides the bind
+    -- the value passed to the HealthListener constructor is superseded.
+    """
     svc.config.health_port = port
-    svc.config.model_fields_set.discard("health_port")
+
+
+async def _info(port: int) -> dict:
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(b"GET /info HTTP/1.1\r\nHost: x\r\n\r\n")
+    await writer.drain()
+    raw = await reader.read()
+    writer.close()
+    _, _, body = raw.partition(b"\r\n\r\n")
+    return json.loads(body)
 
 
 async def _detached(svc):
@@ -42,48 +57,105 @@ async def _detached(svc):
     return svc
 
 
-async def test_two_default_services_on_same_port_fail_fast_on_second(caplog):
-    """Ensure default health port collisions fail fast with an error."""
-    port = _free_port()
+async def test_a_second_service_on_the_same_health_port_fails_to_start():
+    """A taken port is a misconfiguration and says so at startup.
+
+    Moving the second service to a port nobody asked for would leave its
+    probes pointing at the first service's listener, so the failure would be
+    discovered by a health check that passes while reading the wrong process.
+    """
+    # The first service takes whatever the OS gives it, and the second is pointed at that: the
+    # port is never released between choosing it and binding it, so another process cannot
+    # take it in the gap and turn this into a different failure.
     a = await _detached(CliffracerService(ServiceConfig(name="a", health_host="127.0.0.1")))
     b = await _detached(CliffracerService(ServiceConfig(name="b", health_host="127.0.0.1")))
-    _default_to(a, port)
-    _default_to(b, port)
+    _health_port(a, 0)
 
     await a.start()
     try:
-        assert a.health_listener.port == port, "the first service binds"
-        with pytest.raises(OSError):
+        port = a.health_listener.port
+        assert port, "the first service binds"
+        _health_port(b, port)
+        with pytest.raises(OSError) as caught:
             await b.start()
+        assert caught.value.errno == errno.EADDRINUSE
+        assert b.health_listener.port is None
     finally:
         await a.stop()
         await b.stop()
 
 
-async def test_an_explicit_port_still_fails_closed():
-    """Ensure explicit health port collisions raise an error."""
-    port = _free_port()
-    c = await _detached(
-        CliffracerService(ServiceConfig(name="c", health_host="127.0.0.1", health_port=port))
+async def test_health_port_zero_binds_a_real_port_and_info_reports_it():
+    """`health_port=0` is how a caller asks for whatever is free.
+
+    The number the OS picked is only useful if it can be read back, so /info
+    carries it; asserting against `hl.port` alone would pass on a listener
+    that reported a port it never bound.
+    """
+    svc = await _detached(
+        CliffracerService(ServiceConfig(name="z", health_host="127.0.0.1", health_port=0))
     )
-    d = await _detached(
-        CliffracerService(ServiceConfig(name="d", health_host="127.0.0.1", health_port=port))
+    await svc.start()
+    try:
+        bound = svc.health_listener.port
+        assert bound is not None and bound > 0
+
+        info = await _info(bound)
+        assert info["name"] == "z"
+        assert info["health_port"] == bound, "/info reports the port actually bound"
+    finally:
+        await svc.stop()
+
+
+async def test_two_services_asking_for_port_zero_both_bind():
+    """The co-located case the fallback used to serve, asked for explicitly."""
+    a = await _detached(
+        CliffracerService(ServiceConfig(name="z_a", health_host="127.0.0.1", health_port=0))
+    )
+    b = await _detached(
+        CliffracerService(ServiceConfig(name="z_b", health_host="127.0.0.1", health_port=0))
+    )
+    await a.start()
+    try:
+        await b.start()
+        try:
+            assert a.health_listener.port != b.health_listener.port
+            assert (await _info(a.health_listener.port))["name"] == "z_a"
+            assert (await _info(b.health_listener.port))["name"] == "z_b"
+        finally:
+            await b.stop()
+    finally:
+        await a.stop()
+
+
+async def test_a_port_set_at_construction_also_fails_closed():
+    """The same outcome by the other route: `health_port` given to the config
+    rather than assigned after construction."""
+    c = await _detached(
+        CliffracerService(ServiceConfig(name="c", health_host="127.0.0.1", health_port=0))
     )
 
     await c.start()
     try:
-        with pytest.raises(OSError):
+        port = c.health_listener.port
+        d = await _detached(
+            CliffracerService(ServiceConfig(name="d", health_host="127.0.0.1", health_port=port))
+        )
+        with pytest.raises(OSError) as caught:
             await d.start()
+        # The failure is the bind's, and the listener and the service are left as if it never ran.
+        assert caught.value.errno == errno.EADDRINUSE
+        assert d.health_listener.port is None
+        assert d.health_listener._server is None
+        assert d._running is False
     finally:
         await c.stop()
 
 
-async def test_a_single_default_service_still_binds():
-    """Ensure a single service binds the configured health port."""
+async def test_a_single_service_binds_the_port_its_config_names():
     port = _free_port()
-    svc = await _detached(
-        CliffracerService(ServiceConfig(name="s", health_host="127.0.0.1", health_port=port))
-    )
+    svc = await _detached(CliffracerService(ServiceConfig(name="s", health_host="127.0.0.1")))
+    _health_port(svc, port)
     await svc.start()
     try:
         assert svc.health_listener.port == port
@@ -93,9 +165,9 @@ async def test_a_single_default_service_still_binds():
         await svc.stop()
 
 
-async def test_two_services_through_the_orchestrator_contending_fail_fast():
-    """Ensure multiple services orchestrated with colliding ports fail fast."""
-    port = _free_port()
+async def test_two_orchestrated_services_contending_for_one_port_fail_closed():
+    """The orchestrator builds its services through a different path, so it
+    gets its own case rather than inheriting this file's verdict."""
 
     class A(CliffracerService):
         def __init__(self):
@@ -111,14 +183,16 @@ async def test_two_services_through_the_orchestrator_contending_fail_fast():
     assert len(orch.runners) == 2
 
     services = [await _detached(r._construct_service()) for r in orch.runners]
-    for svc in services:
-        _default_to(svc, port)  # both inherit one port, as two defaults would
+    _health_port(services[0], 0)
 
     await services[0].start()
     try:
-        with pytest.raises(OSError):
+        port = services[0].health_listener.port
+        assert port
+        _health_port(services[1], port)  # both point at one port, as two defaults would
+        with pytest.raises(OSError) as caught:
             await services[1].start()
-        assert services[0].health_listener.port == port
+        assert caught.value.errno == errno.EADDRINUSE
     finally:
         for svc in services:
             await svc.stop()

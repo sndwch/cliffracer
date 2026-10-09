@@ -18,6 +18,12 @@ def _handler_ids() -> set[int]:
     return set(logger._core.handlers)
 
 
+def _without_the_sink_figures(details: dict | None) -> dict:
+    """The attachment fields, with the sink's published and lost counts left out."""
+    assert details is not None
+    return {key: value for key, value in details.items() if key != "nats_sink"}
+
+
 async def test_no_sink_is_added_unless_asked_for():
     class Svc(CliffracerService):
         logging = LoggingExtension()
@@ -47,11 +53,17 @@ async def test_the_sink_is_added_and_then_REMOVED():
     await svc.logging.start()
     added = _handler_ids() - before
     assert len(added) == 1, f"expected exactly one new loguru handler, got {added}"
-    assert svc.logging.health_details() == {"to_nats": True, "streaming": True}
+    assert _without_the_sink_figures(svc.logging.health_details()) == {
+        "to_nats": True,
+        "streaming": True,
+    }
 
     await svc.logging.stop()
     assert _handler_ids() == before, "stop() must detach the sink it added"
-    assert svc.logging.health_details() == {"to_nats": True, "streaming": False}
+    assert _without_the_sink_figures(svc.logging.health_details()) == {
+        "to_nats": True,
+        "streaming": False,
+    }
 
 
 async def test_start_stop_start_stop_does_not_accumulate_sinks():
@@ -77,23 +89,33 @@ async def test_to_nats_without_a_connection_warns_rather_than_raising():
     svc = Svc(ServiceConfig(name="disconnected"))
     svc.nc = None
     await svc.container._setup_extensions()
-    await svc.logging.start()  # must not raise
+    warnings: list[str] = []
+    sink = logger.add(warnings.append, level="WARNING", format="{message}")
+    try:
+        await svc.logging.start()  # must not raise
+    finally:
+        logger.remove(sink)
     try:
         assert svc.logging.health_details()["streaming"] is False
+        # The one diagnostic that says why nothing is streamed: `to_nats` still reads True.
+        assert len(warnings) == 1, warnings
+        assert "no NATS connection" in warnings[0], warnings
+        assert svc.logging.name in warnings[0], warnings
     finally:
         await svc.logging.stop()
 
 
-async def test_two_services_do_not_share_sink_state():
-    """bind() is a shallow copy, so per-instance state is created in setup()."""
+async def test_two_services_of_one_class_do_not_share_sink_state():
+    """Each service gets its own extension instance, built from the one declaration.
 
-    class A(CliffracerService):
+    One class, not two: two classes declare two extensions, so they would stay apart even if a
+    declaration handed its own instance to every service built from it.
+    """
+
+    class Svc(CliffracerService):
         logging = LoggingExtension(to_nats=True)
 
-    class B(CliffracerService):
-        logging = LoggingExtension(to_nats=True)
-
-    a, b = A(ServiceConfig(name="a")), B(ServiceConfig(name="b"))
+    a, b = Svc(ServiceConfig(name="a")), Svc(ServiceConfig(name="b"))
     a.nc, b.nc = AsyncMock(), AsyncMock()
     await a.container._setup_extensions()
     await b.container._setup_extensions()
@@ -102,6 +124,7 @@ async def test_two_services_do_not_share_sink_state():
     try:
         assert a.logging._sink_id is not None
         assert b.logging._sink_id is None, "B must not see A's sink"
+        assert b.logging.health_details()["streaming"] is False
     finally:
         await a.logging.stop()
 
@@ -131,7 +154,7 @@ async def test_timing_logs_one_line_per_dispatch_with_the_kind_and_subject():
     timing = [line for line in lines if "timed.echo" in line]
     assert len(timing) == 1, lines
     assert timing[0].startswith("rpc timed.echo"), timing[0]
-    ms = float(timing[0].rsplit(" ", 1)[-1].rstrip("ms\n"))
+    ms = float(timing[0].split()[2].removesuffix("ms"))
     assert ms >= 10.0, f"slept 10ms, logged {ms}ms"
 
 
@@ -184,6 +207,3 @@ def test_structured_mode_actually_writes_parseable_json(tmp_path, monkeypatch):
     assert record["record"]["message"] == "a message that must arrive"
     assert record["record"]["extra"]["service"] == "structured_probe"
     assert record["record"]["level"]["name"] == "INFO"
-
-    # Verify log level name matches format expected by add_nats_sink.
-    assert record["record"]["level"]["name"].lower() == "info"

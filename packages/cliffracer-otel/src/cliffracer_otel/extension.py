@@ -16,13 +16,55 @@ from cliffracer.core.extension import (
     WorkerContext,
 )
 
+# Entrypoint kinds delivered by the broker. A timer fires from the service's own clock, so a span for
+# it names no messaging system and no destination.
+_BROKER_KINDS = frozenset({"rpc", "async_rpc", "event"})
+
+# Entrypoint kinds that get no span: a `describe` request is introspection, not application traffic.
+_SPANLESS_KINDS = frozenset({"describe"})
+
+# The span kind of an inbound dispatch, by entrypoint kind. An RPC answers a request, so it is SERVER,
+# the default. An event is consumed without an answer. A timer fires from the service's own clock, with
+# no message and no peer.
+_INBOUND_SPAN_KINDS = {"event": trace.SpanKind.CONSUMER, "timer": trace.SpanKind.INTERNAL}
+
+
+def _inbound_span_name(ctx: WorkerContext) -> str:
+    """The handler's name after the kind, so every subject that reaches it is one group.
+
+    A context that names no handler is named for its kind alone: falling back to the subject would
+    bring back one group per subject.
+    """
+    handler = ctx.data.get("handler_name")
+    return f"{ctx.kind} {handler}" if handler else ctx.kind
+
+
+def _set_messaging_attributes(span: trace.Span, ctx: WorkerContext, operation: str) -> None:
+    """Add the OpenTelemetry messaging attributes a tracing backend groups NATS traffic by."""
+    span.set_attribute("messaging.system", "nats")
+    span.set_attribute("messaging.operation.type", operation)
+    if ctx.subject:
+        span.set_attribute("messaging.destination.name", ctx.subject)
+
+
+# The provider `OtelExtension.setup` installed as the process-global one when none was supplied, and
+# the service whose name its Resource carries. OpenTelemetry allows one global provider per process,
+# so a second service in the process that supplies none shares it, and its spans carry that name.
+_installed: tuple[TracerProvider, str] | None = None
+
+
+def _record_installed(provider: TracerProvider, service_name: str) -> None:
+    global _installed
+    _installed = (provider, service_name)
+
 
 class OtelExtension(Extension):
     """Distributed tracing extension wrapping message dispatch and calls in OTel spans.
 
-    Extracts W3C trace context from incoming headers to record SERVER spans across
-    worker hooks, and injects outbound W3C traceparent headers into CLIENT spans
-    during outgoing RPC and event publications.
+    Extracts W3C trace context from incoming headers to record spans across worker hooks:
+    SERVER for an RPC, CONSUMER for an event, INTERNAL for a timer, named for the handler that ran,
+    and none for a `describe` request. Injects outbound W3C traceparent headers into the CLIENT or
+    PRODUCER spans of outgoing RPC and event publications.
     """
 
     def __init__(
@@ -62,7 +104,7 @@ class OtelExtension(Extension):
 
     async def setup(self, ctx: ExtensionSetupContext) -> None:
         """Initialize OpenTelemetry tracer provider if not set and resolve named tracer."""
-        # Per-instance state reset in setup() per Extension shallow copy lifecycle
+        # Per-service counters start in setup(), which runs once for each bound instance.
         self._span_count = 0
         self._error_count = 0
         self._active_spans = 0
@@ -87,29 +129,48 @@ class OtelExtension(Extension):
                     resource=Resource.create({"service.name": self._tracer_name})
                 )
                 trace.set_tracer_provider(provider)
+                _record_installed(provider, self._tracer_name)
+                self._service_log.warning(
+                    f"OtelExtension for {self._tracer_name!r} was given no tracer provider, so it "
+                    f"installed a process-wide one with no span processor: spans are recorded and "
+                    f"not exported unless one is added. Pass tracer_provider=SharedDependency(...) "
+                    f"with an exporter, or configure OpenTelemetry before the service starts."
+                )
                 self._tracer = provider.get_tracer(self._tracer_name)
             else:
+                if _installed is not None and current_provider is _installed[0]:
+                    owner = _installed[1]
+                    if owner != self._tracer_name:
+                        self._service_log.warning(
+                            f"OtelExtension for {self._tracer_name!r} shares the tracer provider "
+                            f"installed for {owner!r}, so its spans carry service.name={owner!r}. "
+                            f"Pass tracer_provider=SharedDependency(...) with its own Resource to "
+                            f"report it under its own name."
+                        )
                 self._tracer = trace.get_tracer(self._tracer_name)
 
     async def worker_setup(self, ctx: WorkerContext) -> None:
-        """Extract W3C trace context, start server span, and attach context token."""
+        """Extract W3C trace context, start the inbound span, and attach context token."""
+        if ctx.kind in _SPANLESS_KINDS:
+            return
+
         # Normalize header keys to lowercase for robust W3C extraction
         carrier = {k.lower(): str(v) for k, v in ctx.headers.items()} if ctx.headers else {}
         extracted_ctx = self._propagator.extract(carrier=carrier)
 
-        span_name = f"{ctx.kind} {ctx.subject}" if ctx.subject else ctx.kind
         span = self.tracer.start_span(
-            name=span_name,
+            name=_inbound_span_name(ctx),
             context=extracted_ctx,
-            kind=trace.SpanKind.SERVER,
+            kind=_INBOUND_SPAN_KINDS.get(ctx.kind, trace.SpanKind.SERVER),
         )
 
         span.set_attribute("cliffracer.kind", ctx.kind)
         if ctx.subject:
             span.set_attribute("cliffracer.subject", ctx.subject)
-        cid = ctx.correlation_id or (ctx.headers.get("correlation_id") if ctx.headers else None)
-        if cid:
-            span.set_attribute("cliffracer.correlation_id", cid)
+        if ctx.correlation_id:
+            span.set_attribute("cliffracer.correlation_id", ctx.correlation_id)
+        if ctx.kind in _BROKER_KINDS:
+            _set_messaging_attributes(span, ctx, "process")
 
         active_ctx = trace.set_span_in_context(span, extracted_ctx)
         token = context.attach(active_ctx)
@@ -117,35 +178,39 @@ class OtelExtension(Extension):
         # Store in ctx.data dictionary to isolate across concurrent coroutines
         ctx.data["_otel_inbound_span"] = span
         ctx.data["_otel_inbound_token"] = token
-        ctx.data["_otel_span"] = span
-        ctx.data["_otel_token"] = token
         self._active_spans += 1
 
     async def worker_result(
         self, ctx: WorkerContext, result: object | None, exc: BaseException | None
     ) -> None:
         """Record exception (including RejectMessage) and set span status."""
-        span: trace.Span | None = ctx.data.get("_otel_inbound_span") or ctx.data.get("_otel_span")
-        if span is not None and span.is_recording():
-            if exc is not None:
-                span.record_exception(exc)
-                span.set_status(trace.StatusCode.ERROR, str(exc))
-                self._error_count += 1
-            else:
-                span.set_status(trace.StatusCode.OK)
+        span: trace.Span | None = ctx.data.get("_otel_inbound_span")
+        if span is not None:
+            # Counted whether or not the sampler is recording this span: the counters say what
+            # was dispatched and what failed, which a sampler does not change.
             self._span_count += 1
+            # An event the dispatcher found invalid raises nothing: it dead-letters the payload and
+            # marks the dispatch `ctx.data["outcome"] = "invalid"`, where an invalid RPC raises a
+            # refusal. Both end in error.
+            invalid = exc is None and ctx.data.get("outcome") == "invalid"
+            if exc is not None or invalid:
+                self._error_count += 1
+            if span.is_recording():
+                if exc is not None:
+                    span.record_exception(exc)
+                    span.set_status(trace.StatusCode.ERROR, str(exc))
+                elif invalid:
+                    span.set_status(trace.StatusCode.ERROR, "invalid payload")
+                else:
+                    span.set_status(trace.StatusCode.OK)
 
     async def worker_teardown(self, ctx: WorkerContext) -> None:
-        """End server span and detach context token."""
+        """End the inbound span and detach context token."""
         token = ctx.data.pop("_otel_inbound_token", None)
-        if token is None:
-            token = ctx.data.pop("_otel_token", None)
         if token is not None:
             context.detach(token)
 
         span: trace.Span | None = ctx.data.pop("_otel_inbound_span", None)
-        if span is None:
-            span = ctx.data.pop("_otel_span", None)
         if span is not None:
             span.end()
             self._active_spans = max(0, self._active_spans - 1)
@@ -166,9 +231,9 @@ class OtelExtension(Extension):
         span.set_attribute("cliffracer.kind", ctx.kind)
         if ctx.subject:
             span.set_attribute("cliffracer.subject", ctx.subject)
-        cid = ctx.correlation_id or (ctx.headers.get("correlation_id") if ctx.headers else None)
-        if cid:
-            span.set_attribute("cliffracer.correlation_id", cid)
+        if ctx.correlation_id:
+            span.set_attribute("cliffracer.correlation_id", ctx.correlation_id)
+        _set_messaging_attributes(span, ctx, "send")
 
         active_ctx = trace.set_span_in_context(span)
         token = context.attach(active_ctx)
@@ -184,14 +249,16 @@ class OtelExtension(Extension):
         span: trace.Span | None = ctx.data.pop("_otel_outbound_span", None)
         token = ctx.data.pop("_otel_outbound_token", None)
         try:
-            if span is not None and span.is_recording():
-                if exc is not None:
-                    span.record_exception(exc)
-                    span.set_status(trace.StatusCode.ERROR, str(exc))
-                    self._error_count += 1
-                else:
-                    span.set_status(trace.StatusCode.OK)
+            if span is not None:
                 self._span_count += 1
+                if exc is not None:
+                    self._error_count += 1
+                if span.is_recording():
+                    if exc is not None:
+                        span.record_exception(exc)
+                        span.set_status(trace.StatusCode.ERROR, str(exc))
+                    else:
+                        span.set_status(trace.StatusCode.OK)
         finally:
             if token is not None:
                 context.detach(token)

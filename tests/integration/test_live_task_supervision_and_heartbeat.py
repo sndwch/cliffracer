@@ -9,6 +9,8 @@ import pytest
 from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig, StreamSpec, listener, validated_listener
+from cliffracer.core.discovery import HandlerDiscovery
+from tests.broker_isolation import prefixed_name
 from tests.conftest import broker_url
 
 pytestmark = pytest.mark.integration
@@ -26,7 +28,7 @@ async def _clean_live_test_streams():
     js = nc.jetstream()
     for name in ("LIVE_HB_STREAM", "LIVE_HB_DLQ", "LIVE_NS_STREAM", "LIVE_NS_DLQ"):
         try:
-            await js.delete_stream(name)
+            await js.delete_stream(prefixed_name(name))
         except Exception:
             pass
     await nc.close()
@@ -35,7 +37,7 @@ async def _clean_live_test_streams():
     js = nc.jetstream()
     for name in ("LIVE_HB_STREAM", "LIVE_HB_DLQ", "LIVE_NS_STREAM", "LIVE_NS_DLQ"):
         try:
-            await js.delete_stream(name)
+            await js.delete_stream(prefixed_name(name))
         except Exception:
             pass
     await nc.close()
@@ -62,7 +64,7 @@ async def test_live_jetstream_heartbeat_long_handler_survives():
         jetstream_max_deliver=3,
         jetstream_streams=[
             StreamSpec(name="LIVE_HB_STREAM", subjects=["live.hb.*"]),
-            StreamSpec(name="LIVE_HB_DLQ", subjects=["dlq.*"]),
+            StreamSpec(name="LIVE_HB_DLQ", subjects=["dlq.live_hb_svc"]),
         ],
     )
     svc = LongRunningService(cfg)
@@ -73,7 +75,10 @@ async def test_live_jetstream_heartbeat_long_handler_survives():
 
     try:
         # Publish single work message
-        await raw_js.publish("live.hb.work", b'{"task_id": "endurance_1"}')
+        await raw_js.publish(
+            HandlerDiscovery.with_namespace(cfg, "live.hb.work"),
+            b'{"task_id": "endurance_1"}',
+        )
 
         # Wait 3.0s for the handler to complete and ack
         await asyncio.sleep(3.0)
@@ -84,7 +89,9 @@ async def test_live_jetstream_heartbeat_long_handler_survives():
         )
 
         # Confirm consumer has no outstanding unacked messages
-        cinfo = await raw_js.consumer_info("LIVE_HB_STREAM", "live-hb-worker")
+        cinfo = await raw_js.consumer_info(
+            prefixed_name("LIVE_HB_STREAM"), prefixed_name("live-hb-worker")
+        )
         assert cinfo.num_ack_pending == 0
         assert cinfo.num_pending == 0
 
@@ -110,7 +117,7 @@ async def test_live_namespaced_service_dlq_decoupling():
         jetstream_enabled=True,
         jetstream_streams=[
             StreamSpec(name="LIVE_NS_STREAM", subjects=["prod.orders.*"]),
-            StreamSpec(name="LIVE_NS_DLQ", subjects=["dlq.*"]),
+            StreamSpec(name="LIVE_NS_DLQ", subjects=["dlq.order_service"]),
         ],
     )
     svc = NamespacedOrderService(cfg)
@@ -124,11 +131,26 @@ async def test_live_namespaced_service_dlq_decoupling():
         async def on_dlq(msg):
             dlq_messages.append((msg.subject, json.loads(msg.data.decode(errors="replace"))))
 
-        await raw_nc.subscribe("dlq.order_service", cb=on_dlq)
+        await raw_nc.subscribe(HandlerDiscovery.dlq_subject(cfg), cb=on_dlq)
+
+        # The subject a namespaced DLQ WOULD use if the decoupling broke. A subscription on a
+        # literal can only ever deliver that literal, so what the DLQ subject is NOT is observed
+        # by listening on the alternative, not by reading back the subject subscribed to above.
+        namespaced_dlq_messages = []
+
+        async def on_namespaced_dlq(msg):
+            namespaced_dlq_messages.append(msg.subject)
+
+        await raw_nc.subscribe(
+            f"{cfg.namespace}.{HandlerDiscovery.dlq_subject(cfg)}", cb=on_namespaced_dlq
+        )
         await raw_nc.flush()
 
         # Publish invalid poison payload to namespaced subject
-        await raw_js.publish("prod.orders.create", b"CORRUPTED_NON_JSON_DATA!@#$")
+        await raw_js.publish(
+            HandlerDiscovery.with_namespace(cfg, "orders.create"),
+            b"CORRUPTED_NON_JSON_DATA!@#$",
+        )
 
         # Wait for dead-lettering
         for _ in range(50):
@@ -137,10 +159,16 @@ async def test_live_namespaced_service_dlq_decoupling():
             await asyncio.sleep(0.1)
 
         assert len(dlq_messages) == 1, "Expected 1 dead-lettered message on DLQ"
-        subject, data = dlq_messages[0]
-        assert subject == "dlq.order_service"
-        assert "prod" not in subject
-        assert data["original_subject"] == "prod.orders.create"
+        _, data = dlq_messages[0]
+        # The decoupling itself, pinned independently of the helper: the dead letter arrived on
+        # the unnamespaced subject (the count above) and nothing was published on the namespaced
+        # one. The flush is the barrier after which a late second publish would have arrived.
+        await raw_nc.flush()
+        assert namespaced_dlq_messages == []
+        assert data["original_subject"] == HandlerDiscovery.with_namespace(cfg, "orders.create")
+        # ...and the body is the poison itself, not only where it came from
+        assert data["payload"] == {"raw": "CORRUPTED_NON_JSON_DATA!@#$"}, data
+        assert data["error"].startswith("Decode error"), data
 
     finally:
         await raw_nc.close()

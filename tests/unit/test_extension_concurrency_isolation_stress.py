@@ -15,8 +15,8 @@ from cliffracer.core.extension import (
     ExtensionSetupContext,
     WorkerContext,
     _safe_clone_arg,
-    entrypoint,
 )
+from tests.conftest import broker_url
 
 pytestmark = pytest.mark.unit
 
@@ -95,7 +95,6 @@ def test_massive_multithreaded_concurrent_bind_and_mutation() -> None:
         assert isinstance(bound, HighlyConcurrentExtension)
         assert bound._origin is spec
         assert bound.service == service_id
-        assert bound._spec_frozen is False
 
         for step in range(mutations_per_thread):
             bound.tag_list.append(f"t_{thread_id}_{step}")
@@ -130,7 +129,10 @@ def test_massive_multithreaded_concurrent_bind_and_mutation() -> None:
         assert len(bound.sub_node.items) == mutations_per_thread
         assert all(item.startswith(f"node_{i}_") for item in bound.sub_node.items)
 
-    # Verify specification was never mutated
+    # Verify specification was never mutated, and is still frozen: binding must not unfreeze it.
+    # (`bound._spec_frozen is False` was asserted here before and held for any implementation,
+    # since every bound copy is a new object whose flag starts False.)
+    assert spec._spec_frozen is True
     assert spec.tag_list == ["init_a", "init_b"]
     assert spec.config_map == {"env": "prod", "flags": [1, 2, 3]}
     assert spec.tuple_matrix == ([10, 20], [30, 40])
@@ -156,7 +158,9 @@ def _run_freeze_race_iteration(iteration: int) -> None:
         barrier.wait()
         bound = spec.bind(f"svc_{thread_id}", f"ext_{thread_id}")
         assert isinstance(bound, HighlyConcurrentExtension)
-        assert bound._spec_frozen is False
+        # The race's observable is that a bind concurrent with `freeze()` still returns an
+        # independent, writable copy: the append below and the isolation checks after the join.
+        # (`bound._spec_frozen is False` held for any implementation: a bound copy is a new object.)
         bound.tag_list.append(f"worker_{thread_id}")
         with lock:
             bound_results.append(bound)
@@ -196,7 +200,12 @@ def test_concurrent_bind_racing_with_dynamic_freeze() -> None:
 
 @pytest.mark.asyncio
 async def test_multitask_asyncio_concurrent_hook_execution_stress() -> None:
-    """Stress-test concurrent hook execution across 60 interleaved asyncio tasks."""
+    """Per-instance state of bound extensions across 60 interleaved asyncio tasks.
+
+    This calls an extension's hooks directly: it covers the state each bound copy keeps across
+    cooperative yields, not the hook chain. The chain (`ExtensionPipeline.run_worker`) under
+    concurrency is `test_concurrent_dispatches_through_the_pipeline_each_run_their_hooks_in_order`.
+    """
     spec = HighlyConcurrentExtension(base_id=1)
     spec.freeze()
 
@@ -210,7 +219,7 @@ async def test_multitask_asyncio_concurrent_hook_execution_stress() -> None:
 
         setup_ctx = ExtensionSetupContext(
             service_config=ServiceConfig(name=service_id),
-            broker_url="nats://localhost:4222",
+            broker_url=broker_url(),
             service=None,
         )
         await bound.setup(setup_ctx)
@@ -241,6 +250,77 @@ async def test_multitask_asyncio_concurrent_hook_execution_stress() -> None:
 
     assert spec.local_counter == 0
     assert spec.history == []
+
+
+class _Trace(Extension):
+    """Writes each hook it receives into the dispatch's own `ctx.data`."""
+
+    async def worker_setup(self, ctx: WorkerContext) -> None:
+        ctx.data.setdefault("events", []).append(f"setup:{self.name}")
+        await asyncio.sleep(0)
+
+    async def worker_result(
+        self, ctx: WorkerContext, result: Any, exc: BaseException | None
+    ) -> None:
+        outcome = type(exc).__name__ if exc is not None else f"ok={result}"
+        await asyncio.sleep(0)
+        ctx.data["events"].append(f"result:{self.name}:{outcome}")
+
+    async def worker_teardown(self, ctx: WorkerContext) -> None:
+        await asyncio.sleep(0)
+        ctx.data["events"].append(f"teardown:{self.name}")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_dispatches_through_the_pipeline_each_run_their_hooks_in_order() -> None:
+    """120 interleaved dispatches through the production `ExtensionPipeline.run_worker`.
+
+    Each runs setup forward, its call, then result and teardown in REVERSE order, and the unwind
+    runs when the call raised (every third does), with the exception handed to `worker_result`.
+    Every hook writes to its own dispatch's context, so a hook chain that shared or crossed state
+    between interleaved dispatches puts another dispatch's events here.
+    """
+    from cliffracer.core.dispatch.pipeline import ExtensionPipeline
+
+    first = _Trace().bind(service=None, name="a")
+    second = _Trace().bind(service=None, name="b")
+    pipeline = ExtensionPipeline([first, second])
+
+    async def one(index: int) -> WorkerContext:
+        ctx = WorkerContext(
+            kind="rpc",
+            subject=f"svc.rpc.m{index}",
+            headers={},
+            correlation_id=f"cid-{index}",
+            payload={},
+        )
+
+        async def call() -> int:
+            ctx.data["events"].append("call")
+            await asyncio.sleep(0)
+            if index % 3 == 0:
+                raise RuntimeError(f"call {index} failed")
+            return index
+
+        try:
+            await pipeline.run_worker(ctx, call)
+        except RuntimeError:
+            pass
+        return ctx
+
+    contexts = await asyncio.gather(*(one(i) for i in range(120)))
+
+    for index, ctx in enumerate(contexts):
+        outcome = "RuntimeError" if index % 3 == 0 else f"ok={index}"
+        assert ctx.data["events"] == [
+            "setup:a",
+            "setup:b",
+            "call",
+            f"result:b:{outcome}",
+            f"result:a:{outcome}",
+            "teardown:b",
+            "teardown:a",
+        ], (index, ctx.data["events"])
 
 
 def test_unfrozen_spec_concurrent_bind_preserves_spec_arguments() -> None:
@@ -336,20 +416,12 @@ def test_safe_clone_arg_edge_cases() -> None:
     assert _safe_clone_arg(None) is None
 
 
-def test_entrypoint_discovery_thread_safety_stress() -> None:
-    """Verify concurrent instantiation and discovery across multiple CliffracerService classes."""
+def test_concurrent_construction_binds_each_service_its_own_declared_extension() -> None:
+    """Verify concurrent construction across multiple CliffracerService classes."""
 
     class CustomGateExtension(Extension):
         def __init__(self) -> None:
-            self.registry: list[tuple[str, str]] = []
-
-        def entrypoint_kinds(self) -> dict[str, Any]:
-            def _binder(
-                service: Any, method_name: str, bound_method: Any, spec: dict[str, Any]
-            ) -> None:
-                self.registry.append((service.config.name, method_name))
-
-            return {"concurrency_gate": _binder}
+            self.registry: list[str] = []
 
     gate_spec = CustomGateExtension()
     gate_spec.freeze()
@@ -357,36 +429,26 @@ def test_entrypoint_discovery_thread_safety_stress() -> None:
     class SvcA(CliffracerService):
         gate = gate_spec
 
-        @entrypoint("concurrency_gate", owner=gate_spec)
-        async def handle_a(self) -> str:
-            return "a"
-
     class SvcB(CliffracerService):
         gate = gate_spec
 
-        @entrypoint("concurrency_gate", owner=gate_spec)
-        async def handle_b(self) -> str:
-            return "b"
-
     num_threads = 40
 
-    def worker(idx: int) -> tuple[CliffracerService, list[tuple[str, str]]]:
+    def worker(idx: int) -> CliffracerService:
         cls: type[SvcA] | type[SvcB] = SvcA if idx % 2 == 0 else SvcB
-        expected_method = "handle_a" if idx % 2 == 0 else "handle_b"
         svc: CliffracerService = cls(ServiceConfig(name=f"svc_thread_{idx}"))
-        svc._discover_handlers()
         gate_ext = getattr(svc, "gate")  # noqa: B009
         assert isinstance(gate_ext, CustomGateExtension)
         assert gate_ext is not gate_spec
-        return svc, [(f"svc_thread_{idx}", expected_method)]
+        gate_ext.registry.append(f"svc_thread_{idx}")
+        return svc
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
         futures = [executor.submit(worker, i) for i in range(num_threads)]
         results = [f.result() for f in futures]
 
-    for svc, expected in results:
+    for idx, svc in enumerate(results):
         gate_ext = getattr(svc, "gate")  # noqa: B009
-        assert isinstance(gate_ext, CustomGateExtension)
-        assert gate_ext.registry == expected
+        assert gate_ext.registry == [f"svc_thread_{idx}"]
 
     assert gate_spec.registry == []

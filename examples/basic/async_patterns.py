@@ -3,6 +3,7 @@ Example demonstrating sync vs async RPC patterns in Cliffracer
 """
 
 import asyncio
+import os
 import time
 from datetime import datetime
 
@@ -11,6 +12,18 @@ from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig, ServiceOrchestrator, async_rpc, rpc
 from cliffracer import listener as event_handler
+
+
+def _port(fixed: int) -> int:
+    """The port to bind, or 0 to let the operating system choose one.
+
+    The fixed numbers in this file are what its URLs refer to, so they stay
+    readable as documentation. Setting `CLIFFRACER_EXAMPLE_PORTS=auto` asks for
+    a free port instead, which is what lets two copies of this example run at
+    the same time -- `tests/integration/test_examples_run.py` sets it, and
+    without it a second copy cannot bind and never starts.
+    """
+    return 0 if os.environ.get("CLIFFRACER_EXAMPLE_PORTS") == "auto" else fixed
 
 
 class OrderItem(BaseModel):
@@ -108,6 +121,25 @@ class InventoryService(CliffracerService):
     def __init__(self, config: ServiceConfig):
         super().__init__(config)
         self.inventory = {"widget": 100, "gadget": 50, "doohickey": 25}
+
+    async def on_startup(self) -> None:
+        # Subscriptions are made after this returns, so whether the service is serving is told by
+        # asking it, from a task that outlives startup.
+        self._serving_check = asyncio.create_task(self._say_when_serving())
+
+    async def _say_when_serving(self) -> None:
+        while True:
+            try:
+                await self.call_rpc(
+                    self.config.name,
+                    "check_availability",
+                    items=[{"name": "widget", "quantity": 1}],
+                )
+                break
+            except Exception:
+                await asyncio.sleep(0.1)
+        # The line the examples test waits for: the services answer RPCs.
+        print("EXAMPLE READY: inventory_service answered check_availability", flush=True)
 
     @rpc
     async def check_availability(self, items: list[OrderItem]) -> dict[str, ItemAvailability]:
@@ -380,17 +412,18 @@ def run_demo():
     runner = ServiceOrchestrator()
 
     runner.add_service(
-        OrderNATSService, ServiceConfig(name="order_service", health_port=8010, auto_restart=True)
+        OrderNATSService,
+        ServiceConfig(name="order_service", health_port=_port(8010), auto_restart=True),
     )
 
     runner.add_service(
         InventoryService,
-        ServiceConfig(name="inventory_service", health_port=8011, auto_restart=True),
+        ServiceConfig(name="inventory_service", health_port=_port(8011), auto_restart=True),
     )
 
     runner.add_service(
         NotificationService,
-        ServiceConfig(name="notification_service", health_port=8012, auto_restart=True),
+        ServiceConfig(name="notification_service", health_port=_port(8012), auto_restart=True),
     )
 
     print("Starting services...")

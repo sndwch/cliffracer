@@ -274,9 +274,11 @@ def test_listener_and_stream_round_trip_serialization() -> None:
     assert "listeners" in d_dict
     assert "streams" in d_dict
     restored = Description.from_dict(d_dict)
-    assert len(restored.listeners) == len(desc.listeners)
-    assert len(restored.streams) == len(desc.streams)
-    assert canonical(restored.to_dict()) == canonical(d_dict)
+    # Equality, not a count and not the rendered dict against itself: a field that `to_dict`
+    # never emits is the same on both sides of a comparison of renderings.
+    assert restored.listeners == desc.listeners
+    assert restored.streams == desc.streams
+    assert restored == desc
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,20 @@ def _rpc_msg(subject: str = "svc.rpc.work", data: dict | None = None):
     return msg
 
 
+def _record_drain_deadlines(svc: CliffracerService) -> list[float | None]:
+    """Record the deadline `stop()` hands to the task drain, and still run the drain."""
+    lifecycle = svc.container.lifecycle
+    deadlines: list[float | None] = []
+    real_drain = lifecycle.drain_active_tasks
+
+    async def recording_drain(timeout: float | None = 30.0) -> None:
+        deadlines.append(timeout)
+        await real_drain(timeout=timeout)
+
+    lifecycle.drain_active_tasks = recording_drain  # type: ignore[method-assign]
+    return deadlines
+
+
 @pytest.mark.asyncio
 async def test_max_rpc_concurrency_bounds_in_flight_handlers():
     """max_rpc_concurrency limits simultaneous in-flight handler executions."""
@@ -91,7 +105,8 @@ async def test_unbounded_concurrency_by_default():
 
 
 @pytest.mark.asyncio
-async def test_shutdown_timeout_cancels_hanging_tasks():
+@pytest.mark.parametrize("shutdown_timeout", [0.1, 0.5])
+async def test_shutdown_timeout_cancels_hanging_tasks(shutdown_timeout):
     """Service shutdown terminates hanging in-flight tasks when shutdown_timeout expires."""
     cancelled = False
 
@@ -106,7 +121,7 @@ async def test_shutdown_timeout_cancels_hanging_tasks():
                 cancelled = True
                 raise
 
-    config = ServiceConfig(name="timeout_svc", shutdown_timeout=0.1)
+    config = ServiceConfig(name="timeout_svc", shutdown_timeout=shutdown_timeout)
     svc = SlowService(config)
     svc._discover_handlers()
     svc._running = True
@@ -116,12 +131,23 @@ async def test_shutdown_timeout_cancels_hanging_tasks():
     await svc.container._on_rpc_request(msg)
     assert len(svc.container._active_tasks) == 1
 
-    start_time = time.time()
+    deadlines = _record_drain_deadlines(svc)
+    started = time.monotonic()
     await svc.stop()
-    elapsed = time.time() - start_time
+    elapsed = time.monotonic() - started
 
-    # Shutdown should have taken ~0.1s, well under 2.0s
-    assert elapsed < 2.0
+    # The drain was given the configured deadline, not some other. This is read
+    # from the call rather than timed: a ceiling on `elapsed` would have to
+    # allow for a slow host, and a fixed deadline several times too long would
+    # sit inside any such allowance.
+    assert deadlines == [shutdown_timeout]
+    # And it was waited out before the handler was cancelled. A floor cannot
+    # flake: a slow host only lengthens it.
+    assert elapsed >= shutdown_timeout * 0.9, f"cancelled after {elapsed:.3f}s"
+
+    # The handler sleeps 10s and returns "completed" if it is left alone, so
+    # reaching its except branch is what says shutdown cancelled it rather
+    # than waiting it out.
     assert cancelled is True
     assert len(svc.container._active_tasks) == 0
 
@@ -148,6 +174,8 @@ async def test_shutdown_allows_tasks_to_finish_if_within_deadline():
     await svc.container._on_rpc_request(msg)
     assert len(svc.container._active_tasks) == 1
 
+    deadlines = _record_drain_deadlines(svc)
     await svc.stop()
+    assert deadlines == [1.0], "the drain must be given the configured deadline"
     assert completed is True
     assert len(svc.container._active_tasks) == 0

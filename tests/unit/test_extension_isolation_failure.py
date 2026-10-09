@@ -82,7 +82,6 @@ def test_safe_clone_arg_shared_dependency_unwraps() -> None:
     shared = SharedDependency(lock)
 
     assert shared.value is lock
-    assert shared.obj is lock
     assert shared.unwrap() is lock
 
     result = _safe_clone_arg(shared)
@@ -169,7 +168,6 @@ def test_safe_clone_arg_shared_sqlite_connection_unwraps() -> None:
     shared = SharedDependency(conn)
 
     assert shared.value is conn
-    assert shared.obj is conn
     assert shared.unwrap() is conn
 
     result = _safe_clone_arg(shared)
@@ -254,4 +252,9 @@ def test_safe_clone_arg_standard_function_preserved() -> None:
         return val * 2
 
     cloned = _safe_clone_arg(compute)
+
+    # "Preserved" is identity: a wrapper, a partial or a recompiled copy would also compute 10,
+    # and would break an extension that compares the callback by identity or reads attributes
+    # hung off the function.
+    assert cloned is compute
     assert cloned(5) == 10

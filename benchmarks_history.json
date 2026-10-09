@@ -60,18 +60,6 @@
           "msgpack_deser_speedup": 10.87
         }
       },
-      "http_gateway": {
-        "raw_rpc_latency_ms": 0.0089,
-        "http_gateway_latency_ms": 0.1822,
-        "overhead_ms": 0.1733,
-        "overhead_pct": 1953.6
-      },
-      "faststream": {
-        "standalone_msgs_sec": 17816746.6,
-        "hypervisor_msgs_sec": 151621.1,
-        "overhead_per_msg_ms": 0.00654,
-        "overhead_pct": 11650.8
-      },
       "auth": {
         "token_validation_ops_sec": 76235.3,
         "modern_hash_ops_sec": 54.59,

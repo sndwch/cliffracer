@@ -1,13 +1,39 @@
 """Batch aggregation and scheduled flush for message payloads."""
 
 import asyncio
+import inspect
 import time
 import weakref
 from collections import defaultdict
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
+
+
+def _processor_key(processor: Callable[[list[Any]], Any]) -> Any:
+    """What makes two items' processors the same one, so they are called together.
+
+    The processor itself: Python compares bound methods as the same owner and the
+    same function, for built-in and Python methods alike, so `service.handle`
+    named twice is one processor although every access builds a new object, and
+    two objects' methods are two. Anything else is its own processor unless it
+    defines equality, so two closures or partials are two processors even when
+    they would do the same work. A callable that cannot be hashed is keyed by
+    identity.
+    """
+    try:
+        hash(processor)
+    except TypeError:
+        return id(processor)
+    return processor
+
+
+def _describe(value: Any) -> str:
+    """What a processor returned, for the error that says it was the wrong shape."""
+    if isinstance(value, list | tuple):
+        return f"a {type(value).__name__} of {len(value)}"
+    return f"a {type(value).__name__}"
 
 
 class BatchProcessor:
@@ -47,6 +73,10 @@ class BatchProcessor:
         )  # Track running tasks
         self._processing_lock = asyncio.Lock()
         self._concurrent_batches = 0
+        # Wall-clock time at least one batch has been running, so overlapping batches are counted
+        # once and the idle time between batches not at all: what `items_per_second` divides by.
+        self._busy_seconds = 0.0
+        self._busy_since: float | None = None
         self._shutdown = False
 
         # Statistics
@@ -59,7 +89,12 @@ class BatchProcessor:
         }
 
     async def add_item(
-        self, batch_key: str, item: Any, processor: Callable[[list[Any]], Any]
+        self,
+        batch_key: str,
+        item: Any,
+        processor: Callable[[list[Any]], Any],
+        *,
+        results: Literal["shared", "per_item"] = "shared",
     ) -> Any:
         """
         Add item to batch for processing.
@@ -67,11 +102,22 @@ class BatchProcessor:
         Args:
             batch_key: Key to group items into batches
             item: Item to process
-            processor: Function to process the batch
+            processor: Function to process the batch. Items added with the same function,
+                or the same method of the same object, and the same ``results``, are processed
+                in one call.
+            results: What the caller receives, said by the caller and never guessed from what
+                the processor returned. ``"shared"`` (the default): the processor's return
+                value, as it is, whatever its type. ``"per_item"``: this item's own result, the
+                element of the processor's return value at this item's place in the call; the
+                processor must return a list or tuple with one result for each of its items,
+                and a batch whose processor returns anything else fails every one of its
+                callers with a ``ValueError``.
 
         Returns:
-            Result of processing this item
+            The result of processing this item, as ``results`` says
         """
+        if results not in ("shared", "per_item"):
+            raise ValueError(f"results must be 'shared' or 'per_item', got {results!r}")
         if self._shutdown:
             raise RuntimeError("BatchProcessor is shutting down")
 
@@ -80,7 +126,7 @@ class BatchProcessor:
         async with self._processing_lock:
             # Add item and future to batch
             self._batches[batch_key].append(
-                {"item": item, "future": future, "processor": processor}
+                {"item": item, "future": future, "processor": processor, "results": results}
             )
             self._batch_futures[batch_key].append(future)
 
@@ -130,14 +176,23 @@ class BatchProcessor:
     async def _execute_batch(
         self, batch_items: list[dict[str, Any]], futures: list[asyncio.Future[Any]]
     ) -> None:
-        """Execute batch processing"""
-        while self._concurrent_batches >= self.max_concurrent_batches:
-            await asyncio.sleep(0.001)
+        """Execute batch processing.
 
-        self._concurrent_batches += 1
-        start_time = time.perf_counter()
-
+        A batch that is cancelled, or ends in anything that is not an ``Exception``, fails the
+        callers it had not yet answered with a ``RuntimeError``: they are waiting on futures
+        nothing else will resolve. A group the batch had already answered keeps its result.
+        """
+        counted = False
         try:
+            while self._concurrent_batches >= self.max_concurrent_batches:
+                await asyncio.sleep(0.001)
+
+            if self._concurrent_batches == 0:
+                self._busy_since = time.perf_counter()
+            self._concurrent_batches += 1
+            counted = True
+            start_time = time.perf_counter()
+
             # Group items by processor
             processor_groups = defaultdict(list)
             future_mapping = {}
@@ -147,11 +202,17 @@ class BatchProcessor:
                 item = batch_item["item"]
                 future = futures[i]
 
-                processor_id = id(processor)
+                # One call per processor and per way of answering it: the same function asked
+                # for both is two calls, because its return value is read two ways.
+                processor_id = (_processor_key(processor), batch_item["results"])
                 processor_groups[processor_id].append(item)
 
                 if processor_id not in future_mapping:
-                    future_mapping[processor_id] = {"processor": processor, "futures": []}
+                    future_mapping[processor_id] = {
+                        "processor": processor,
+                        "futures": [],
+                        "results": batch_item["results"],
+                    }
                 future_mapping[processor_id]["futures"].append(future)
 
             # Process each group
@@ -162,22 +223,27 @@ class BatchProcessor:
 
                 try:
                     # Process the batch
-                    if asyncio.iscoroutinefunction(processor):
-                        results = await processor(items)
+                    if inspect.iscoroutinefunction(processor):
+                        outcome = await processor(items)
                     else:
-                        results = processor(items)
+                        outcome = processor(items)
 
-                    # Handle results
-                    if isinstance(results, list) and len(results) == len(group_futures):
-                        # Individual results for each item
-                        for future, result in zip(group_futures, results, strict=False):
+                    if processor_info["results"] == "per_item":
+                        if not isinstance(outcome, list | tuple) or len(outcome) != len(
+                            group_futures
+                        ):
+                            raise ValueError(
+                                f"results='per_item' needs the processor to return a list or "
+                                f"tuple with one result for each of its {len(group_futures)} "
+                                f"items, got {_describe(outcome)}"
+                            )
+                        for future, result in zip(group_futures, outcome, strict=True):
                             if not future.cancelled():
                                 future.set_result(result)
                     else:
-                        # Single result for all items
                         for future in group_futures:
                             if not future.cancelled():
-                                future.set_result(results)
+                                future.set_result(outcome)
 
                 except Exception as e:
                     logger.error(f"Batch processing error: {e}")
@@ -199,17 +265,41 @@ class BatchProcessor:
                     self.stats["total_items_processed"] / self.stats["total_batches_processed"]
                 )
 
-            if self.stats["processing_time_total_ms"] > 0:
-                self.stats["items_per_second"] = self.stats["total_items_processed"] / (
-                    self.stats["processing_time_total_ms"] / 1000
-                )
+            busy = self._busy_time()
+            if busy > 0:
+                self.stats["items_per_second"] = self.stats["total_items_processed"] / busy
 
             logger.debug(
                 f"Processed batch of {len(batch_items)} items in {processing_time_ms:.2f}ms"
             )
 
+        except BaseException as interruption:
+            unanswered = [future for future in futures if not future.done()]
+            for future in unanswered:
+                future.set_exception(
+                    RuntimeError(
+                        f"the batch was interrupted ({type(interruption).__name__}) before this "
+                        f"item's result was known; it may or may not have been processed"
+                    )
+                )
+            if unanswered:
+                logger.error(
+                    f"Batch interrupted by {type(interruption).__name__}: "
+                    f"{len(unanswered)} of {len(futures)} callers were failed"
+                )
+            raise
         finally:
-            self._concurrent_batches -= 1
+            if counted:
+                self._concurrent_batches -= 1
+                if self._concurrent_batches == 0 and self._busy_since is not None:
+                    self._busy_seconds += time.perf_counter() - self._busy_since
+                    self._busy_since = None
+
+    def _busy_time(self) -> float:
+        """Seconds a batch has been running, the one in progress included."""
+        if self._busy_since is None:
+            return self._busy_seconds
+        return self._busy_seconds + (time.perf_counter() - self._busy_since)
 
     async def flush_all(self) -> None:
         """Force process all pending batches"""
@@ -219,7 +309,14 @@ class BatchProcessor:
                     await self._process_batch(batch_key)
 
     def get_stats(self) -> dict[str, Any]:
-        """Get batch processor statistics"""
+        """Get batch processor statistics.
+
+        `items_per_second` is the items processed divided by the wall-clock time at least one batch
+        was running: batches that overlap count once, and the idle time between batches not at all,
+        so it is the rate the processor sustains while it is working, not a rate over the time the
+        processor has existed. `processing_time_total_ms` is the sum of each batch's own duration,
+        which counts overlapping batches twice.
+        """
         stats = self.stats.copy()
         stats.update(
             {
@@ -234,6 +331,9 @@ class BatchProcessor:
 
     def reset_stats(self) -> None:
         """Reset all statistics"""
+        self._busy_seconds = 0.0
+        if self._busy_since is not None:
+            self._busy_since = time.perf_counter()
         self.stats = {
             "total_items_processed": 0,
             "total_batches_processed": 0,

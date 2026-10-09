@@ -19,6 +19,12 @@ class MockUser(BaseModel):
     name: str
 
 
+class Solo(BaseModel):
+    """A model whose name collides with no other imported name."""
+
+    name: str
+
+
 class SvcA(CliffracerService):
     @rpc
     async def get_user(self) -> User:
@@ -27,6 +33,10 @@ class SvcA(CliffracerService):
     @rpc
     async def get_other_user(self) -> MockUser:
         return MockUser(name="B")
+
+    @rpc
+    async def get_solo(self) -> Solo:
+        return Solo(name="C")
 
 
 def test_namespace_collision():
@@ -40,3 +50,14 @@ def test_namespace_collision():
 
     assert "User as OtherModelsUser" in code_a
     assert "-> OtherModelsUser:" in code_a
+
+
+def test_a_model_that_collides_with_nothing_keeps_its_own_name():
+    """The other half of the rule: an alias is for a collision only. `Solo` is imported and used
+    under its bare name while the two `User`s beside it are aliased, so a generator that aliased
+    everything, always, passes the test above and fails this one."""
+    code = emit(describe(SvcA, service="svc-a", version="1"))
+
+    assert "-> Solo:" in code
+    assert "Solo as" not in code
+    assert "-> TestsUnitTestNamespaceCollisionSolo" not in code

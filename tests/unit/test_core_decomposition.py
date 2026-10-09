@@ -10,6 +10,7 @@ Verifies:
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -93,8 +94,16 @@ def test_discovery_stateless_inspection_and_validation() -> None:
     reg = ServiceRegistry()
     svc = SampleService(cfg)
 
+    # What the service holds before: every instance attribute (by identity) and every name the
+    # class defines. `HandlerDiscovery` promises never to mutate either.
+    instance_before = {name: id(value) for name, value in vars(svc).items()}
+    class_before = dict(vars(SampleService))
+
     # Inspect and discover without running lifecycle or connecting
     HandlerDiscovery.discover(svc, cfg, registry=reg)
+
+    assert {name: id(value) for name, value in vars(svc).items()} == instance_before
+    assert dict(vars(SampleService)) == class_before
 
     assert "compute" in reg.rpc_handlers
     assert "events.created" in reg.event_handlers
@@ -183,6 +192,61 @@ def test_connection_manager_state_machine_and_redaction() -> None:
     assert conn.is_broker_connected
 
 
+_STATES = BrokerConnectionState
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ({}, _STATES.DISCONNECTED),
+        ({"is_connected": True}, _STATES.CONNECTED),
+        ({"is_connecting": True}, _STATES.CONNECTING),
+        ({"is_reconnecting": True}, _STATES.CONNECTING),
+        ({"is_draining": True}, _STATES.DRAINING),
+        ({"is_closed": True}, _STATES.CLOSED),
+        # Precedence: each state wins over every one after it, which is what keeps a
+        # connection that still says `is_connected` from reading as connected while it
+        # drains or after it closed, and so keeps /ready honest.
+        ({"is_closed": True, "is_connected": True}, _STATES.CLOSED),
+        ({"is_closed": True, "is_draining": True}, _STATES.CLOSED),
+        ({"is_draining": True, "is_connected": True}, _STATES.DRAINING),
+        ({"is_connected": True, "is_reconnecting": True}, _STATES.CONNECTED),
+    ],
+    ids=[
+        "no-flag",
+        "connected",
+        "connecting",
+        "reconnecting",
+        "draining",
+        "closed",
+        "closed-beats-connected",
+        "closed-beats-draining",
+        "draining-beats-connected",
+        "connected-beats-reconnecting",
+    ],
+)
+def test_every_broker_state_is_reported_and_the_earlier_one_wins(flags, expected) -> None:
+    conn = ConnectionManager(ServiceConfig(name="conn_svc"))
+    quiet = {
+        "is_closed": False,
+        "is_draining": False,
+        "is_connected": False,
+        "is_connecting": False,
+        "is_reconnecting": False,
+    }
+    conn.nc = SimpleNamespace(**{**quiet, **flags})
+
+    assert conn.broker_state == expected
+    assert conn.is_broker_connected is (expected == _STATES.CONNECTED)
+
+
+def test_a_missing_connection_is_disconnected_whatever_it_would_have_said() -> None:
+    conn = ConnectionManager(ServiceConfig(name="conn_svc"))
+    conn.nc = None
+
+    assert conn.broker_state == _STATES.DISCONNECTED
+
+
 @pytest.mark.asyncio
 async def test_dispatcher_executes_rpc_and_envelopes() -> None:
     """MessageDispatcher validates schema, invokes handlers, and formats response envelopes."""
@@ -241,7 +305,8 @@ async def test_lifecycle_manager_supervision_and_drain() -> None:
 
 
 def test_complete_absence_of_deprecated_delegation_methods_on_service() -> None:
-    """Verify all 26 deprecated delegation methods are completely removed from CliffracerService."""
+    """Verify the deprecated delegation methods listed here are completely removed from
+    CliffracerService. The list is the claim, so it must not repeat a name."""
     deprecated_methods = [
         "_setup_subscriptions",
         "_on_rpc_request",
@@ -276,6 +341,8 @@ def test_complete_absence_of_deprecated_delegation_methods_on_service() -> None:
         "_dead_letter_terminated",
     ]
 
+    assert len(set(deprecated_methods)) == len(deprecated_methods)
+
     svc = CliffracerService(ServiceConfig(name="clean_svc"))
 
     for method_name in deprecated_methods:
@@ -300,7 +367,6 @@ def test_complete_absence_of_deprecated_delegation_properties_on_service() -> No
         "_event_fanout",
         "_event_pull",
         "_event_handler_names",
-        "_entrypoint_kinds",
         "_jetstream_active",
     ]
 
@@ -438,8 +504,45 @@ async def test_phased_startup_and_shutdown_sequence() -> None:
     svc.container.connection.connect = fake_connect  # type: ignore[method-assign]
     svc.container.connection.disconnect = fake_disconnect  # type: ignore[method-assign]
 
+    # Record every phase hook by name, delegating to the real one, so the phases that emit
+    # nothing themselves (discovery, the health listener, subscriptions) are in the order too.
+    phases: list[str] = []
+    hooks = svc.container.lifecycle.hooks
+
+    def recorded(name: str, hook: Any) -> Any:
+        def call() -> Any:
+            phases.append(name)
+            return hook()
+
+        return call
+
+    startup_phases = [
+        "setup_extensions",
+        "discover_handlers",
+        "connect",
+        "on_startup",
+        "start_extensions",
+        "start_health_listener",
+        "start_timers",
+        "setup_subscriptions",
+    ]
+    teardown_phases = [
+        "stop_timers",
+        "stop_health_listener",
+        "cancel_subscriptions",
+        "on_shutdown",
+        "stop_extensions",
+        "disconnect",
+    ]
+    for name in (*startup_phases, *teardown_phases):
+        setattr(hooks, name, recorded(name, getattr(hooks, name)))
+
     # Start service
     await svc.start()
+
+    # Discovery is the load-bearing position: before the connection and the subscriptions it
+    # feeds, or a service subscribes to nothing.
+    assert phases == startup_phases
 
     # Verify startup sequence:
     # Extensions setup -> Discovery -> NATS connect -> on_startup -> Extensions start -> Health -> Subscriptions
@@ -455,6 +558,8 @@ async def test_phased_startup_and_shutdown_sequence() -> None:
 
     # Stop service
     await svc.stop()
+
+    assert phases[len(startup_phases) :] == teardown_phases
 
     # Verify teardown sequence:
     # on_shutdown -> Extensions stop (reverse) -> NATS disconnect

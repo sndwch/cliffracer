@@ -10,7 +10,7 @@ from cliffracer import CliffracerService, timer
 
 class MyService(CliffracerService):
     @timer(interval=30)
-    async def health_check(self):
+    async def check_database(self):
         await self.check_database_connection()
 
     @timer(interval=60, eager=True)
@@ -21,10 +21,17 @@ class MyService(CliffracerService):
 
 | option | default | |
 |---|---|---|
-| `interval` | required | seconds between runs |
+| `interval` | required | seconds between runs: a finite number above 0 |
 | `eager` | `False` | also run once when the service starts |
-| `max_drift` | `1.0` | seconds of lateness tolerated before it logs a drift warning |
-| `error_backoff` | `5.0` | seconds to wait after a failed run |
+| `max_drift` | `1.0` | seconds of lateness tolerated before it logs a drift warning: 0 or more |
+| `error_backoff` | `5.0` | seconds to wait after a failed run: 0 or more |
+
+A value outside those ranges, or that is not a number, raises `ConfigurationError` where
+the decorator is applied.
+
+A handler is named for what it does. A decorated method named for a method
+`CliffracerService` already has, such as `health_check`, which `/health` answers
+from, would replace it, so the service is refused at startup.
 
 Async and sync methods both work. The timer awaits a coroutine function and
 calls a plain one.

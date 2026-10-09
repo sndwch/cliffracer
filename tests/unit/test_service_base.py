@@ -6,6 +6,7 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
+from loguru import logger
 
 from cliffracer import CliffracerService, ServiceConfig, listener, rpc
 
@@ -33,23 +34,36 @@ class TestNatsService:
         assert service.container.registry.rpc_handlers == {}
         assert service.container.registry.event_handlers == {}
 
-    def test_subject_matches(self, service):
-        """Test subject matching with wildcards"""
-        # Exact match
-        assert service.container._subject_matches("test.subject", "test.subject")
+    @pytest.mark.parametrize(
+        ("pattern", "subject"),
+        [
+            ("test.subject", "test.subject"),
+            ("test.*", "test.anything"),
+            ("test.*", "test.anything.else"),
+            ("test.>", "test.anything.else"),
+            ("test.subject", "other.subject"),
+            ("users.*.created", "users.42.created"),
+            ("users.*.created", "users.42.deleted"),
+        ],
+    )
+    def test_the_container_delegates_subject_matching(self, service, pattern, subject):
+        """The container's `_subject_matches` is a forward to `cliffracer.core.subjects`, whose
+        behaviour `tests/unit/test_subjects.py` covers; this reads that the forward passes the
+        pattern and the subject in the right order and returns the answer unchanged."""
+        from cliffracer.core.subjects import subject_matches
 
-        # Single wildcard
-        assert service.container._subject_matches("test.*", "test.anything")
-        assert not service.container._subject_matches("test.*", "test.anything.else")
+        assert service.container._subject_matches(pattern, subject) == subject_matches(
+            pattern, subject
+        )
 
-        # Multi-level wildcard
-        assert service.container._subject_matches("test.>", "test.anything")
-        assert service.container._subject_matches("test.>", "test.anything.else")
-        assert service.container._subject_matches("test.>", "test.anything.else.more")
+    def test_CONTROL_the_delegation_cases_are_not_all_one_answer(self, service):
+        """Agreeing on a single answer for every case would not tell a forward from a constant."""
+        answers = {
+            service.container._subject_matches("test.*", "test.anything"),
+            service.container._subject_matches("test.*", "other.anything"),
+        }
 
-        # No match
-        assert not service.container._subject_matches("test.subject", "other.subject")
-        assert not service.container._subject_matches("test.*", "other.anything")
+        assert answers == {True, False}
 
     @pytest.mark.asyncio
     async def test_connection_callbacks(self, service):
@@ -68,7 +82,17 @@ class TestNatsService:
         await service.container.connection._reconnected_callback()
         assert getattr(service, "_test_connect", False) is True
 
-        await service.container.connection._closed_callback()
+        # The service is not running, so a closed connection is only recorded: the early-return
+        # branch, whose one effect is this line. (The stop-on-closed branch is exercised, with a
+        # running service, in test_scale_empirics_adversarial.py.)
+        lines: list[str] = []
+        sink = logger.add(lambda m: lines.append(m.record["message"]), level="INFO")
+        try:
+            await service.container.connection._closed_callback()
+        finally:
+            logger.remove(sink)
+        assert any("connection closed" in line for line in lines), lines
+        assert not any("will not be retried" in line for line in lines), lines
 
 
 class TestExtendedService:
@@ -89,20 +113,22 @@ class TestExtendedService:
         assert isinstance(service.container.registry.rpc_specs, dict)
 
     @pytest.mark.asyncio
-    async def test_schema_validation_mixin_methods(self, service):
-        """Ensure schema validation handler specs and subject matching work on base service."""
-        # Test subject matching
-        assert service.container._subject_matches("test.*", "test.subject")
+    async def test_call_rpc_returns_the_result_the_peer_replied_with(self, service):
+        """`call_rpc` on the base service sends one request and returns the reply's `result`.
 
-        # Mock NATS connection for call_rpc test
+        (The subject-matching and `rpc_specs` checks this test used to carry duplicate
+        `test_subject_matches` and `test_extended_service_initialization`.)
+        """
         service.nc = AsyncMock()
         mock_response = AsyncMock()
-        mock_response.data = json.dumps({"result": "test"}).encode()
+        mock_response.data = json.dumps({"success": True, "result": "test"}).encode()
         service.nc.request = AsyncMock(return_value=mock_response)
 
-        # ValidationExtension reads rpc_specs for handler validation.
-        assert hasattr(service.container.registry, "rpc_specs")
-        assert isinstance(service.container.registry.rpc_specs, dict)
+        result = await service.call_rpc("peer", "echo", text="hi")
+
+        assert result == "test"
+        assert service.nc.request.await_count == 1
+        assert service.nc.request.await_args.args[0].endswith("peer.rpc.echo")
 
 
 class TestServiceWithDecorators:
@@ -165,8 +191,12 @@ class TestServiceWithDecorators:
         )
 
     @pytest.mark.asyncio
-    async def test_rpc_call_execution(self, service):
-        """Test RPC method execution"""
+    async def test_rpc_decorator_leaves_the_method_callable(self, service):
+        """`@rpc` only tags the method: calling it directly runs plain Python.
+
+        This reads that the tag does not wrap or replace the function. Dispatch through the
+        framework is `test_rpc_request_handling`.
+        """
         # Call the RPC method directly
         result = await service.test_rpc_method("hello", 42)
 
@@ -174,8 +204,11 @@ class TestServiceWithDecorators:
         assert "rpc: hello, 42" in service.call_log
 
     @pytest.mark.asyncio
-    async def test_event_handler_execution(self, service):
-        """Test event handler execution"""
+    async def test_listener_decorator_leaves_the_method_callable(self, service):
+        """`@listener` only tags the method: calling it directly runs plain Python.
+
+        Dispatch through the framework is `test_event_handling`.
+        """
         # Call the event handler directly
         await service.test_event_handler("test.events.user_created", user_id="123")
 
@@ -195,10 +228,10 @@ class TestServiceWithDecorators:
         await service.container._handle_rpc_request(message)
 
         # Check that response was sent
-        assert message._response_sent
+        assert message.responded_data is not None
 
         # Parse the response
-        response_data = json.loads(message.response_data.decode())
+        response_data = json.loads(message.responded_data.decode())
         assert "result" in response_data
         assert response_data["result"] == {"result": "test_123"}
 
@@ -229,9 +262,9 @@ class TestServiceWithDecorators:
         await service.container._handle_rpc_request(message)
 
         # Check that error response was sent
-        assert message._response_sent
+        assert message.responded_data is not None
 
         # Parse the response
-        response_data = json.loads(message.response_data.decode())
+        response_data = json.loads(message.responded_data.decode())
         assert "error" in response_data
         assert "Unknown method" in response_data["error"]

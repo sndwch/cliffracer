@@ -13,7 +13,6 @@ Start NATS separately with: docker run -p 4222:4222 -p 8222:8222 nats:alpine -js
 Or use an existing NATS server.
 """
 
-import asyncio
 import logging
 import sys
 
@@ -38,7 +37,6 @@ print("  [OK] Notification Service")
 print("  [OK] Load Generator")
 print()
 print("[METRICS] Access Points:")
-print("  [INFO] Order API: http://localhost:8001/docs")
 print("  [METRICS] NATS Monitor: http://localhost:8222 (if NATS running)")
 print("  [INFO] Logs: Watch this terminal for structured events")
 print()
@@ -50,9 +48,9 @@ print("=" * 50)
 
 if __name__ == "__main__":
     try:
-        asyncio.run(run_ecommerce())
-    except KeyboardInterrupt:
-        print("\n[STOP] Demo stopped by user")
+        # Returns when a signal has stopped every service; it owns the process's signals.
+        run_ecommerce()
+        print("\n[STOP] Demo stopped")
     except Exception as e:
         print(f"\n[ERROR] Demo error: {e}")
         print("\n[NOTE] Make sure NATS is running: docker run -p 4222:4222 nats:alpine")

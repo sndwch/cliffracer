@@ -1,47 +1,45 @@
-"""The in-memory transport these tests run on, and its fixtures.
+"""The in-memory broker these tests run on, and their fixtures.
 
-Nothing here dials a broker. MockJetStreamMsg and the transport below stand in
-for NATS entirely, which is what the directory name says. The suite's
-end-to-end coverage against a real broker lives in
+Nothing here dials a broker. The tier runs on `cliffracer.testing.InMemoryBroker`, the one users
+get; each behaviour it claims is a case in `tests/contract/transport_cases.py`, which also runs
+against a real client. The suite's end-to-end coverage against a real broker lives in
 tests/integration/test_typed_client_end_to_end.py.
 """
 
 from __future__ import annotations
 
-import asyncio
-import re
-import sys
-from collections.abc import AsyncGenerator, Callable
-from dataclasses import dataclass
-from pathlib import Path
+import contextlib
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from typing import Any
-from unittest.mock import MagicMock
 
-import pytest
+import nats.aio.msg as natsmsg
+import nats.errors
 import pytest_asyncio
 
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.correlation import CorrelationContext, correlation_id_var
+from cliffracer.testing import InMemoryBroker, ServiceTestHarness, refuse_a_reply_with_no_subject
+from cliffracer.testing.broker import _Connection
 
-# Ensure packages/cliffracer-faststream/src is importable if it exists
-faststream_src = Path(__file__).parents[2] / "packages" / "cliffracer-faststream" / "src"
-if faststream_src.exists() and str(faststream_src) not in sys.path:
-    sys.path.insert(0, str(faststream_src))
+#: A connection on the broker: what the `mock_transport` fixture yields, for annotations.
+Connection = _Connection
 
-
-@dataclass
-class MockJetStreamMetadata:
-    """Mock JetStream message metadata."""
-
-    sequence: int = 1
-    num_delivered: int = 1
-    stream: str = "DEFAULT"
-    consumer: str = "test-consumer"
-    timestamp: float = 0.0
+__all__ = ["Connection", "MockJetStreamMsg", "started"]
 
 
 class MockJetStreamMsg:
-    """Simulated JetStream / NATS message with full acknowledgment lifecycle."""
+    """Simulated JetStream / NATS message with the acknowledgement rules of `nats.aio.msg.Msg`.
+
+    A message built with no reply subject is a core message: it cannot be acknowledged, its
+    `.metadata` raises `NotJSMessageError`, and a reply to it is refused, as the real one's are.
+    `from_jetstream=True` builds a delivery from a stream: it has an ack subject for a reply, the
+    metadata the real message parses from it (so `num_delivered`, `stream` and `consumer` are what
+    that subject says), and acknowledges at most once. The counters record the acknowledgements
+    that were sent; one the message refused is not counted.
+
+    The carve-out tests that dispatch to the container directly build these; the broker delivers
+    its own messages.
+    """
 
     def __init__(
         self,
@@ -53,163 +51,94 @@ class MockJetStreamMsg:
         stream: str = "DEFAULT",
         consumer: str = "test-consumer",
         transport: Any = None,
+        from_jetstream: bool = False,
     ) -> None:
         self.subject = subject
         self.data = data
         self.headers = dict(headers) if headers else {}
+        if from_jetstream and reply is None:
+            reply = (
+                f"$JS.ACK.{stream}.{consumer}.{num_delivered}.{num_delivered}.1."
+                f"1700000000000000000.0"
+            )
         self.reply = reply
         self._transport = transport
-        self.metadata = MockJetStreamMetadata(
-            num_delivered=num_delivered, stream=stream, consumer=consumer
-        )
+        self._metadata = natsmsg.Msg.Metadata._from_reply(reply) if from_jetstream else None
         self.ack_calls: int = 0
         self.nak_calls: list[float] = []
         self.term_calls: int = 0
         self.in_progress_calls: int = 0
         self._ackd: bool = False
         self._response_sent: bool = False
+        self.respond_attempts: int = 0
         self.response_data: bytes | None = None
 
+    @property
+    def metadata(self) -> Any:
+        """What `Msg.metadata` answers: the delivery's, or `NotJSMessageError` for a core message."""
+        if self._metadata is None:
+            raise nats.errors.NotJSMessageError
+        return self._metadata
+
+    def _check_reply(self) -> None:
+        """The rules `Msg._check_reply` applies to a terminal acknowledgement."""
+        if not self.reply:
+            raise nats.errors.NotJSMessageError
+        if self._ackd:
+            raise nats.errors.MsgAlreadyAckdError(self)
+
     async def ack(self) -> None:
+        self._check_reply()
         self.ack_calls += 1
         self._ackd = True
 
     async def nak(self, delay: float = 0.0) -> None:
+        self._check_reply()
         self.nak_calls.append(delay)
         self._ackd = True
 
     async def term(self) -> None:
+        self._check_reply()
         self.term_calls += 1
         self._ackd = True
 
     async def in_progress(self) -> None:
+        if not self.reply:
+            raise nats.errors.NotJSMessageError
         self.in_progress_calls += 1
 
     async def respond(self, data: bytes) -> None:
-        if not self.reply:
-            raise RuntimeError("no reply subject available")
+        self.respond_attempts += 1
+        refuse_a_reply_with_no_subject(self)
         self._response_sent = True
         self.response_data = data
         if self._transport is not None:
-            await self._transport.publish(self.reply, data)
+            await self._transport.publish(self.reply, data, headers=self.headers or None)
 
 
-class MockNatsTransport:
-    """High-fidelity in-memory NATS transport for tests that never dial a broker."""
+@contextlib.asynccontextmanager
+async def started(
+    transport: Connection, *services: CliffracerService
+) -> AsyncIterator[list[ServiceTestHarness]]:
+    """Start each service with its own `start()`, over its own connection to `transport`'s broker.
 
-    def __init__(self) -> None:
-        self.subscriptions: dict[str, list[Callable[[MockJetStreamMsg], Any]]] = {}
-        self.published_messages: list[tuple[str, bytes, dict[str, str] | None, str | None]] = []
-        self.is_connected: bool = True
-        self.is_closed: bool = False
-        self._drain_called: bool = False
-
-    def _match_pattern(self, pattern: str, subject: str) -> bool:
-        """Match NATS subject patterns (* and >)."""
-        if pattern == subject:
-            return True
-        # Convert NATS wildcard to regex
-        regex_pattern = (
-            "^" + pattern.replace(".", "\\.").replace("*", "[^.]+").replace(">", ".*") + "$"
-        )
-        return bool(re.match(regex_pattern, subject))
-
-    def jetstream(self, **kwargs: Any) -> Any:
-        mock_js = MagicMock()
-        mock_js.publish = self.publish
-        mock_js.subscribe = self.subscribe
-        return mock_js
-
-    async def publish(
-        self,
-        subject: str,
-        payload: bytes = b"",
-        reply: str | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        if not self.is_connected:
-            raise RuntimeError("nats: connection closed")
-        self.published_messages.append((subject, payload, headers, reply))
-
-        msg = MockJetStreamMsg(
-            subject=subject,
-            data=payload,
-            headers=headers,
-            reply=reply,
-            transport=self,
-        )
-        # Dispatch to matching subscribers
-        for pattern, callbacks in list(self.subscriptions.items()):
-            if self._match_pattern(pattern, subject):
-                for cb in callbacks:
-                    res = cb(msg)
-                    if asyncio.iscoroutine(res):
-                        await res
-
-    async def request(
-        self,
-        subject: str,
-        payload: bytes = b"",
-        headers: dict[str, str] | None = None,
-        timeout: float = 5.0,
-    ) -> MockJetStreamMsg:
-        reply_inbox = f"_INBOX.{id(object())}"
-        reply_future: asyncio.Future[MockJetStreamMsg] = asyncio.get_running_loop().create_future()
-
-        async def reply_handler(msg: MockJetStreamMsg) -> None:
-            if not reply_future.done():
-                reply_future.set_result(msg)
-
-        await self.subscribe(reply_inbox, reply_handler)
-        try:
-            await self.publish(subject, payload, reply=reply_inbox, headers=headers)
-            return await asyncio.wait_for(reply_future, timeout=timeout)
-        finally:
-            self.unsubscribe(reply_inbox, reply_handler)
-
-    async def subscribe(
-        self,
-        subject: str,
-        cb: Callable[[MockJetStreamMsg], Any],
-        queue: str | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        if subject not in self.subscriptions:
-            self.subscriptions[subject] = []
-        self.subscriptions[subject].append(cb)
-
-        class Subscription:
-            def __init__(self, transport: MockNatsTransport, subj: str, callback: Any) -> None:
-                self.transport = transport
-                self.subject = subj
-                self.callback = callback
-
-            async def unsubscribe(self) -> None:
-                self.transport.unsubscribe(self.subject, self.callback)
-
-        return Subscription(self, subject, cb)
-
-    def unsubscribe(self, subject: str, cb: Callable[[MockJetStreamMsg], Any]) -> None:
-        if subject in self.subscriptions and cb in self.subscriptions[subject]:
-            self.subscriptions[subject].remove(cb)
-            if not self.subscriptions[subject]:
-                del self.subscriptions[subject]
-
-    async def drain(self) -> None:
-        self._drain_called = True
-        self.is_connected = False
-        self.subscriptions.clear()
-
-    async def close(self) -> None:
-        self.is_closed = True
-        self.is_connected = False
-        self.subscriptions.clear()
+    Each runs the whole start sequence a broker would see, subscriptions included, and is stopped
+    with `stop()` on the way out, in the reverse order.
+    """
+    async with contextlib.AsyncExitStack() as stack:
+        harnesses = [
+            await stack.enter_async_context(ServiceTestHarness(svc, broker=transport.broker))
+            for svc in services
+        ]
+        yield harnesses
 
 
-@pytest.fixture
-def mock_transport() -> MockNatsTransport:
-    """Provide clean in-memory NATS transport for tests."""
-    return MockNatsTransport()
+@pytest_asyncio.fixture
+async def mock_transport() -> AsyncGenerator[Connection]:
+    """A connection on a fresh in-memory broker. `mock_transport.broker` hands out more."""
+    connection = await InMemoryBroker().connect(name="test")
+    yield connection
+    await connection.close()
 
 
 @pytest_asyncio.fixture
@@ -222,9 +151,11 @@ async def transport_service_factory() -> AsyncGenerator[Callable[..., Cliffracer
         name: str = "test_transport_svc",
         **config_kwargs: Any,
     ) -> CliffracerService:
+        # A started service binds its health listener; 0 asks for an ephemeral port, so two
+        # services, or two runs on one host, never contend for one.
+        config_kwargs.setdefault("health_port", 0)
         config = ServiceConfig(
             name=name,
-            nats_url="nats://localhost:4222",
             auto_restart=False,
             request_timeout=5.0,
             **config_kwargs,
@@ -236,18 +167,16 @@ async def transport_service_factory() -> AsyncGenerator[Callable[..., Cliffracer
     yield _create
 
     for svc in created_services:
-        try:
-            if hasattr(svc, "_running") and svc._running:
-                await svc.stop()
-        except Exception:
-            pass
+        await svc.stop()
 
 
-@pytest.fixture(autouse=True)
-def _clean_test_context() -> Any:
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_test_context() -> Any:
     """Ensure correlation context is pristine before and after every transport test."""
     CorrelationContext.clear()
     token = correlation_id_var.set(None)
-    yield
-    CorrelationContext.clear()
-    correlation_id_var.reset(token)
+    try:
+        yield
+    finally:
+        CorrelationContext.clear()
+        correlation_id_var.reset(token)

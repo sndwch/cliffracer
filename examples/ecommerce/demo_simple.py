@@ -14,6 +14,7 @@ This runs entirely in Python to showcase the framework concepts.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import random
@@ -77,7 +78,7 @@ class InMemoryMessageBus:
         if subject in self.subscribers:
             for callback in self.subscribers[subject]:
                 try:
-                    if asyncio.iscoroutinefunction(callback):
+                    if inspect.iscoroutinefunction(callback):
                         await callback(data)
                     else:
                         callback(data)
@@ -461,6 +462,9 @@ async def generate_orders(order_service: OrderService):
             print(
                 f"\n[INFO] Order #{order_count} created: {order.order_id} (${order.total_amount})"
             )
+            if order_count == 1:
+                # The line the examples test waits for: an order has gone through the system.
+                print("EXAMPLE READY: first order created", flush=True)
             order_count += 1
 
             # Wait before next order

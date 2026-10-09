@@ -10,6 +10,7 @@ the thing most likely to be wrong is what `git log` actually emits for a
 multi-paragraph body, which a hand-written fixture cannot be wrong about.
 """
 
+import ast
 import importlib.util
 import subprocess
 import sys
@@ -22,6 +23,7 @@ pytestmark = pytest.mark.repo
 ROOT = Path(__file__).resolve().parents[2]
 
 _spec = importlib.util.spec_from_file_location("release_note", ROOT / "scripts" / "release_note.py")
+assert _spec is not None and _spec.loader is not None
 release_note = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(release_note)
 
@@ -47,30 +49,27 @@ def _repo(tmp_path: Path, commits: list[str]) -> Path:
     return d
 
 
-def test_a_breaking_footer_becomes_a_section_under_its_subject(tmp_path):
+def test_a_breaking_footer_is_not_read(tmp_path):
+    """A `BREAKING CHANGE:` footer decides nothing here: a commit carrying one is listed by its
+    subject and its footer is not copied into the note, which has no Breaking section without
+    Breaking changelog entries."""
     d = _repo(
         tmp_path,
         [
             "feat!: the thing moved\n\n"
-            "Some body prose that is not a footer.\n\n"
-            "BREAKING CHANGE: X is gone. Use Y instead, which takes the same\n"
-            "arguments and returns the same shape.\n\n"
+            "Some body prose.\n\n"
+            "BREAKING CHANGE: X is gone. Use Y instead.\n\n"
             "Co-Authored-By: Someone <s@example.com>\n"
         ],
     )
     note = release_note.render("v0.0.1..HEAD", repo=str(d))
 
-    assert note.startswith("## Breaking changes")
-    assert "### feat!: the thing moved" in note
-    assert "X is gone. Use Y instead, which takes the same" in note
-    assert "arguments and returns the same shape." in note, "the footer's later lines were dropped"
-    # The trailer ends the block; it is not part of the breaking change.
-    assert "Co-Authored-By" not in note
-    # And the prose above the footer is not swept in.
-    assert "Some body prose" not in note
+    assert "Breaking changes" not in note, note
+    assert "X is gone" not in note, note
+    assert note.startswith("## Commits") and "- feat!: the thing moved" in note, note
 
 
-def test_with_no_footers_the_heading_is_ABSENT_not_empty(tmp_path):
+def test_with_no_breaking_entries_the_heading_is_ABSENT_not_empty(tmp_path):
     """A "## Breaking changes" heading over nothing reads as "we did not write
     it down", which is worse than not claiming to have any."""
     d = _repo(tmp_path, ["fix: something small", "docs: a note"])
@@ -81,54 +80,12 @@ def test_with_no_footers_the_heading_is_ABSENT_not_empty(tmp_path):
     assert "- fix: something small" in note
 
 
-def test_the_phrase_in_prose_is_not_a_footer(tmp_path):
-    """Line-anchored, because `body.count("BREAKING CHANGE:")` is not.
-
-    Counting the 1.0 train's footers with a naive count attributed four to a
-    `test:` commit that has none -- the phrase appeared in its prose.
-    """
-    d = _repo(
-        tmp_path,
-        ["fix: a fix\n\nThis is not a BREAKING CHANGE: it is backwards compatible.\n"],
-    )
-    note = release_note.render("v0.0.1..HEAD", repo=str(d))
-
-    assert "Breaking changes" not in note, note
-
-
 def test_WIP_subjects_are_dropped_from_the_list(tmp_path):
     d = _repo(tmp_path, ["WIP: half a thing", "feat: the whole thing"])
     note = release_note.render("v0.0.1..HEAD", repo=str(d))
 
     assert "- feat: the whole thing" in note
     assert "WIP:" not in note
-
-
-def test_a_WIP_commit_still_contributes_its_breaking_footer(tmp_path):
-    """Dropping the SUBJECT from the list must not drop the FOOTER: a breaking
-    change is a breaking change whoever wrote it, and losing one silently is
-    the failure this renderer exists to fix."""
-    d = _repo(tmp_path, ["WIP: half a thing\n\nBREAKING CHANGE: Z is gone.\n"])
-    note = release_note.render("v0.0.1..HEAD", repo=str(d))
-
-    assert "Z is gone." in note
-    assert note.count("- WIP:") == 0
-
-
-def test_two_footers_in_one_commit_become_two_sections(tmp_path):
-    d = _repo(
-        tmp_path,
-        [
-            "feat!: two at once\n\n"
-            "BREAKING CHANGE: the first one.\n\n"
-            "BREAKING CHANGE: the second one.\n"
-        ],
-    )
-    note = release_note.render("v0.0.1..HEAD", repo=str(d))
-
-    assert "the first one." in note
-    assert "the second one." in note
-    assert note.count("### feat!: two at once") == 2
 
 
 def test_CONTROL_the_renderer_reads_the_range_it_is_given(tmp_path):
@@ -205,187 +162,242 @@ def test_the_renderer_actually_exits_nonzero_on_a_bad_range():
     assert proc.stdout.strip() == "", "a failing render must not print a partial note"
 
 
-def test_the_renderer_runs_under_the_runners_python():
-    """Verify release_note.py includes future annotations import for Python 3.10 compatibility."""
-    import ast
+def test_the_renderer_exits_with_code_2_on_usage_error():
+    """Verify release_note.py exits with code 2 and usage instructions on bad arguments."""
+    script = str(ROOT / "scripts" / "release_note.py")
 
-    tree = ast.parse((ROOT / "scripts" / "release_note.py").read_text())
-    assert any(
-        isinstance(n, ast.ImportFrom)
-        and n.module == "__future__"
-        and any(a.name == "annotations" for a in n.names)
-        for n in tree.body
-    ), "release_note.py needs `from __future__ import annotations`"
+    # Zero arguments provided
+    proc_no_args = subprocess.run(
+        [sys.executable, script],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    assert proc_no_args.returncode == 2
+    assert proc_no_args.stdout.strip() == ""
+    assert "usage: release_note.py <git range>" in proc_no_args.stderr
+
+    # Multiple arguments provided
+    proc_extra_args = subprocess.run(
+        [sys.executable, script, "v0.0.1", "v0.0.2"],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    assert proc_extra_args.returncode == 2
+    assert proc_extra_args.stdout.strip() == ""
+    assert "usage: release_note.py <git range>" in proc_extra_args.stderr
 
 
-def test_ci_yml_actually_uses_the_checked_shape():
-    """Closes the limitation the block comment above admits.
+def test_merge_commits_are_excluded_from_commit_list(tmp_path: Path):
+    """Verify merge commits are excluded from the release note commit listing."""
+    d = tmp_path / "repo"
+    d.mkdir()
 
-    The shell fragment in these tests is REPRODUCED from ci.yml, not imported --
-    YAML cannot be executed from a test. So the pair above could keep passing
-    while the workflow drifted back to the swallowing form, which is the failure
-    mode of every hand-copied fixture. This reads the workflow itself.
+    def run(*a):
+        return subprocess.run(a, cwd=d, check=True, capture_output=True, text=True)
+
+    run("git", "init", "-q", "-b", "main")
+    run("git", "config", "user.email", "t@example.com")
+    run("git", "config", "user.name", "t")
+    (d / "f").write_text("0")
+    run("git", "add", "f")
+    run("git", "commit", "-q", "-m", "chore: base")
+    run("git", "tag", "v0.0.1")
+
+    # Create feature branch and commit
+    run("git", "checkout", "-q", "-b", "feature")
+    (d / "feat_file").write_text("feat")
+    run("git", "add", "feat_file")
+    run("git", "commit", "-q", "-m", "feat: feature branch commit")
+
+    # Return to main and merge with a merge commit
+    run("git", "checkout", "-q", "main")
+    (d / "main_file").write_text("main")
+    run("git", "add", "main_file")
+    run("git", "commit", "-q", "-m", "chore: main branch commit")
+    run("git", "merge", "--no-ff", "-q", "-m", "Merge branch 'feature'", "feature")
+
+    note = release_note.render("v0.0.1..HEAD", repo=str(d))
+    assert "- feat: feature branch commit" in note
+    assert "- chore: main branch commit" in note
+    assert "Merge branch 'feature'" not in note
+
+
+def non_stdlib_imports(source: str, filename: str = "<source>") -> set[str]:
+    """Top-level module names imported by `source` that are not in the stdlib.
+
+    One definition, called by the check and by its controls. A control that
+    walked its own copy of the AST would go on passing after this walk drifted.
     """
+    tree = ast.parse(source, filename=filename)
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    return {m for m in imported if m not in sys.stdlib_module_names and m != "__future__"}
+
+
+def unavailable_imports(path: Path, seen: frozenset[Path] = frozenset()) -> set[str]:
+    """What `path` imports that the runner's bare Python cannot provide.
+
+    A sibling script in the same directory is importable, because the renderer
+    puts its own directory on `sys.path`, but only as far as its own imports
+    are: a sibling is followed, and whatever it imports is judged the same way.
+    """
+    missing: set[str] = set()
+    for name in non_stdlib_imports(path.read_text(), str(path)):
+        sibling = path.parent / f"{name}.py"
+        if not sibling.is_file():
+            missing.add(name)
+        elif sibling not in seen:
+            missing |= unavailable_imports(sibling, seen | {path})
+    return missing
+
+
+def test_the_renderer_runs_under_the_runners_python():
+    """Verify release_note.py executes under runner Python without venv dependencies.
+
+    The release note generation step in CI executes under the runner's system Python
+    outside of the virtual environment. This test enforces that release_note.py
+    relies exclusively on standard library modules and successfully renders under
+    an isolated environment where PYTHONPATH and VIRTUAL_ENV are cleared.
+
+    The range is ``HEAD``, which resolves at any clone depth. A two-ended range
+    such as ``HEAD~1..HEAD`` makes ``git log`` exit 128 wherever the checkout is
+    shallow, which reports a missing commit as a renderer failure.
+    """
+    import os
+    import shutil
+
+    # 1. AST check: ensure release_note.py imports only standard library modules
+    script_path = ROOT / "scripts" / "release_note.py"
+    unavailable = unavailable_imports(script_path)
+    assert not unavailable, f"release_note.py imports what a bare Python lacks: {unavailable}"
+
+    # 2. Execution check under runner python with clean environment
+    clean_path = os.pathsep.join(
+        x for x in os.environ.get("PATH", "").split(os.pathsep) if ".venv" not in x
+    )
+    runner_python = shutil.which("python3", path=clean_path) or "/usr/bin/python3"
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "VIRTUAL_ENV")}
+    env["PYTHONPATH"] = ""
+    env["VIRTUAL_ENV"] = ""
+    if clean_path:
+        env["PATH"] = clean_path
+
+    rng = "HEAD"
+    proc = subprocess.run(
+        [runner_python, str(script_path), rng],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        env=env,
+    )
+    assert proc.returncode == 0, (
+        f"release_note.py exited {proc.returncode} rendering {rng!r} under "
+        f"{runner_python} with PYTHONPATH and VIRTUAL_ENV cleared:\n"
+        f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+    )
+    assert "Commits" in proc.stdout, "Renderer did not produce rendered commit output"
+
+
+def test_CONTROL_non_stdlib_import_in_release_note_fails_ast_check():
+    """The check above must report a third-party import.
+
+    It calls the same function the real check calls. Walking a copy of the AST
+    here would keep passing after that walk drifted, which is the failure this
+    control exists to rule out.
+    """
+    assert non_stdlib_imports("import sys\nimport subprocess\nimport nats\n") == {"nats"}
+
+
+def test_CONTROL_a_from_import_of_a_third_party_module_is_reported():
+    """The other spelling, since the walk handles them separately."""
+    assert non_stdlib_imports("from nats.aio.client import Client\n") == {"nats"}
+
+
+def test_CONTROL_a_sibling_script_is_judged_by_its_own_imports(tmp_path: Path):
+    """A sibling that imports only the stdlib is available; one that imports a
+    third-party module passes that module on as unavailable."""
+    renderer = tmp_path / "renderer.py"
+    renderer.write_text("import sys\nfrom helper import thing\n")
+    (tmp_path / "helper.py").write_text("import json\nthing = 1\n")
+
+    assert unavailable_imports(renderer) == set()
+
+    (tmp_path / "helper.py").write_text("import json\nimport nats\nthing = 1\n")
+
+    assert unavailable_imports(renderer) == {"nats"}
+
+
+def test_CONTROL_an_import_with_no_sibling_script_is_unavailable(tmp_path: Path):
+    renderer = tmp_path / "renderer.py"
+    renderer.write_text("from helper import thing\n")
+
+    assert unavailable_imports(renderer) == {"helper"}
+
+
+def test_CONTROL_stdlib_and_future_imports_are_not_reported():
+    """And it does not simply report everything."""
+    assert non_stdlib_imports("from __future__ import annotations\nimport json\n") == set()
+
+
+# A render call: release_note.py given the release's range. One definition: a control matching its
+# own copy of this would keep passing after the real check's pattern drifted.
+RENDER_CALL = 'python3 scripts/release_note.py "$RANGE"'
+
+
+def unchecked_render_calls(text: str) -> list[str]:
+    """Every line of `text` that renders the note without checking the renderer's exit status.
+
+    A render call is checked when its line begins `if !`, whether it writes the note to a file
+    (`if ! python3 ... > "$NOTE"; then`) or captures it (`if ! NOTES="$(python3 ...)"; then`).
+    Anything else discards the status: `NOTES="$(cmd)"` keeps only the last status of the
+    assignment, and `set -o pipefail` does not reach a command substitution.
+    """
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if RENDER_CALL in line and not line.lstrip().startswith("if ! ")
+    ]
+
+
+@pytest.mark.gitea_checkout
+def test_ci_yml_actually_uses_the_checked_shape():
+    """The Gitea release job renders the note with the renderer's exit status checked, writing it
+    to a file, and renders it nowhere unchecked."""
     ci = (ROOT / ".gitea" / "workflows" / "ci.yml").read_text()
 
-    assert 'if ! NOTES="$(python3 scripts/release_note.py "$RANGE")"; then' in ci, (
-        "the release-note step no longer checks the renderer's exit status; "
-        '`NOTES="$(cmd)"` discards it and set -o pipefail does not help a '
-        "command substitution"
-    )
-    # And the bare form is gone, not merely accompanied.
-    assert '\n          NOTES="$(python3 scripts/release_note.py' not in ci, (
-        "an unchecked `NOTES=$(...)` assignment is still present"
-    )
+    assert (
+        'if ! python3 scripts/release_note.py "$RANGE" --fragments-at "$TAG" > "$NOTE"; then' in ci
+    ), "the release-note step no longer renders the note to a file with its exit status checked"
+    assert not unchecked_render_calls(ci), unchecked_render_calls(ci)
 
 
-# --------------------------------------------------------------------------
-# Parse boundaries for breaking change footers preceding commit message bodies.
-# --------------------------------------------------------------------------
+def test_CONTROL_unchecked_ci_assignment_detected_at_any_indentation():
+    """The check above must catch an unchecked render call wherever it sits.
 
-# The exact shape of the commit that exposed it: footer first, blank line,
-# non-indented prose, then trailers.
-_FOOTER_FIRST = """\
-BREAKING CHANGE: max_restart_attempts is removed from ServiceConfig. It never
-capped anything. Set auto_restart=False to stop restarting.
+    Calls the same matcher the real check calls, so the control cannot go on
+    passing against a copy after that pattern drifts.
+    """
+    for indent in ("", "  ", "        ", "            "):
+        for candidate in (
+            f'{indent}NOTES="$(python3 scripts/release_note.py "$RANGE")"',
+            f'{indent}python3 scripts/release_note.py "$RANGE" > "$NOTE"',
+            f'{indent}python3 scripts/release_note.py "$RANGE" > "$NOTE" || true',
+        ):
+            assert unchecked_render_calls(candidate), (
+                f"Unchecked call at indent {len(indent)} was not detected: {candidate}"
+            )
 
-The release job writes release notes to Gitea releases and never commits, so
-this file stops at v1.4.1 and stays there.
-
-aiohttp and email-validator are declared in BOTH lists and a guard caught the
-drift, which is what that guard is for.
-
-Co-Authored-By: Someone <s@example.com>
-"""
-
-# The ordinary shape: body first, footer last.
-_FOOTER_LAST = """\
-The release job writes release notes to Gitea releases and never commits.
-
-BREAKING CHANGE: max_restart_attempts is removed from ServiceConfig. It never
-capped anything. Set auto_restart=False to stop restarting.
-
-Co-Authored-By: Someone <s@example.com>
-"""
-
-
-def test_a_block_ends_at_a_blank_line_followed_by_prose():
-    blocks = release_note.breaking_blocks(_FOOTER_FIRST)
-
-    assert len(blocks) == 1, blocks
-    block = blocks[0]
-    assert block.startswith("max_restart_attempts is removed")
-    assert "Set auto_restart=False to stop restarting." in block
-    assert "release notes to Gitea" not in block, (
-        "the commit's ordinary body was absorbed into the breaking change"
-    )
-    assert "email-validator" not in block
-    assert "Co-Authored-By" not in block
-
-
-def test_CONTROL_a_footer_last_message_is_unaffected():
-    """The shape every other commit on the branch uses. If the fix changed this
-    one too it would be trading one truncation for another."""
-    blocks = release_note.breaking_blocks(_FOOTER_LAST)
-
-    assert len(blocks) == 1, blocks
-    assert blocks[0].startswith("max_restart_attempts is removed")
-    assert "Set auto_restart=False to stop restarting." in blocks[0]
-    assert "release notes to Gitea" not in blocks[0], "body ABOVE the footer leaked in"
-    assert "Co-Authored-By" not in blocks[0]
-
-
-def test_a_wrapped_footer_keeps_every_line_up_to_the_blank():
-    """The continuation lines are the footer. Only the blank line ends it."""
-    blocks = release_note.breaking_blocks("BREAKING CHANGE: one\ntwo\nthree\n\nunrelated prose\n")
-
-    assert blocks == ["one\ntwo\nthree"]
-
-
-def test_two_footers_separated_by_prose_are_both_kept():
-    """Ending a block must not swallow a LATER footer."""
-    blocks = release_note.breaking_blocks(
-        "BREAKING CHANGE: first\n\nsome prose\n\nBREAKING CHANGE: second\n"
-    )
-
-    assert blocks == ["first", "second"], blocks
-
-
-def test_a_blank_line_before_a_trailer_does_not_truncate_early():
-    """A blank line followed by a TRAILER is the ordinary end of a message, and
-    the block should end there for the trailer's reason rather than the prose
-    rule -- same result, but it must not lose the line above the blank."""
-    blocks = release_note.breaking_blocks(
-        "BREAKING CHANGE: one\ntwo\n\nCo-Authored-By: Someone <s@example.com>\n"
-    )
-
-    assert blocks == ["one\ntwo"], blocks
-
-
-# --------------------------------------------------------------------------
-# Paragraph-initial matching for breaking change footer markers.
-# --------------------------------------------------------------------------
-
-# Marker wrapped onto its own line inside a paragraph.
-_MARKER_MID_PARAGRAPH = """\
-Nine of the ten footers on this branch looked right only because they are last
-in their messages.
-
-A block now ends at a blank line whose next non-empty line is neither another
-BREAKING CHANGE: nor a trailer key.
-
-Co-Authored-By: Someone <s@example.com>
-"""
-
-# Marker is the very first line of the body.
-_MARKER_AT_BODY_START = """\
-BREAKING CHANGE: max_restart_attempts is removed from ServiceConfig. It never
-capped anything. Set auto_restart=False to stop restarting.
-
-The release job writes release notes to Gitea releases and never commits.
-
-Co-Authored-By: Someone <s@example.com>
-"""
-
-# Second marker opening a paragraph after a blank line.
-_TWO_MARKERS_EACH_OPENING_A_PARAGRAPH = """\
-BREAKING CHANGE: ServiceConfig rejects unknown fields. Passing a removed or
-misspelled setting raises pydantic.ValidationError naming it.
-
-BREAKING CHANGE: the ServiceConfig fields queue_group, max_restart_attempts and
-five others are removed. Nothing read any of them.
-
-Co-Authored-By: Someone <s@example.com>
-"""
-
-
-def test_a_marker_inside_a_paragraph_is_prose_not_a_footer():
-    """A marker inside a paragraph is treated as prose, not a footer."""
-    assert release_note.breaking_blocks(_MARKER_MID_PARAGRAPH) == []
-
-
-def test_CONTROL_a_marker_at_the_start_of_the_body_is_a_footer():
-    """A marker at the start of the body is recognized as a footer."""
-    blocks = release_note.breaking_blocks(_MARKER_AT_BODY_START)
-
-    assert len(blocks) == 1, blocks
-    assert blocks[0].startswith("max_restart_attempts is removed")
-
-
-def test_CONTROL_two_paragraph_opening_markers_give_two_blocks():
-    """Multiple paragraph-opening markers each yield a footer block."""
-    blocks = release_note.breaking_blocks(_TWO_MARKERS_EACH_OPENING_A_PARAGRAPH)
-
-    assert len(blocks) == 2, blocks
-    assert blocks[0].startswith("ServiceConfig rejects unknown fields")
-    assert blocks[1].startswith("the ServiceConfig fields queue_group")
-
-
-def test_CONTROL_the_fixtures_differ_only_in_where_the_marker_sits():
-    """Verify footer block count distinction across fixtures."""
-    counts = [
-        len(release_note.breaking_blocks(_MARKER_MID_PARAGRAPH)),
-        len(release_note.breaking_blocks(_MARKER_AT_BODY_START)),
-        len(release_note.breaking_blocks(_TWO_MARKERS_EACH_OPENING_A_PARAGRAPH)),
-    ]
-    assert counts == [0, 1, 2], counts
+    for checked in (
+        '            if ! NOTES="$(python3 scripts/release_note.py "$RANGE")"; then',
+        '            if ! python3 scripts/release_note.py "$RANGE" > "$NOTE"; then',
+    ):
+        assert not unchecked_render_calls(checked), (
+            "the checked shape must not be reported as unchecked"
+        )

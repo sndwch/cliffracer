@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "cliffracer-otel"
 dynamic = ["version"]
 description = "Distributed Tracing and OpenTelemetry instrumentation for cliffracer services"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 readme = "README.md"
 # Hatchling auto-detects the LICENSE file. It must be copied, not symlinked,
 # to avoid sdist unpacking errors.
@@ -16,6 +16,9 @@ dependencies = [
     "opentelemetry-api>=1.20.0,<2.0.0",
     "opentelemetry-sdk>=1.20.0,<2.0.0",
 ]
+
+[tool.cliffracer]
+lifecycle = "incubating"
 
 [tool.hatch.version]
 source = "vcs"

@@ -2,6 +2,7 @@
 
 import os
 import socket
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from cliffracer_metrics import PoolExtension
@@ -106,16 +107,31 @@ async def test_the_pool_is_built_in_setup_not_before():
 
 
 async def test_two_services_do_not_share_a_pool():
-    """`bind()` is a shallow copy: a pool built in `__init__` would be one
-    object shared by every service declaring the extension."""
+    """Two bound instances hold distinct objects.
+
+    This cannot fail on state built in `__init__`: `bind()` runs `__init__` again
+    for each service, so such state is never shared either.
+    """
     a, b = _svc(), _svc()
     await a.container._setup_extensions()
     await b.container._setup_extensions()
     assert a.pool.pool is not b.pool.pool
 
 
+async def test_stop_is_safe_when_setup_never_ran():
+    """`stop()` runs on a service that failed before it was set up: `pool` is still None.
+
+    After `setup()` the pool exists, so only an extension that was never set up takes the
+    `pool is None` branch; without that guard this raises AttributeError, which the container
+    logs and swallows as "failed to stop" and which masks the failure that got us here.
+    """
+    ext = PoolExtension()
+    assert ext.pool is None
+    await ext.stop()  # must not raise
+
+
 async def test_stop_is_safe_when_start_never_ran():
-    """`stop()` runs on a service that failed before `start()`."""
+    """`stop()` after `setup()` but before `start()`: the pool exists and has no connections."""
     svc = _svc()
     await svc.container._setup_extensions()
     await svc.pool.stop()  # must not raise
@@ -129,7 +145,47 @@ async def test_health_details_before_setup_contributes_nothing():
 async def test_health_details_reports_the_pool():
     svc = _svc()
     await svc.container._setup_extensions()
-    assert svc.pool.health_details() == {"connections": 0, "connected": False}
+    assert svc.pool.health_details() == {
+        "connections": 0,
+        "active_connections": 0,
+        "closed_connections": 0,
+        "connected": False,
+        "service_connected": False,
+    }
+
+
+async def test_health_details_reports_a_started_pool_by_what_it_holds():
+    """The three values are read from the pool and its service, so they change when those do.
+
+    The pre-start answer is the one a constant also gives. Started against a stubbed `nats.connect`
+    (no broker), the pool holds three live connections and the service's own connection is up.
+    """
+    svc = _svc()
+    await svc.container._setup_extensions()
+    live = MagicMock(is_connected=True)
+    svc.container.connection.nc = MagicMock(
+        is_connected=True, is_closed=False, is_draining=False, is_connecting=False
+    )
+    with patch("cliffracer.core.dial.connect", new=AsyncMock(return_value=live)):
+        await svc.pool.start()
+
+    assert svc.pool.health_details() == {
+        "connections": 3,
+        "active_connections": 3,
+        "closed_connections": 0,
+        "connected": True,
+        "service_connected": True,
+    }
+
+    for conn in svc.pool.pool._connections:
+        conn.is_connected = False
+    assert svc.pool.health_details() == {
+        "connections": 3,
+        "active_connections": 0,
+        "closed_connections": 0,
+        "connected": False,
+        "service_connected": True,
+    }
 
 
 # --- a service WITHOUT the extension is unchanged -----------------------------
@@ -220,3 +276,24 @@ async def test_send_side_hooks_do_not_fire_for_a_pool_request(broker):
     finally:
         await caller.stop()
         await echo.stop()
+
+
+async def test_health_says_how_many_of_the_pools_connections_are_alive_and_how_many_are_closed():
+    """`connections` counts the clients the pool holds; the other two say how many of them work."""
+    svc = _svc()
+    await svc.container._setup_extensions()
+    pool = svc.pool.pool
+    pool._connections = [
+        MagicMock(is_connected=True),
+        MagicMock(is_connected=False),
+        MagicMock(is_connected=True, is_closed=True),
+    ]
+    pool._closed_for_good = {3}
+
+    health = svc.pool.health_details()
+
+    assert (health["connections"], health["active_connections"], health["closed_connections"]) == (
+        3,
+        2,
+        1,
+    )

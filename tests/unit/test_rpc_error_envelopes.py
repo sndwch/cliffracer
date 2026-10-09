@@ -19,13 +19,14 @@ from cliffracer import (
     rpc,
 )
 from cliffracer.client import (
-    ClientError,
     RpcRefused,
+    RpcServerError,
     RpcUnknownMethod,
     RpcValidationError,
     ServiceClient,
 )
 from cliffracer.core.extension import Extension, RejectMessage, WorkerContext
+from cliffracer.testing import refuse_a_reply_with_no_subject
 
 pytestmark = pytest.mark.unit
 
@@ -46,6 +47,7 @@ class MockRpcMsg:
         self.response_headers: dict[str, str] | None = None
 
     async def respond(self, data: bytes) -> None:
+        refuse_a_reply_with_no_subject(self)
         self.response_bytes = data
         self.response_headers = dict(self.headers)
 
@@ -92,7 +94,12 @@ async def test_rpc_unknown_method_error_envelope(rpc_service: SampleRpcService) 
 async def test_rpc_unknown_method_without_reply_drops_cleanly(
     rpc_service: SampleRpcService,
 ) -> None:
-    """Unknown method with no reply inbox does not attempt to respond and does not raise."""
+    """Unknown method with no reply inbox does not attempt to respond and does not raise.
+
+    The same request WITH a reply inbox is sent straight after: silence alone is also what a
+    dispatch that does nothing looks like, and the answer to the second is what shows the first
+    reached the unknown-method branch and chose, there, not to answer.
+    """
     msg = MockRpcMsg(
         subject="math_svc.nonexistent_method",
         data=json.dumps({}).encode(),
@@ -101,6 +108,17 @@ async def test_rpc_unknown_method_without_reply_drops_cleanly(
 
     await rpc_service.container._handle_rpc_request(msg)
     assert msg.response_bytes is None
+
+    answered = MockRpcMsg(
+        subject="math_svc.nonexistent_method",
+        data=json.dumps({}).encode(),
+    )
+    await rpc_service.container._handle_rpc_request(answered)
+    assert answered.response_bytes is not None
+    assert (
+        "Unknown method: nonexistent_method"
+        in json.loads(answered.response_bytes.decode())["error"]
+    )
 
 
 @pytest.mark.asyncio
@@ -265,7 +283,11 @@ async def test_describe_request_exception_error_envelope(monkeypatch: pytest.Mon
     assert msg.response_bytes is not None
     reply = json.loads(msg.response_bytes.decode())
     assert reply["success"] is False
-    assert "describe exploded" in reply["error"]
+    # This test is about the envelope, not the text. The text assertion it used
+    # to carry -- `"describe exploded" in reply["error"]` -- was incidental to
+    # that subject and was what held the describe path's missing gate in place.
+    assert reply["error"] == "Internal server error (correlation_id: corr-desc-err)"
+    assert "describe exploded" not in reply["error"]
     assert reply["correlation_id"] == "corr-desc-err"
 
 
@@ -299,7 +321,7 @@ def test_client_raise_for_error_interop() -> None:
         )
     assert len(exc_val.value.details) == 1
 
-    with pytest.raises(ClientError) as exc_server:
+    with pytest.raises(RpcServerError) as exc_server:
         client._raise_for_error(
             {"success": False, "error": "internal crash", "correlation_id": "c4"},
             "math_svc.foo",
@@ -309,7 +331,7 @@ def test_client_raise_for_error_interop() -> None:
 
 @pytest.mark.asyncio
 async def test_client_enforces_success_key_present() -> None:
-    """ServiceClient raises protocol ClientError when reply completely lacks success key."""
+    """A reply with no success key is the remote breaking the protocol: RpcServerError."""
     mock_nc = AsyncMock()
     mock_reply = MockRpcMsg(
         subject="_INBOX.test",
@@ -319,6 +341,8 @@ async def test_client_enforces_success_key_present() -> None:
     mock_nc.request = AsyncMock(return_value=mock_reply)
 
     client = ServiceClient(nc=mock_nc, service="math_svc", verify=False)
-    with pytest.raises(ClientError) as exc:
+    with pytest.raises(RpcServerError) as exc:
         await client._call("calculate", {"x": 1, "y": 2}, int)
-    assert "protocol error: reply from math_svc.calculate carries no success key" in str(exc.value)
+    assert "protocol error: reply from math_svc.rpc.calculate carries no success key" in str(
+        exc.value
+    )

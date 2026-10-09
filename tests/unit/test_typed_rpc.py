@@ -13,7 +13,6 @@ from cliffracer.core.typed_rpc import (
     UnsupportedType,
     UntypedHandler,
     build_handler_spec,
-    python_type,
     type_ref,
     unimportable_models,
 )
@@ -66,18 +65,91 @@ ORDER_REF = {
                 },
             },
         ),
+        (
+            Annotated[int, Field(ge=18)],
+            {"kind": "scalar", "name": "int", "constraints": {"ge": 18}},
+        ),
+        (
+            Annotated[str, Field(min_length=2, max_length=5, pattern="^a")],
+            {
+                "kind": "scalar",
+                "name": "str",
+                "constraints": {"max_length": 5, "min_length": 2, "pattern": "^a"},
+            },
+        ),
+        (
+            Annotated[int, Field(ge=1)] | None,
+            {
+                "kind": "optional",
+                "inner": {"kind": "scalar", "name": "int", "constraints": {"ge": 1}},
+            },
+        ),
+        (
+            list[Annotated[int, Field(gt=0)]],
+            {
+                "kind": "list",
+                "item": {"kind": "scalar", "name": "int", "constraints": {"gt": 0}},
+            },
+        ),
+        (
+            Annotated[list[int], Field(max_length=3)],
+            {
+                "kind": "list",
+                "item": {"kind": "scalar", "name": "int"},
+                "constraints": {"max_length": 3},
+            },
+        ),
+        (
+            dict[str, Annotated[int, Field(ge=1)]],
+            {
+                "kind": "dict",
+                "value": {"kind": "scalar", "name": "int", "constraints": {"ge": 1}},
+            },
+        ),
+    ],
+    ids=[
+        "str",
+        "int",
+        "float",
+        "bool",
+        "none",
+        "model",
+        "list",
+        "dict-of-model",
+        "optional",
+        "literal",
+        "list-of-optional-model",
+        "constrained-int",
+        "constrained-str",
+        "optional-constrained-int",
+        "list-of-constrained-int",
+        "constrained-list",
+        "dict-of-constrained-int",
     ],
 )
-def test_type_ref_round_trips(tp, ref):
+def test_type_ref_describes_each_supported_annotation(tp, ref):
     assert type_ref(tp) == ref
-    assert type_ref(python_type(ref)) == ref
 
 
-@pytest.mark.parametrize("tp", [object, list, dict, dict[int, str], set[int], bytes, complex])
-def test_unsupported_types_are_refused_by_name(tp):
+@pytest.mark.parametrize(
+    ("tp", "message"),
+    [
+        (object, "object is unsupported; use a supported type"),
+        (list, "list is unsupported; use a supported type"),
+        (dict, "dict is unsupported; use a supported type"),
+        # The most informative refusal: it names what is wrong with the key, not just the type.
+        (dict[int, str], "dict keys must be str, got int"),
+        (set[int], "set is unsupported"),
+        (bytes, "bytes is unsupported; use a supported type"),
+        (complex, "complex is unsupported; use a supported type"),
+    ],
+    ids=["object", "list", "dict", "dict-int-keys", "set", "bytes", "complex"],
+)
+def test_unsupported_types_are_refused_by_name(tp, message):
+    """The text is what an operator reads when a service refuses to start, so it names the type."""
     with pytest.raises(UnsupportedType) as e:
         type_ref(tp)
-    assert "unsupported" in str(e.value)
+    assert message in str(e.value)
 
 
 def test_any_is_refused():
@@ -198,6 +270,25 @@ def test_model_schema_hash_changes_with_field_modifications():
     assert "schema_hash" in ref_a
     assert "schema_hash" in ref_b
     assert ref_a["schema_hash"] != ref_b["schema_hash"]
+
+
+def test_the_schema_hash_follows_the_fields_not_the_name():
+    """Two models with the SAME name and module and different fields hash differently, and the
+    same fields hash alike: the hash is a contract fingerprint across a wire, and a model renamed
+    in the field-modification test above could not tell a name-only hash from a field-sensitive one."""
+    from pydantic import create_model
+
+    def model(**fields):
+        return create_model("Item", __module__=__name__, **fields)
+
+    base = type_ref(model(sku=(str, ...), qty=(int, ...)))
+    retyped = type_ref(model(sku=(str, ...), qty=(str, ...)))
+    extended = type_ref(model(sku=(str, ...), qty=(int, ...), extra=(float, 0.0)))
+    again = type_ref(model(sku=(str, ...), qty=(int, ...)))
+
+    assert base["qualname"] == retyped["qualname"] == extended["qualname"]
+    assert len({base["schema_hash"], retyped["schema_hash"], extended["schema_hash"]}) == 3
+    assert base["schema_hash"] == again["schema_hash"]
 
 
 def test_annotated_constraints_preserved_in_payload_model():
@@ -381,6 +472,45 @@ def test_handler_named_after_service_client_member_rejected():
     assert "conflicts with ServiceClient member" in str(exc.value)
 
 
+def _public_names_of_a_real_service_client() -> set[str]:
+    """Read off `ServiceClient` itself: its class members and what its constructor sets."""
+    from cliffracer.client import ServiceClient
+
+    client = ServiceClient(service="probe", verify=False)
+    return {n for n in set(dir(ServiceClient)) | set(vars(client)) if not n.startswith("_")}
+
+
+def test_the_reserved_handler_names_are_the_real_service_client_surface():
+    """Derived here from a constructed client, not from the function under test: a public member
+    added to `ServiceClient` or its constructor is reserved without anyone editing a list, and a
+    hand-written list that fell behind would fail this."""
+    from cliffracer.core.typed_rpc import reserved_rpc_method_names
+
+    expected = _public_names_of_a_real_service_client()
+
+    assert set(reserved_rpc_method_names()) == expected
+    # Both kinds are in it: a method (verify, close) and an attribute the constructor sets.
+    assert {"verify", "close", "connect_timeout", "timeout", "headers"} <= expected
+
+
+@pytest.mark.parametrize("name", sorted(_public_names_of_a_real_service_client()))
+def test_a_handler_named_after_any_service_client_member_is_rejected(name):
+    class Svc:
+        async def handler(self) -> None:
+            pass
+
+    with pytest.raises(UntypedHandler, match="conflicts with ServiceClient member"):
+        build_handler_spec(name, Svc.handler, owner=Svc)
+
+
+def test_CONTROL_an_ordinary_handler_name_is_not_reserved():
+    class Svc:
+        async def create_order(self) -> None:
+            pass
+
+    build_handler_spec("create_order", Svc.create_order, owner=Svc)
+
+
 def test_handler_parameter_starting_with_underscore_rejected():
     """Verify parameters starting with underscore are rejected at startup."""
 
@@ -423,9 +553,11 @@ def test_collect_model_schemas_from_spec_and_nested_models():
         items: list[Item]
 
     class Svc:
-        async def handle(self, payload: Container) -> Item:
+        # The return type is a `str`, so `Item` can reach the catalogue only through
+        # `Container.items`: a collector that does not walk a model's fields misses it.
+        async def handle(self, payload: Container) -> str:
             """Handler doc."""
-            return payload.items[0]
+            return payload.items[0].sku
 
     spec = build_handler_spec("handle", Svc.handle, owner=Svc)
     schemas = collect_model_schemas(spec)

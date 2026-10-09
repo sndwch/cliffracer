@@ -1,11 +1,10 @@
 # E-commerce example
 
-Five services on one NATS broker, with an HTTP API on the order service and a
-load generator that keeps traffic flowing.
+Five services on one NATS broker, with a load generator that keeps traffic flowing.
 
 | service | what it does |
 |---|---|
-| Order | HTTP API and NATS handlers for creating and reading orders |
+| Order | NATS handlers for creating and reading orders |
 | Inventory | Reserves stock for an order |
 | Payment | Processes payment, simulating a 90% success rate |
 | Notification | Sends order notifications |
@@ -40,7 +39,6 @@ python main.py
 
 ## What to look at
 
-- Order service API and its generated docs: http://localhost:8001/docs
 - NATS monitoring: http://localhost:8222
 - The terminal, for structured JSON log lines carrying the correlation id
 
@@ -48,42 +46,6 @@ Log lines to follow through a single order:
 
 ```
 order_created  ->  inventory_reserved  ->  payment_success | payment_failed  ->  notification_sent
-```
-
-## Driving it by hand
-
-`test_system.py` creates orders over HTTP and reads them back while the system
-runs:
-
-```bash
-uv run python test_system.py
-```
-
-Create an order directly:
-
-```bash
-curl -X POST "http://localhost:8001/orders" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "demo_user",
-    "items": [
-      {
-        "product_id": "laptop-pro",
-        "name": "Professional Laptop",
-        "quantity": 1,
-        "price": 1299.99
-      }
-    ],
-    "shipping_address": "123 Demo St, Demo City",
-    "email": "demo@example.com"
-  }'
-```
-
-Read orders back:
-
-```bash
-curl http://localhost:8001/orders
-curl http://localhost:8001/orders/{order_id}
 ```
 
 ## What the simulation does

@@ -41,8 +41,11 @@ class TestCronScoping:
 class _FailingService(CliffracerService):
     """Service configured with extensions to verify context cleanup on errors."""
 
+    fired: list[str | None]
+
     async def boom(self) -> None:
         CorrelationContext.set(CorrelationContext.get() or CorrelationContext.get_or_create_id())
+        self.fired.append(CorrelationContext.get())
         raise RuntimeError("this firing failed")
 
 
@@ -51,6 +54,7 @@ class TestCronScopingOnARealService:
     async def test_a_FAILED_firing_does_not_leak_its_id(self):
         """Verify failed cron executions do not leak correlation context."""
         svc = _FailingService(ServiceConfig(name="t"))
+        svc.fired = []
         await svc.container._setup_extensions()
         cron = CronTimer(expression="* * * * *")
         cron.method_name = "boom"
@@ -58,6 +62,12 @@ class TestCronScopingOnARealService:
 
         CorrelationContext.clear()
         await cron._execute_method()
+
+        # The firing happened, set an id, and failed: without these a firing that never ran
+        # leaves the context empty too, and the assertion below reads an all-zero result.
+        assert len(svc.fired) == 1 and svc.fired[0] is not None, svc.fired
+        assert cron.error_count == 1
+        assert (cron.last_error or "").startswith("RuntimeError"), cron.last_error
 
         assert CorrelationContext.get() is None, (
             "a cron firing that raised left its correlation ID in the context"

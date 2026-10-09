@@ -48,6 +48,9 @@ class ScheduledJobsService(CliffracerService):
     @cron("@hourly", eager=True)
     async def hourly_rollup(self):
         self._stamp("hourly_rollup (@hourly, eager)")
+        if len(self.run_log) == 1:
+            # The line the examples test waits for: the eager job has run on startup.
+            print("EXAMPLE READY: eager @hourly job ran", flush=True)
 
 
 async def main():

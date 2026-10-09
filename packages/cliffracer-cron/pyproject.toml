@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "cliffracer-cron"
 dynamic = ["version"]
 description = "Wall-clock @cron scheduling for cliffracer services"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 readme = "README.md"
 # Hatchling auto-detects the LICENSE file. It must be copied, not symlinked,
 # to avoid sdist unpacking errors.
@@ -15,6 +15,9 @@ dependencies = [
     "cliffracer",
     "croniter>=2.0.0,<7.0.0",
 ]
+
+[tool.cliffracer]
+lifecycle = "incubating"
 
 [tool.hatch.version]
 source = "vcs"

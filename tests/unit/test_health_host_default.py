@@ -105,12 +105,11 @@ async def test_the_default_refuses_a_non_loopback_connect_and_0_0_0_0_accepts_on
     svc = await _started()
     try:
         _, port = _bound_address(svc)
-        with pytest.raises((ConnectionRefusedError, OSError)):
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(outside, port), timeout=5
-            )
-            writer.close()
-            await writer.wait_closed()
+        # Refused, specifically, and only the connect is inside the block: a timeout (a dropped
+        # connect, a firewall) is not "refused", and nor is an error from closing a connection
+        # that had in fact succeeded.
+        with pytest.raises(ConnectionRefusedError):
+            await asyncio.wait_for(asyncio.open_connection(outside, port), timeout=5)
     finally:
         await svc.stop()
 

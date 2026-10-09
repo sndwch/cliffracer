@@ -12,6 +12,7 @@ from cliffracer import (
     listener,
     validated_listener,
 )
+from cliffracer.core.discovery import HandlerDiscovery
 
 pytestmark = pytest.mark.unit
 
@@ -37,6 +38,16 @@ SUBJECTS_IN_USE = [
     "user.events.*",
     "events.extraction.completed",
     "ping.events",
+    # shapes the list above never had: tokens with an underscore, a digit, a version, a wildcard
+    # first, and a bare `>`
+    "orders.order_created",
+    "payments.payment_completed",
+    "events.complex.v1",
+    "live82.pull.events",
+    "burst.orders.>",
+    "*.created",
+    "*.*",
+    ">",
 ]
 
 
@@ -45,6 +56,70 @@ def test_subjects_already_in_use_are_still_accepted(subject):
     listener(subject)
     broadcast(subject)
     validated_listener(subject, Evt)
+
+
+def _subjects_the_tree_declares() -> set[str]:
+    """Every string literal passed first to `listener`, `broadcast` or `validated_listener` in the
+    tree, found by reading the code rather than by someone remembering to add it to a list.
+
+    Calls inside a `with pytest.raises(...)` are left out: they are subjects a test means to refuse.
+    """
+    import ast
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[2]
+    roots = [
+        repo / "src",
+        repo / "examples",
+        repo / "tests",
+        *repo.glob("packages/*/src"),
+        *repo.glob("packages/*/tests"),
+    ]
+    found: set[str] = set()
+    for root in roots:
+        for path in root.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            refused = {
+                id(node)
+                for with_ in ast.walk(tree)
+                if isinstance(with_, ast.With)
+                and any(
+                    isinstance(item.context_expr, ast.Call)
+                    and getattr(item.context_expr.func, "attr", "") == "raises"
+                    for item in with_.items
+                )
+                for node in ast.walk(with_)
+            }
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or id(node) in refused:
+                    continue
+                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+                if (
+                    name in {"listener", "broadcast", "validated_listener"}
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)
+                ):
+                    found.add(node.args[0].value)
+    return found
+
+
+def test_every_subject_the_tree_declares_is_accepted():
+    """The list above is a sample; this is the tree. A validator tightened until it refuses a
+    subject the code really uses fails here and names it, instead of surfacing as a collection
+    error in an unrelated file."""
+    subjects = _subjects_the_tree_declares()
+    assert len(subjects) > 50, (
+        f"the walk found only {len(subjects)} subjects: it is not reading the tree"
+    )
+
+    for subject in sorted(subjects):
+        try:
+            listener(subject)
+            broadcast(subject)
+            validated_listener(subject, Evt)
+        except ConfigurationError as exc:
+            pytest.fail(f"the tree declares {subject!r}, which the validator refuses: {exc}")
 
 
 @pytest.mark.parametrize(
@@ -128,8 +203,11 @@ def test_a_valid_service_still_builds_and_registers():
     svc = S(ServiceConfig(name="svc", namespace="app1"))
     svc._discover_handlers()
 
-    assert "app1.orders.created" in svc.container.registry.event_handlers
-    assert all(isinstance(key, str) for key in svc.container.registry.event_handlers)
+    registry = svc.container.registry
+    published = HandlerDiscovery.with_namespace(svc.config, "system.alerts")
+    assert sorted(registry.event_handlers) == ["app1.orders.created", "app1.system.alerts"]
+    assert published == "app1.system.alerts"
+    assert registry.broadcast_handlers.keys() == {published}
 
 
 def test_validation_does_not_reject_a_wildcard_only_subject():
