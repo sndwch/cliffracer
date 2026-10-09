@@ -1,4 +1,4 @@
-"""Tests for JWT token revocation and jti claim handling (#333)."""
+"""Tests for JWT token revocation and jti claim handling."""
 
 import json
 from datetime import UTC, datetime, timedelta
@@ -44,8 +44,17 @@ class TestTokenRevocation:
         assert token is not None
         assert svc.validate_token(token) is not None
 
-        svc.revoke_token(token)
+        assert svc.revoke_token(token) is True
         assert svc.validate_token(token) is None
+
+    def test_revoking_a_revoked_token_again_reports_it_revoked(self):
+        svc = _service()
+        token = svc.authenticate("alice", "s3cret-password")
+        assert token is not None
+
+        assert svc.revoke_token(token) is True
+        assert svc.revoke_token(token) is True
+        assert len(svc._revoked_jtis) == 1
 
     def test_revoking_one_token_does_not_invalidate_other_tokens_for_same_user(self):
         svc = _service()
@@ -64,7 +73,7 @@ class TestTokenRevocation:
         svc.revoke_token(token)
         assert svc.refresh_token(token) is None
 
-    def test_revoking_an_expired_token_does_not_raise(self):
+    def test_revoking_an_expired_token_does_not_raise_and_stores_nothing(self):
         svc = _service()
         now = datetime.now(UTC)
         payload = {
@@ -77,16 +86,21 @@ class TestTokenRevocation:
         }
         expired_token = jwt.encode(payload, SECRET, algorithm=svc.config.algorithm)
 
-        svc.revoke_token(expired_token)
-        assert "custom-expired-jti-123" in svc._revoked_jtis
+        # An expired token is refused on its own, so there is nothing to keep.
+        assert svc.revoke_token(expired_token) is True
+        assert "custom-expired-jti-123" not in svc._revoked_jtis
+        assert svc.validate_token(expired_token) is None
 
-    def test_revoking_malformed_token_does_not_raise(self):
+    def test_revoking_a_malformed_token_reports_failure_and_revokes_nothing(self):
         svc = _service()
-        svc.revoke_token("not-a-jwt")
-        svc.revoke_token("garbage.token.here")
-        svc.revoke_token("")
+        for token in ("not-a-jwt", "garbage.token.here", ""):
+            assert svc.revoke_token(token) is False, token
+        assert svc._revoked_jtis == {}
 
-    def test_revoking_token_without_jti_does_not_crash(self):
+    def test_a_token_without_a_jti_cannot_be_revoked_and_is_not_accepted(self):
+        """Revocation is keyed on the jti, so a token without one could never be
+        revoked. It is refused, rather than accepted for as long as it lasts, and
+        revoking it says it could not."""
         svc = _service()
         now = datetime.now(UTC)
         payload = {
@@ -96,8 +110,27 @@ class TestTokenRevocation:
             "exp": (now + timedelta(hours=1)).timestamp(),
             "iat": now.timestamp(),
         }
-        legacy_token = jwt.encode(payload, SECRET, algorithm=svc.config.algorithm)
-        svc.revoke_token(legacy_token)
+        no_jti = jwt.encode(payload, SECRET, algorithm=svc.config.algorithm)
+
+        assert svc.revoke_token(no_jti) is False
+        assert svc._revoked_jtis == {}
+        assert svc.validate_token(no_jti) is None
+        assert svc.refresh_token(no_jti) is None
+
+    def test_CONTROL_the_same_token_with_a_jti_is_accepted(self):
+        svc = _service()
+        now = datetime.now(UTC)
+        payload = {
+            "jti": "a-jti",
+            "user_id": "user_1",
+            "username": "alice",
+            "email": "alice@example.com",
+            "exp": (now + timedelta(hours=1)).timestamp(),
+            "iat": now.timestamp(),
+        }
+        with_jti = jwt.encode(payload, SECRET, algorithm=svc.config.algorithm)
+
+        assert svc.validate_token(with_jti) is not None
 
     async def test_revoked_token_fails_authextension_dispatch(self):
         svc_auth = SimpleAuthService(AuthConfig(secret_key=SECRET))

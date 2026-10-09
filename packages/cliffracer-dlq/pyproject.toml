@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cliffracer-dlq"
+dynamic = ["version"]
+description = "A read-only inspector for the dead letters cliffracer services publish"
+requires-python = ">=3.12"
+readme = "README.md"
+# Hatchling auto-detects the LICENSE file. It must be copied, not symlinked,
+# to avoid sdist unpacking errors.
+license = {text = "MIT"}
+dependencies = [
+    "cliffracer",
+]
+
+[project.scripts]
+cliffracer-dlq = "cliffracer_dlq.cli:main"
+
+[tool.cliffracer]
+lifecycle = "incubating"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options = { root = "../.." }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cliffracer_dlq"]
+
+[tool.uv.sources]
+cliffracer = { workspace = true }

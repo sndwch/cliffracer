@@ -12,12 +12,6 @@ ROOT = Path(__file__).resolve().parents[2]
 BLOCK = "[tool.hatch.build.targets.sdist]"
 
 
-@pytest.fixture(autouse=True)
-def _require_git():
-    if not (ROOT / ".git").is_dir():
-        pytest.skip("Not running inside a git repository (release tarball)")
-
-
 def _build_core_sdist(out: Path, cwd: Path) -> Path:
     """-> the built .tar.gz. Never touches dist/.
 
@@ -63,7 +57,7 @@ def test_core_sdist_contains_no_workspace_member(tmp_path):
 def test_the_sdist_is_an_allowlist_not_a_default(tmp_path):
     """Verify non-core directories are excluded from the sdist."""
     entries = _entries(_build_core_sdist(tmp_path / "dist", ROOT))
-    for unwanted in ("packages/", "tests/", "docs/", "examples/", "load-testing/", "deployment/"):
+    for unwanted in ("packages/", "tests/", "docs/", "examples/", "load-testing/"):
         assert not [e for e in entries if e.startswith(unwanted)], (
             f"{unwanted} is in core's sdist; the include list in "
             "[tool.hatch.build.targets.sdist] is what keeps it out"

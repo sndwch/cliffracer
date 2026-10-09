@@ -100,16 +100,17 @@ async def test_the_same_handler_refuses_a_caller_without_the_role(auth_service):
         async def admin_only(self) -> dict[str, bool]:
             return {"ok": True}
 
-    svc = Svc(ServiceConfig(name="a", expose_internal_errors=True))
+    svc = Svc(ServiceConfig(name="a"))
     await svc.container._setup_extensions()
     svc._discover_handlers()
     msg = _msg("a.rpc.admin_only", _token(auth_service, "bob"))
     await svc.container._handle_rpc_request(msg)
 
-    # AuthorizationError confirms role validation failure.
+    # The caller authenticated and lacks the role: refused as forbidden, which is not the
+    # `unauthenticated` a missing or unusable token gets.
     body = _reply(msg)
-    assert body.get("error") == "Required roles: ('admin',)", body
-    assert "Authentication required" not in body.get("error", "")
+    assert (body.get("code"), body.get("error")) == ("refused", "refused: forbidden"), body
+    assert "unauthenticated" not in body.get("error", "")
 
 
 async def test_the_context_does_not_leak_to_the_next_message(auth_service):
@@ -163,12 +164,10 @@ async def test_an_unauthenticated_message_never_reaches_the_handler(auth_service
 async def test_two_concurrent_dispatches_do_not_break_the_reset(auth_service):
     """Verify concurrent dispatches isolate contextvar tokens without teardown errors."""
     import asyncio
-
-    from loguru import logger
+    import contextvars
 
     seen: list[str] = []
-    logged: list[str] = []
-    sink = logger.add(logged.append, level="ERROR", format="{message}")
+    teardown_errors: list[BaseException] = []
 
     class Svc(CliffracerService):
         auth = AuthExtension(auth_service)
@@ -184,31 +183,60 @@ async def test_two_concurrent_dispatches_do_not_break_the_reset(auth_service):
     await svc.container._setup_extensions()
     svc._discover_handlers()
 
+    # The pipeline swallows a hook's exception and logs it, so the exception is captured where it
+    # is raised, on the bound extension, rather than found again in the log line.
+    bound = svc.auth
+    real_teardown = bound.worker_teardown
+
+    async def recording_teardown(ctx):
+        try:
+            await real_teardown(ctx)
+        except BaseException as exc:
+            teardown_errors.append(exc)
+            raise
+
+    bound.worker_teardown = recording_teardown
+
     a = _msg("a.rpc.slow", _token(auth_service, "alice"))
     b = _msg("a.rpc.slow", _token(auth_service, "bob"))
-    try:
-        await asyncio.gather(
-            svc.container._handle_rpc_request(a), svc.container._handle_rpc_request(b)
-        )
-    finally:
-        logger.remove(sink)
+    # Each dispatch runs as its own task, which runs in a copy of the context it was started
+    # from, so the test's own context cannot show a leak whether or not teardown resets the
+    # variable. The contexts the tasks run in are therefore handed in and read back.
+    first, second = contextvars.copy_context(), contextvars.copy_context()
+    await asyncio.gather(
+        asyncio.create_task(svc.container._handle_rpc_request(a), context=first),
+        asyncio.create_task(svc.container._handle_rpc_request(b), context=second),
+    )
 
     assert sorted(seen) == ["alice", "bob"], seen
     for msg in (a, b):
         assert "error" not in _reply(msg), _reply(msg)
-    assert auth_context_var.get() is None
+    assert first.get(auth_context_var) is None and second.get(auth_context_var) is None, (
+        "a dispatch left its authenticated context set in the context it ran in"
+    )
+    assert teardown_errors == [], teardown_errors
 
-    # Verify worker_teardown did not swallow unexpected exceptions.
-    swallowed = [line for line in logged if "worker_teardown raised" in line]
-    assert not swallowed, (
+    # Verify worker_teardown did not raise (the container would have swallowed it).
+    assert not teardown_errors, (
         "worker_teardown raised and the container swallowed it: "
-        f"{swallowed}. A reset Token stored on the extension instance is "
+        f"{teardown_errors!r}. A reset Token stored on the extension instance is "
         "created in one dispatch's context and reset in another's."
     )
 
 
-async def test_a_backend_that_raises_refuses_rather_than_letting_the_handler_run():
-    """Verify backend validation exceptions result in request refusal."""
+async def test_a_backend_that_raises_stops_the_handler_and_is_reported_as_ours():
+    """An unreachable backend fails closed, but it is not the caller's fault.
+
+    The handler must not run -- that half is the point of `fails_closed` and is
+    unchanged. What the caller is TOLD changed: a backend that raises has said
+    nothing about this token, which may be perfectly valid, so answering
+    "refused: unauthenticated" sends them to check credentials for a fault that
+    is ours. The extension lets the exception out, the pipeline synthesises
+    `RejectMessage(hook_crash=True)`, and the wire reports a fault.
+
+    On JetStream the same change is the difference between the event being
+    acknowledged and destroyed and being redelivered, then dead-lettered.
+    """
     reached = []
 
     class RaisingIssuer:
@@ -229,8 +257,14 @@ async def test_a_backend_that_raises_refuses_rather_than_letting_the_handler_run
     msg = _msg("a.rpc.whoami", "anything")
     await svc.container._handle_rpc_request(msg)
 
+    reply = _reply(msg)
     assert not reached, "the handler ran for a caller the backend never authenticated"
-    assert _reply(msg).get("error") == "refused: unauthenticated", _reply(msg)
+    assert reply.get("code") == "internal", reply
+    assert "auth" in reply.get("error", ""), reply
+    assert "unauthenticated" not in reply.get("error", ""), (
+        "an unreachable backend told us nothing about this token; naming the "
+        "caller unauthenticated sends them to check credentials for our fault"
+    )
     assert auth_context_var.get() is None
 
 

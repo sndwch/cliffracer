@@ -8,52 +8,57 @@ before it. Every hook is optional.
 
 ```python
 from cliffracer import CliffracerService
-from cliffracer_http import HttpExtension
+from cliffracer_logging import LoggingExtension
 from cliffracer_metrics import MetricsExtension
 
 class Orders(CliffracerService):
-    http = HttpExtension(port=8080)
+    logging = LoggingExtension()
     metrics = MetricsExtension()
 ```
 
-The attribute name does three jobs. It is how you reach the extension
-(`self.http.app`), how its decorators are spelled (`@http.get("/orders")`), and
-the key its contributions appear under in `/health` and `/info`.
+The attribute name does two jobs. It is how you reach the extension
+(`self.metrics`), and the key its contributions appear under in `/health` and
+`/info`.
 
 ## The distributions
 
 | distribution | attribute type | provides |
 |---|---|---|
-| `cliffracer-http` | `HttpExtension`, `AutoGatewayExtension` | FastAPI app, REST routes, websockets, dynamic RPC Auto-Gateway |
 | `cliffracer-auth` | `AuthExtension` | JWT auth, `@requires_auth` / `@requires_roles` / `@requires_permissions` |
 | `cliffracer-logging` | `LoggingExtension` | structured logging, correlation logging, log-to-NATS |
 | `cliffracer-metrics` | `MetricsExtension` | in-process counters over the dispatch hooks |
 | `cliffracer-otel` | `OtelExtension` | OpenTelemetry distributed tracing and W3C context propagation |
 | `cliffracer-kv` | `KvExtension` | NATS JetStream Key-Value and Object Store with bucket TTL |
 | `cliffracer-resilience` | `ResilienceExtension` | circuit breaking, sliding-window rate limiting, resilient RPC proxy |
-| `cliffracer-faststream` | `FastStreamExtension` | FastStream broker hosting, resilient ACK/DLQ routing, and shutdown drain |
-| `cliffracer-backdoor` | `BackdoorExtension` | the async debug backdoor |
 | `cliffracer-cron` | *(none)* | `@cron` handlers. `CronTimer` subclasses core's `Timer`, so core's timer discovery starts them and there is nothing to declare |
+| `cliffracer-dlq` | *(none)* | `cliffracer-dlq`, a read-only command for the dead letters in their stream. It is a tool for operators and declares nothing on a service |
+| `cliffracer-cyanide` | `CyanideExtension` | fault injection for testing: delay, raised faults, simulated timeouts and dropped replies |
 
 
 Declaring an extension is what loads it, and that is the point of the split. It
-is checked rather than assumed: with all ten extensions installed and all eight
-of their third-party dependencies importable, `import cliffracer` leaves every
-one of them absent from `sys.modules` — aioconsole, croniter, fastapi, jwt,
-psutil, starlette, uvicorn, yaml, and the ten `cliffracer_*` packages
-themselves. `tests/repo/test_core_imports_no_web_stack.py` contains the web stack
-of that list to it on every run, in a fresh interpreter so the answer does not
-depend on test order.
+is checked rather than assumed: `import cliffracer` leaves every `cliffracer_*`
+package absent from `sys.modules`, and none of the third-party modules the
+extensions need, such as croniter, jwt and opentelemetry, is loaded either.
+`tests/repo/test_core_imports_no_web_stack.py` holds the web-stack part of that
+to it on every run, in a fresh interpreter so the answer does not depend on
+test order.
 
-`psutil` and `aioconsole` are the two worth naming explicitly. They belong to
-`cliffracer-backdoor`, the extension that evaluates arbitrary Python inside the
-service process, so the debug console's dependencies arrive with that
-distribution and stay with it.
-
-Core binds two extensions of its own first, so they wrap every extension you
-declare: `CorrelationExtension` sets the correlation id, and
-`ValidationExtension` validates every RPC payload against its handler's
-annotations and backs `@validated_listener`.
+Core binds two extensions of its own around the ones you declare.
+`CorrelationExtension` is first and sets the correlation id for every extension
+you declare. `ValidationExtension` is last and validates every RPC and async RPC
+payload against its handler's annotations, so a gate you declare (authentication,
+a rate limit) refuses a message whose payload decodes before any schema diagnostic
+is produced for it, and your validators never see input a gate turned away. Decoding
+comes first and is the dispatcher's own: a payload that cannot be decoded (a body that
+is not JSON or msgpack) reaches no declared extension. An RPC with one is answered
+`validation_failed` with the decoder's text under the default `rpc_validation_errors`
+policy, a fire-and-forget request is logged and dropped, and an event is dead-lettered;
+a gate is not consulted for it and a limit spends no permit on it. Hold that in mind
+when a gate must see every message: it sees every message that decodes. It does nothing for events: a `@validated_listener` or
+typed `@listener` payload is validated by the event dispatcher, and a message
+that fails is dead-lettered or dropped according to the listener's `on_invalid`,
+else the service's `default_on_invalid` (see
+[Message Validation](api-reference.md#message-validation)).
 
 ## The contract
 
@@ -62,20 +67,68 @@ Every hook is optional; the base class defines them all as no-ops.
 | hook | when | notes |
 |---|---|---|
 | `setup(service)` | before the broker is connected | read config, **build per-instance state here** |
-| `start()` | after the broker is connected and core subscriptions exist | |
-| `stop()` | on shutdown, reverse declaration order, before the broker drains | |
+| `start()` | after the broker is connected and `on_startup` has returned, before the service subscribes to its handlers | |
+| `stop()` | on shutdown, reverse declaration order, before the broker drains | pairs with `setup()`, not `start()`: it also runs when startup stopped before `start()` |
 | `worker_setup(ctx)` | before a handler runs | the only hook that can refuse |
-| `worker_result(ctx, result, exc)` | after the handler, with what it returned or raised | |
-| `worker_teardown(ctx)` | after `worker_result`, always | |
+| `worker_result(ctx, result, exc)` | after the handler, with what it returned or raised, or after a refusal | |
+| `worker_teardown(ctx)` | after `worker_result`, always | also runs for an extension whose `worker_setup` never ran because an earlier one refused |
 | `before_call(ctx)` | before this service **sends** a message | may add to `ctx.headers` |
 | `after_call(ctx, result, exc)` | after the send, always | |
 | `health_details()` | when `/health` is built | return `None` to contribute nothing |
 | `info_details()` | when `/info` is built | |
-| `entrypoint_kinds()` | at bind time, before `setup` | `kind -> binder`, for extensions that own a decorator |
+| `on_disconnect()` | the broker connection was lost, before the client tries to reconnect | **quick, or hand slow work to a task**: the client waits for it before it reconnects |
+| `on_reconnect()` | the connection was regained, subscriptions replayed | traffic already flows while it runs; hand long work to a task |
+| `on_listener_paused(subject, dependencies)` | the service stopped consuming a `pause_when_down` listener because `dependencies` are down | |
+| `on_listener_resumed(subject, dependencies)` | it consumes that listener again: `dependencies` are all up | |
+
+`health_details()` is informational. What it returns is added to the `/health` body under the
+extension's name, and a `health_details()` that raises is reported there as an `error` entry; neither
+changes the service's status or its HTTP status code, so an extension that reports itself stopped
+still leaves the service `healthy`. An extension that must take the service out of rotation
+declares a dependency probe (`service.add_dependency(...)`), which is what decides readiness.
 
 `ctx` is a `WorkerContext`: `kind`, `subject`, `headers`, `correlation_id`,
 `payload`, `raw`, and `data` — a per-dispatch dict for handing state from one
 hook to the next.
+
+`ctx.payload` is the decoded wire payload as it arrived: not coerced to the
+handler's parameter types, and with `correlation_id` still in it. Every hook sees
+that form, because validation does not change it. The arguments an RPC handler
+receives, validated and coerced, are in `ctx.data["validated_kwargs"]` once
+`ValidationExtension`'s `worker_setup` has run. That is after every extension you
+declare has run its own `worker_setup`, so a declared extension reads them in
+`worker_result`, not in `worker_setup`.
+
+An event that fails its schema is dead-lettered or dropped and raises nothing, so `worker_result`
+receives `exc=None` for it. The dispatch is marked `ctx.data["outcome"] = "invalid"`, which is how
+`MetricsExtension` counts it as `rejected` and `OtelExtension` ends its span in error, as the
+refusal an invalid RPC raises does.
+
+### Hearing the connection go and come back
+
+`on_disconnect()` and `on_reconnect()` run when the client reports the connection lost and regained,
+in declaration order, each before the matching `ServiceConfig.on_disconnect` / `on_connect` slot. A
+hook that raises is logged and the rest still run.
+
+The client awaits `on_disconnect()` before it reconnects, so a hook that waits holds the reconnect up
+by as long as it waits: keep it quick, or start a task and return. `on_reconnect()` runs once the
+connection is back and the subscriptions are replayed, so a slow one does not stall traffic, but hand
+its long work to a task as well. On reconnect the client replays every
+subscription it holds; a subscription unsubscribed inside `on_disconnect()` is not replayed, which is
+the place to drop a subject that must not come back on its own. A lost connection is noticed when the
+socket breaks or the client's ping timeout expires, so `on_disconnect()` can run well after the
+connection stopped working: use it to react, not as a fence.
+
+### What runs when startup does not finish
+
+An extension's `stop()` pairs with its `setup()`. `setup()` is where its resources are
+built, so a startup that fails or is stopped after `setup()` and before `start()` still calls
+`stop()`; `stop()` must tolerate an extension whose `start()` never ran. An extension whose `setup()` raised is stopped too, because it may hold part of what it was building. One declared after it, whose `setup()` was never begun, is not stopped, and neither is any extension of a service that never began its setup. The service's own
+`on_shutdown` pairs with `on_startup` the other way round: it runs only when `on_startup`
+returned, so an `on_startup` that raises or is cancelled has to release what it built
+itself. It also runs for a stop that was cancelled before it got there, for example by the
+close of the broker connection, shielded and bounded by `shutdown_timeout`, or by a fixed 30 seconds when that is `None`: past
+that bound a hung `on_shutdown` is abandoned and logged, so a stop can always be ended. Both pairings are pinned in `tests/unit/test_the_startup_and_shutdown_hook_contract.py`.
 
 ### Two rules worth stating
 
@@ -86,7 +139,50 @@ instance, guaranteeing isolation. Async resources such as connections,
 timers, or background workers belong in `setup()`. Both halves are pinned in
 `tests/unit/test_extension_base.py`.
 
-**Only `RejectMessage` can stop a handler, and only from `worker_setup`.**
+**A zero-argument callable passed as an extension argument is CALLED once per
+bound instance, and the extension receives its result.** That is what makes a
+factory work — `Extension(client=make_client)` gives each service its own
+client — and it applies to anything callable with no arguments, including a
+callable OBJECT, which is invoked through `__call__`. If you meant to pass the
+callable itself, wrap it: `SharedDependency(my_callback)`.
+
+A callable that needs arguments is copied rather than called, and one whose
+factory raises fails the bind with `ExtensionIsolationError` naming it. So is a C
+callable whose signature cannot be read, or reads only as `(*args, **kwargs)` with
+no Python code behind it (`operator.itemgetter`, `attrgetter`, `methodcaller` and
+`sqlite3.Connection` read that way on Python 3.12): it is copied, not called.
+
+Lists, dicts and tuples are copied item by item, at any depth, so these rules hold for
+what is inside them: `routers=[SharedDependency(router), make_client]` shares `router` and
+calls `make_client`. (A tuple subclass such as a `NamedTuple` is copied the same way and keeps its type; one whose
+constructor cannot be built from its items is copied whole, with a `RuntimeWarning` when a `SharedDependency`, a
+factory or an extension is inside it. A subclass of `list` or `dict` is copied whole, as any other object.)
+Every other argument is deep-copied for each bound instance, and a nested
+extension is built fresh. An argument that cannot be copied (a lock, a client
+holding sockets) fails the bind with `ExtensionIsolationError` rather than being
+shared by reference; wrap it in `SharedDependency(obj)` when sharing one object
+across instances is what you mean.
+
+**Plain data is the only thing copied without a word.** Plain data is a list, dict, set,
+frozenset or tuple, a pydantic model or dataclass instance, and the value types (strings,
+bytes, numbers, `None`, dates and times, `Decimal`, `UUID`, paths, ranges). Any other object
+that is copied, such as an unconnected `nats.NATS()` client, a store or a limiter, is copied
+with a `FutureWarning` that names the extension and the argument, and a future release will
+refuse it at bind unless it is wrapped in `SharedDependency(obj)` (one object for every
+service) or given as a zero-argument callable (one built for each). An object that must be
+one per process should be written that way now.
+
+**A declaration is frozen.** The extension a class body declares is a
+specification, and it is frozen when the class body declares it: `freeze()` copies its
+arguments, so changing a declared list or dict in place afterwards cannot reach
+an instance built later, and assigning or deleting an attribute on the
+declaration raises `AttributeError`. One passed to `add_extension` is frozen
+when it is bound. State that belongs to a service lives on the bound instance,
+which is not frozen: build it in `setup()`. The isolation guarantee covers a specification's public attributes and
+its arguments; its underscore-prefixed attributes, `_spec_args` and `_spec_kwargs` among them, are the machinery
+that does the freezing and are not part of it, so a write made through one is not guarded.
+
+**Only `RejectMessage` can stop a handler from an extension, and only from `worker_setup`.**
 Every other hook exception is logged under the extension's name and swallowed
 — that is what stops a buggy metrics hook taking dispatch down, and it stays
 true. The consequence to plan for is that **a bug in your hook fails silently**:
@@ -94,8 +190,64 @@ a `worker_teardown` that raises publishes nothing and returns no error to
 anybody. Test the hooks against a real dispatch, not with a hand-built
 `WorkerContext`.
 
-Raised anywhere other than `worker_setup`, `RejectMessage` is swallowed like
+Hooks are shown here as `async def` and that is the shape to write, but a plain
+`def` override is accepted and isolated the same way: it is called inside the
+guard and its return awaited only if it is awaitable.
+
+Raised by a hook other than `worker_setup`, `RejectMessage` is swallowed like
 anything else: by then the handler has run, and refusing afterwards is a lie.
+
+Raised by the handler body itself, it is honoured as a refusal: an RPC caller
+gets the refusal reply, and an event is neither retried nor dead-lettered (a
+core event ends `OK`, a JetStream message is acknowledged), so a handler that
+has decided a message must never be redelivered says so by raising it.
+`worker_result` receives it as `exc`.
+
+A timer or cron firing has no caller to answer, so a refusal from `worker_setup` skips the method and
+is reported at WARNING without a traceback. The timer counts it in `refusal_count` (with the reason in
+`last_refusal`), and not in `error_count`, the error rate or its executions; a distributed cron
+firing is recorded in its interval record with status `refused` and the reason. A gate that
+crashes is not a refusal: the firing counts in `error_count` with the crash in `last_error`, is
+logged at ERROR with its traceback, and a distributed cron firing is recorded with status `failed`.
+A fire-and-forget (`@async_rpc`) request is treated the same way: a refusal is logged at WARNING and
+a crashed gate at ERROR.
+
+**Teardown is not paired with setup on a refusal.** When an extension refuses in
+`worker_setup`, the extensions declared after it never had their `worker_setup`
+called, but they still receive `worker_result` (with the refusal as `exc`) and
+`worker_teardown`. An extension that releases in `worker_teardown` what it
+acquired in `worker_setup` has to cope with finding nothing to release; reading
+per-dispatch state with `ctx.data.pop(key, None)` is the pattern.
+
+`RetryMessage` is the transient form of `RejectMessage`. RPC callers receive a
+normal refusal, with its `retry_after` when that is a finite number of zero or more, while durable event consumers NAK the delivery after its
+`retry_after` delay, which is a finite number of seconds above zero: `None`, zero, a negative
+number, `nan` and `inf` are no hint, and the NAK uses the exponential backoff the consumer is
+configured with. A delivery that has reached the consumer's limit is
+dead-lettered and terminated. Use it for capacity decisions that can change
+without changing the message; authentication and validation remain ordinary,
+terminal `RejectMessage` decisions.
+
+**The `reason` string reaches the caller verbatim**, and deliberately outside
+`expose_internal_errors` — a refusal is an answer to whoever sent the message,
+not an internal error. So an extension that writes
+`raise RejectMessage(f"auth failed: {exc}")` is publishing `exc` to anyone who
+can reach the subject. Write reasons for the caller.
+
+**Fail closed when your hook is a gate.** Set `fails_closed = True` on the
+extension class (`AuthExtension`, `ValidationExtension` and the resilience and
+cyanide extensions do). An exception that escapes its `worker_setup` then
+refuses the message instead of being swallowed, so the handler cannot run
+unchecked. A hook that is not a gate leaves it `False`, and its failure is
+logged and the message proceeds.
+
+That gate does still apply to the refusal the framework SYNTHESISES when a
+`fails_closed` hook crashes: that one is the service being broken rather than
+the caller being turned away, and its text goes through the same gate a handler
+exception does. It is reported as `internal`, not `refused`, and a durable event
+it refuses takes the handler-failure path: NAK, and the dead-letter queue once
+the delivery limit is spent, where a refusal an extension authored is
+acknowledged.
 
 ### The send side
 
@@ -107,10 +259,11 @@ anything else: by then the handler has run, and refusing afterwards is a lie.
 | `call_rpc` | `call_rpc` | the reply's `result` |
 | `call_async` | `call_async` | `None` |
 | `call_rpc_no_wait` | `call_rpc_no_wait` | `None` |
+| `stream_rpc` | `stream_rpc` | `None`; the hooks run once, around opening the stream |
 | `publish_event` | `publish_event` | `None` |
 | `broadcast_message` | `broadcast` | `None` |
 
-`RpcProxy` goes through `call_rpc`, so it is covered by covering that.
+`RpcProxy` goes through `call_rpc`, and its `.stream(...)` through `stream_rpc`, so it is covered by covering those.
 
 Ordering is the same as the receive side: `before_call` in declaration order,
 `after_call` in reverse, `after_call` always runs including when the send
@@ -122,13 +275,32 @@ for: attach a token, add a trace id. The send path reads the headers back after
 `before_call` and puts them on the wire.
 
 ```python
+from cliffracer import Extension
+
+
 class AuthHeaderExtension(Extension):
     async def before_call(self, ctx):
         ctx.headers["authorization"] = f"bearer {self.token}"
 ```
 
-`ctx.payload` and `ctx.subject` are read-only: the send paths pass a copy, so a
-hook that writes to them changes nothing.
+For a service-identity bearer token, `AuthExtension` does this itself: give it
+`outbound_token_factory`, a callable returning a token (or an awaitable of one),
+and every call, async call and published event carries
+`authorization: Bearer <token>`, the factory being called once per message sent.
+A header the message already carries is left alone, a factory that returns
+nothing sends the message without one, and one that raises is logged and the
+message goes without one, since no hook can cancel a send. The caller's own token
+is never forwarded. See the `cliffracer-auth` README.
+
+`ctx.payload` and `ctx.subject` are read-only. Reassigning `ctx.subject` changes
+nothing, and the payload's dicts, lists, tuples and sets are copies, so writing
+to them changes nothing either. A custom object inside the payload, such as a
+pydantic model, is not copied: setting one of its attributes changes the
+caller's object. It does not change the message on any path: every send path
+serialises the payload before `before_call` runs. A payload the
+serialiser refuses raises before any hook runs. Serialising reads a one-shot
+iterable in the payload, such as a generator, so a hook sees it already
+consumed.
 
 One message fires one pair. `broadcast_message` publishes internally, and it
 runs a single `broadcast` chain rather than nesting a `publish_event` one
@@ -148,11 +320,11 @@ one to either.
 This extension audits every dispatch and refuses unsigned messages. It is not
 prose: it is quoted verbatim from
 `tests/integration/test_extensions_guide.py`, which runs it against a real
-broker, and `test_the_guide_quotes_this_file_verbatim` fails if this block and
-that file drift apart.
+broker, and `tests/repo/test_the_extensions_guide_quotes_the_example.py` fails
+if this block and that file drift apart.
 
 ```python
-from cliffracer.core.extension import Extension, RejectMessage, WorkerContext
+from cliffracer import Extension, RejectMessage, WorkerContext
 
 
 class AuditExtension(Extension):
@@ -166,9 +338,10 @@ class AuditExtension(Extension):
 
     def __init__(self, *, require_signature: bool = False) -> None:
         self.require_signature = require_signature
-        # DECLARED here, CREATED in setup(). bind() is a shallow copy, so a
-        # dict built in __init__ is the SAME object in every bound copy, and
-        # two services would share each other's counts.
+        # DECLARED here, CREATED in setup(). bind() runs __init__ again for
+        # each service, so a dict built here would not be shared either; the
+        # counts start in setup() because that is where per-service state
+        # begins, and where a connection, timer or worker would have to go.
         self.counts: dict[str, int] | None = None
 
     async def setup(self, ctx) -> None:
@@ -234,8 +407,13 @@ What the tests pin, and why each one is there:
 
 `AuthExtension` is worth its own note because declaring it changes the whole
 service: the refusal is in `worker_setup`, before dispatch, so **every** handler
-requires a valid token — decorated or not. `@requires_roles` narrows an
-already-authenticated caller; it is not what turns authentication on.
+requires a valid token — decorated or not — except a `@timer` firing that carries
+no token while `allow_timers` is True (the default); see the auth README for the
+three ways to give a timer an identity. `@requires_roles` narrows an
+already-authenticated caller; it is not what turns authentication on. Given
+several roles it admits a caller who holds any one of them; stack the decorators
+to require all. A caller it turns away is refused (`refused: forbidden`), not told
+the service failed, and the roles it required are in the log, not the reply.
 
 ```python
 from cliffracer import CliffracerService, ServiceConfig, rpc
@@ -262,6 +440,12 @@ class SecureService(CliffracerService):
         return {"ok": True}
 ```
 
+The extension keeps `auth_service` by identity because it owns live security
+state. `auth_service.revoke_token(...)` affects the next validation on every
+already-created service. Calls to `create_user(...)`, `add_role(...)`, and
+`add_permission(...)` remain available to subsequent authentication and refresh
+operations. Several services may intentionally share one issuer.
+
 `@rpc` outermost, `@requires_roles` beneath it: `@rpc` registers the subject,
 so the guard has to sit between it and your function body.
 
@@ -275,7 +459,8 @@ whether anything else does.
 **Writing your own issuer** is narrower than "return an `AuthContext` or
 `None`": it must return a context with a user **and a future `expires_at`**.
 `is_valid` is `False` when `expires_at` is `None`, so an issuer that omits it
-refuses every caller and says nothing about why.
+refuses every caller and says nothing about why. `validate_token` may be
+`async def`; the extension awaits it.
 
 ## OpenTelemetry Distributed Tracing (cliffracer-otel)
 
@@ -294,13 +479,20 @@ class TracedService(CliffracerService):
 ```
 
 In `worker_setup`, `OtelExtension` extracts `traceparent` and `tracestate` headers from
-incoming NATS messages, creates a `SERVER` span attached to the context, and tags it with
-`cliffracer.subject`, `cliffracer.kind`, and `cliffracer.correlation_id`. In `worker_teardown`,
-it ends the span and records any exceptions or message rejections.
+incoming NATS messages and starts a span attached to the context, named `{kind} {handler}` (`rpc get_order`,
+`event on_order`) so that every subject reaching one handler is one group in a tracing backend. An `event`
+delivery is a `CONSUMER` span, a `timer` span is `INTERNAL`, and `rpc` and `async_rpc` spans are `SERVER`. A `describe` request starts no
+span and is counted in neither `spans_total` nor `errors_total`. The span is tagged with
+`cliffracer.subject`, `cliffracer.kind`, and `cliffracer.correlation_id`, plus `messaging.system`
+(`nats`), `messaging.destination.name` (the subject) and `messaging.operation.type` (`process`)
+when the broker delivered the message. In `worker_result`,
+it records any exception or message rejection on the span and sets its status; in
+`worker_teardown` it ends the span and detaches the context.
 
 For outbound calls (`call_rpc`, `call_async`, `publish_event`, `broadcast`), `before_call`
-starts a `CLIENT` or `PRODUCER` span and injects the W3C `traceparent` header, which
-`after_call` finishes when the round-trip completes.
+starts a `CLIENT` or `PRODUCER` span carrying the same messaging attributes (operation `send`) and injects the W3C `traceparent` header, which
+`after_call` finishes when the round-trip completes. For `stream_rpc` that is when the stream
+is opened, so the span covers the request and not the items that follow.
 
 Telemetry counters (`spans_total`, `errors_total`, `active_spans`) are exposed under `otel`
 on `/health`.
@@ -387,139 +579,56 @@ to `HALF_OPEN` to permit a probe request before restoring normal service.
 `@rate_limit` decorates RPC and listener handlers with call count thresholds per time window.
 `ResilienceExtension` enforces these limits in `worker_setup` using either in-memory sliding
 windows (`InMemoryRateLimiter`) or distributed JetStream KV stores (`KvRateLimiter`). Calls
-exceeding the threshold raise `RejectMessage`, which the container translates to a wire
-refusal response without running the handler.
+exceeding the threshold raise `RateLimitExceeded`. The container returns a wire
+refusal for RPC, while durable listeners NAK the event until the sliding window
+has capacity, without running the handler.
+A limit counts delivery attempts: a JetStream redelivery spends another permit, and a permit spent
+on a message that a later extension refuses is not returned. A limit is checked before the payload
+is validated, so a payload that decodes and fails validation spends a permit of it, and is
+answered `validation failed` while the limit has one and `rate limit exceeded` once it has none;
+a payload that cannot be decoded is refused before any limit and spends none. A `@rate_limit` function that is called directly, not dispatched, counts against its
+own in-memory limiter unless its decorator is given `limiter=`; the extension's limiter does not
+reach it.
 
-## Auto-Gateway for Dynamic RPC Ingress (cliffracer-http)
+A `RateLimiter` passed as `ResilienceExtension(limiter=...)` is the one exception to the rule that an
+argument is copied for each bound instance: it copies itself as itself, so every service built from
+the declaration shares it without `SharedDependency`. Without `limiter`, each service gets its own
+`InMemoryRateLimiter`.
 
-`AutoGatewayExtension` dynamically mounts FastAPI HTTP endpoints backed by Cliffracer
-RPC services, handling verb inference, parameter binding, NATS RPC dispatch, error
-translation, and interactive OpenAPI documentation.
+String partition keys read headers by default. Declare
+`key_source="payload"` to use a caller-controlled payload field explicitly;
+payload values cannot shadow authenticated headers. KV key names and logs use
+only a SHA-256 fingerprint of the resolved value. `KvRateLimiter` fails closed
+when its shared state is unavailable or invalid. Its optional
+`in_memory_fallback=True` mode is visible as degraded state and a fallback count
+under the extension's health details because it relaxes the cluster-wide bound.
+Handler-specific limiter health appears under `handler_rate_limiters` by handler
+name.
 
-### Service Definition with RPC Handlers
+`/health` also reports, under the extension's name, `rate_limits` (per handler, the dispatches a
+limit let through and the ones it refused, and the totals; a payload refused by validation counts in
+`permitted`, because the limit let it through first), `tracked_keys` beside an in-memory limiter, and `circuits` (the destination,
+state, failure count and seconds in state of each `ResilientRpcProxy` the service declares).
+`/info` lists each handler's `calls`, `window` and key source, never a key value, the limiter
+class and the default limit.
 
-Define RPC services with typed request and response models:
+## Connection Pool (cliffracer-metrics)
 
-```python
-from pydantic import BaseModel
+`PoolExtension` keeps a pool of NATS connections beside the service's own. It lives in the
+`cliffracer-metrics` distribution, with `MetricsExtension` and `BatchProcessor`, and a service that
+wants a pool installs that distribution.
 
-from cliffracer import CliffracerService, rpc
-from cliffracer_http import AutoGatewayExtension, HttpExtension
-
-
-class UserModel(BaseModel):
-    id: str
-    name: str
-    email: str
-
-
-class CreateUserPayload(BaseModel):
-    name: str
-    email: str
-
-
-class UserService(CliffracerService):
-    name = "users"
-    http = HttpExtension(port=8080)
-    gateway = AutoGatewayExtension(prefix="/api/v1")
-
-    @rpc
-    async def get_user(self, user_id: str) -> UserModel:
-        """Fetch a user by id."""
-        return UserModel(id=user_id, name="Alice", email="alice@example.com")
-
-    @rpc
-    async def create_user(self, payload: CreateUserPayload) -> UserModel:
-        """Create a new user."""
-        return UserModel(id="usr_123", name=payload.name, email=payload.email)
-
-    @rpc
-    async def delete_user(self, user_id: str) -> bool:
-        """Delete a user by id."""
-        return True
-```
-
-### Automatic Verb and Endpoint Mapping
-
-`AutoGatewayExtension` inspects method names and parameters, automatically mapping them to HTTP routes:
-
-- **`get_user`** -> `GET /api/v1/users/get_user?user_id=...`
-  Methods prefixed with `get_`, `list_`, `fetch_`, `find_`, `read_`, `search_`, or `query_` infer the `GET` HTTP verb. Scalar parameters are extracted as HTTP query parameters.
-- **`create_user`** -> `POST /api/v1/users/create_user`
-  Methods prefixed with `create_`, `add_`, `post_`, `insert_`, `register_`, or `new_` infer the `POST` HTTP verb. Pydantic request models (`CreateUserPayload`) are validated and parsed from the incoming JSON request body: `{"name": "...", "email": "..."}`.
-- **`delete_user`** -> `DELETE /api/v1/users/delete_user?user_id=...`
-  Methods prefixed with `delete_`, `remove_`, `drop_`, `clear_`, or `cancel_` infer the `DELETE` HTTP verb.
-- Methods prefixed with `update_`, `set_`, `put_`, `modify_`, or `replace_` infer `PUT`, and `patch_` infers `PATCH`.
-- Any unrecognized method prefix defaults to `POST`.
-- Custom mappings can be configured via `verb_overrides={"method": "VERB"}` and `path_overrides={"method": "/custom/path"}`.
-
-### Dedicated Gateway for Downstream Services
-
-To front multiple downstream services with a dedicated gateway service, pass downstream service classes in `targets`:
-
-```python
-from cliffracer import CliffracerService
-from cliffracer_http import AutoGatewayExtension, HttpExtension
-
-
-class ApiGateway(CliffracerService):
-    name = "api_gateway"
-    http = HttpExtension(port=8080)
-    gateway = AutoGatewayExtension(
-        targets=[UserService],
-        prefix="/api/v1",
-    )
-```
-
-### Swagger and OpenAPI Documentation
-
-FastAPI generates interactive Swagger documentation and OpenAPI schemas automatically:
-
-- Interactive Swagger UI: `http://localhost:8080/docs`
-- ReDoc documentation: `http://localhost:8080/redoc`
-- OpenAPI JSON schema: `http://localhost:8080/openapi.json`
-
-Every mounted RPC route includes Pydantic input and output schemas, parameter descriptions, method docstrings, and tags grouped by service name.
-
-### Error Translation
-
-HTTP calls are dispatched over NATS RPC to downstream services and translated to standard HTTP response codes:
-
-| Condition | Status Code | Response Body |
-|---|---|---|
-| RPC succeeds | `200 OK` | Serialized return model (e.g. `UserModel`) |
-| Validation error / `RPCError` with `details` | `422 Unprocessable Entity` | `{"detail": {"error": "...", "details": [...]}}` |
-| RPC execution failure / unhandled `RPCError` | `502 Bad Gateway` | `{"detail": "RPC error calling users.get_user: ..."}` |
-| Downstream timeout (`RPCTimeoutError`) | `504 Gateway Timeout` | `{"detail": "Gateway timeout calling users.get_user: ..."}` |
-| Internal gateway failure | `500 Internal Server Error` | `{"detail": "Internal gateway error calling users.get_user: ..."}` |
-
-## FastStream Broker Hosting (cliffracer-faststream)
-
-`FastStreamExtension` allows Cliffracer to act as an operational hypervisor for legacy FastStream routers. It surfaces Cliffracer's powerful NATS-native features—like resilient message acknowledgment, JetStream Key-Value stores, circuit breakers, and bounded shutdown drains—directly into FastStream's `ContextRepo`.
-
-### Usage
-
-Mount an existing FastStream router using the extension:
-
-```python
-from faststream.nats import NatsRouter
-from cliffracer import CliffracerService
-from cliffracer.core.extension import SharedDependency
-from cliffracer_faststream import FastStreamExtension
-
-router = NatsRouter()
-
-@router.subscriber("legacy.events")
-async def handle_event(msg: dict):
-    # This FastStream handler now benefits from Cliffracer's resilient ACK middleware
-    print(f"Processed: {msg}")
-
-class HybridService(CliffracerService):
-    name = "hybrid_service"
-    faststream = FastStreamExtension(router=SharedDependency(router))
-```
-
-The extension automatically shares the underlying NATS connection, coordinates the FastStream shutdown lifecycle with Cliffracer's core drain loop, and replaces FastStream's destructive `REJECT_ON_ERROR` behavior with resilient JetStream NAK/TERM routing.
+Each pooled connection follows the service's configuration. `ServiceConfig.nats_connect_kwargs()`
+gives the credentials and the `nats_inbox_prefix`, and the service's own connection takes them from
+the same method, so a pooled `request` is answered on the inbox prefix the service's broker user is
+allowed to subscribe to. The pool also takes the service's `connect_timeout`, which bounds each
+connection, and its `max_reconnect_attempts`, `reconnect_time_wait`, `ping_interval` and `max_outstanding_pings`
+(unset on the service, nats-py's defaults) unless the extension is given its own. Each connection is named `<service>-pool-<n>` on the broker. `PoolExtension.request` and `publish` send the correlation id of the request being handled in `X-Correlation-ID` and `correlation_id` (a new one when there is none, and one the caller passes in `headers=` wins), so the service that answers is a hop of the same trace; the send hooks do not run for pool traffic. A connection that nats-py
+closes for good, because its reconnect attempts ran out, is logged at WARNING and counted
+(`closed_connections` in the pool's `get_stats()`) and is skipped when the next connection is chosen; the errors nats-py
+reports for a pooled connection are logged at ERROR and counted (`connection_errors`). The
+disconnects and reconnects before a permanent close are not logged; the service's own connection
+logs them.
 
 ## Binary Serialization (MsgPack) Support
 
@@ -548,6 +657,11 @@ class DataService(CliffracerService):
 Payloads are packed with `pack_msgpack` and decoded with `unpack_msgpack`. Services
 inspect the `content-type` header (`application/msgpack` vs `application/json`), automatically
 negotiating formats across RPC proxies and clients.
+
+The two formats carry the same values, so choosing one changes the encoding and never what a
+handler receives. A payload is normalised as for JSON before it is packed: integer map keys
+become strings, `bytes` become `str`, and bytes that are not valid UTF-8 are refused when the
+message is sent, under either format.
 
 ## Packaging an extension
 
@@ -579,14 +693,11 @@ separately, because the symlink defect appears only there.
 ## Installing
 
 ```bash
-pip install cliffracer cliffracer-http cliffracer-metrics
+pip install cliffracer cliffracer-auth cliffracer-metrics
 ```
 
-`cliffracer run --config <file>` needs PyYAML, which core does not depend on —
-install `cliffracer[cli]` if you are installing core **alone**. In a full
-install it arrives transitively through `cliffracer-http`'s
-`uvicorn[standard]`, so a consumer will not discover the extra until they
-install core by itself.
+`cliffracer run --config <file>` needs PyYAML, which core does not depend on and
+no extension brings in — install `cliffracer[cli]`.
 
 ## See also
 

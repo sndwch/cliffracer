@@ -90,17 +90,22 @@ async def test_unbound_dispatch_matches_all():
 
 
 @pytest.mark.asyncio
-async def test_setup_subscriptions_binds_distinct_callbacks():
-    """setup_subscriptions passes distinct callbacks bound to each pattern to nc.subscribe."""
+async def test_setup_subscriptions_binds_each_callback_to_its_own_pattern():
+    """The callback `_setup_subscriptions` hands `nc.subscribe` for a pattern runs that pattern's handler.
+
+    Two closures from one factory are distinct objects whatever they were built for, so identity
+    says nothing; each callback is driven with a message and what ran is read.
+    """
+    ran: list[str] = []
 
     class MultiListenerService(CliffracerService):
         @listener("events.a", fanout=True)
         async def on_a(self) -> None:
-            pass
+            ran.append("a")
 
         @listener("events.b", fanout=True)
         async def on_b(self) -> None:
-            pass
+            ran.append("b")
 
     svc = MultiListenerService(ServiceConfig(name="multi_sub"))
     svc._discover_handlers()
@@ -116,15 +121,16 @@ async def test_setup_subscriptions_binds_distinct_callbacks():
 
     await svc.container._setup_subscriptions()
 
-    # Verify nc.subscribe was called for both patterns with their respective callbacks
     calls = mock_nc.subscribe.call_args_list
-    patterns_subscribed = [c.args[0] for c in calls]
-    assert "events.a" in patterns_subscribed
-    assert "events.b" in patterns_subscribed
-
-    # Verify callbacks are distinct callable wrappers
+    assert "events.a" in [c.args[0] for c in calls]
+    assert "events.b" in [c.args[0] for c in calls]
     cb_a = next(c.kwargs["cb"] for c in calls if c.args[0] == "events.a")
     cb_b = next(c.kwargs["cb"] for c in calls if c.args[0] == "events.b")
-    assert cb_a is not cb_b
-    assert callable(cb_a)
-    assert callable(cb_b)
+
+    await cb_a(_MockMsg("events.a", {}))
+    await svc.container.lifecycle.drain_active_tasks(timeout=2.0)
+    assert ran == ["a"]
+
+    await cb_b(_MockMsg("events.b", {}))
+    await svc.container.lifecycle.drain_active_tasks(timeout=2.0)
+    assert ran == ["a", "b"]

@@ -39,7 +39,9 @@ async def test_event_subscription_has_no_queue_group():
     await svc.container.setup_subscriptions()
     # the event subscription (namespace-local subject) must NOT pass a queue
     event_calls = [c for c in svc.nc.subscribe.call_args_list if "orders.created" in c.args[0]]
-    assert event_calls, "expected an event subscription"
+    # Exactly one, on the namespaced subject: a substring match alone would also take a bare
+    # `orders.created`, which is what a dropped namespace prefix would subscribe to.
+    assert [c.args[0] for c in event_calls] == ["app1.orders.created"]
     for c in event_calls:
         assert "queue" not in c.kwargs
 

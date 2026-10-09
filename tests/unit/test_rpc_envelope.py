@@ -6,6 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
+from cliffracer.testing import refuse_a_reply_with_no_subject
 
 pytestmark = pytest.mark.unit
 
@@ -34,6 +35,10 @@ class _Svc(CliffracerService):
 
 
 class _MockMsg:
+    #: Every dispatcher path reads this; a double without one let a
+    #: reply be recorded that production would have refused.
+    reply: str | None = "_INBOX.test"
+
     def __init__(self, subject, data: dict):
         self.subject = subject
         self.data = json.dumps(data).encode()
@@ -41,6 +46,7 @@ class _MockMsg:
         self.response = None
 
     async def respond(self, payload: bytes):
+        refuse_a_reply_with_no_subject(self)
         self.response = json.loads(payload.decode())
 
 
@@ -84,19 +90,37 @@ async def test_correlation_id_in_the_body_is_not_an_extra_key(svc):
     assert msg.response["success"] is True and msg.response["result"] == "hello"
 
 
-async def test_correlation_id_is_injected_only_when_declared(svc):
+async def test_a_declared_correlation_id_parameter_receives_the_requests_id(svc):
     msg = _MockMsg("envelope_svc.rpc.with_cid", {"value": "v", "correlation_id": "cid-1"})
     await svc.container._handle_rpc_request(msg)
-    assert msg.response["result"].startswith("v:")
+    assert msg.response["result"] == "v:cid-1"
+
+
+async def test_the_correlation_id_is_not_injected_into_a_handler_that_does_not_declare_it(svc):
+    """`plain` declares only `value`: an injected `correlation_id` keyword would be a TypeError,
+    and the reply would be a failure instead of "hello"."""
+    msg = _MockMsg("envelope_svc.rpc.plain", {"value": "hello", "correlation_id": "cid-2"})
+    await svc.container._handle_rpc_request(msg)
+    assert msg.response["success"] is True
+    assert msg.response["result"] == "hello"
+    assert msg.response["correlation_id"] == "cid-2"
 
 
 async def test_every_success_reply_carries_success_true(svc):
     """One envelope. The old plain shape (no `success` key) is gone."""
-    msg = _MockMsg("envelope_svc.rpc.plain", {"value": "hello"})
+    msg = _MockMsg("envelope_svc.rpc.plain", {"value": "hello", "correlation_id": "cid-echo"})
     await svc.container._handle_rpc_request(msg)
     assert msg.response["success"] is True
     assert msg.response["result"] == "hello"
-    assert "correlation_id" in msg.response
+    # The request's own id, not merely a key: a null or fresh id in its place would still be present.
+    assert msg.response["correlation_id"] == "cid-echo"
+
+
+async def test_a_success_reply_to_a_request_with_no_id_carries_a_generated_one(svc):
+    msg = _MockMsg("envelope_svc.rpc.plain", {"value": "hello"})
+    await svc.container._handle_rpc_request(msg)
+    assert msg.response["success"] is True
+    assert isinstance(msg.response["correlation_id"], str) and msg.response["correlation_id"]
 
 
 async def test_a_flat_payload_for_a_model_parameter_fails_loudly(svc):
@@ -129,9 +153,16 @@ async def test_the_handler_never_runs_on_invalid_input(svc):
         return await original(request)
 
     svc.container.registry.rpc_handlers["create_user"] = spy
-    await svc.container._handle_rpc_request(
-        _MockMsg("envelope_svc.rpc.create_user", {"request": {"username": "x"}})
-    )
+    msg = _MockMsg("envelope_svc.rpc.create_user", {"request": {"username": "x"}})
+    await svc.container._handle_rpc_request(msg)
+    # `ran == []` alone is also true when the dispatcher returns before doing
+    # anything, so the caller must be shown to have been refused, and why.
+    assert msg.response is not None, "the caller was left without a reply"
+    assert msg.response["success"] is False
+    assert msg.response["error"] == "validation failed"
+    assert [(d["type"], d["loc"]) for d in msg.response["details"]] == [
+        ("missing", ["request", "email"])
+    ]
     assert ran == []
 
 
@@ -158,12 +189,17 @@ async def test_non_dict_payload_returns_validation_error_envelope(svc, bad_paylo
     assert "traceback" not in msg.response
 
 
-async def test_non_json_bytes_returns_validation_error_envelope_and_responds(svc):
-    """Verify raw unparseable or non-UTF8 bytes respond with validation error envelope."""
+@pytest.mark.parametrize("raw", [b"NOT_JSON_DATA{{{", b"\x80\xff"], ids=["not-json", "not-utf8"])
+async def test_non_json_bytes_returns_validation_error_envelope_and_responds(svc, raw):
+    """Raw unparseable or non-UTF8 bytes answer a payload_invalid validation envelope."""
     msg = _MockMsg("envelope_svc.rpc.plain", None)
-    msg.data = b"NOT_JSON_DATA{{{"
+    msg.data = raw
     await svc.container._handle_rpc_request(msg)
-    assert "details" in msg.response
+    assert msg.response is not None, "the caller was left without a reply"
+    assert msg.response["success"] is False
+    assert msg.response["error"] == "validation failed"
+    assert [d["type"] for d in msg.response["details"]] == ["payload_invalid"]
+    assert "traceback" not in msg.response
 
 
 async def test_bare_exception_fallback_returns_class_name(svc):
@@ -190,8 +226,33 @@ async def test_bare_exception_fallback_returns_class_name(svc):
     assert "traceback" in opt_msg.response
 
 
-async def test_bare_exception_fallback_in_describe(svc, monkeypatch):
-    """Verify describe error handler falls back to class name when exception has no message."""
+async def test_bare_exception_fallback_in_describe(monkeypatch):
+    """Verify describe error handler falls back to class name when exception has no message.
+
+    The fallback is a property of the EXPOSED form, so the service is built
+    with `expose_internal_errors=True` rather than taking the `svc` fixture's
+    default. Read against the default this assertion was pinning the absence of
+    a gate on the describe path: the class name reached the caller whatever the
+    flag said. The withheld half is the sibling below.
+    """
+    import cliffracer.introspect
+
+    def broken_canonical(*args, **kwargs):
+        raise ValueError()
+
+    monkeypatch.setattr(cliffracer.introspect, "canonical", broken_canonical)
+    svc = _Svc(ServiceConfig(name="envelope_svc", expose_internal_errors=True))
+    await svc.container._setup_extensions()
+    svc._discover_handlers()
+
+    msg = _MockMsg("envelope_svc.describe", {})
+    await svc.container._handle_describe_request(msg)
+    assert msg.response["success"] is False
+    assert msg.response["error"] == "ValueError"
+
+
+async def test_a_bare_exception_in_describe_is_withheld_by_default(svc, monkeypatch):
+    """CONTROL for the pair above: unset, not even the class name leaves."""
     import cliffracer.introspect
 
     def broken_canonical(*args, **kwargs):
@@ -201,4 +262,5 @@ async def test_bare_exception_fallback_in_describe(svc, monkeypatch):
     msg = _MockMsg("envelope_svc.describe", {})
     await svc.container._handle_describe_request(msg)
     assert msg.response["success"] is False
-    assert msg.response["error"] == "ValueError"
+    assert msg.response["error"].startswith("Internal server error")
+    assert "ValueError" not in msg.response["error"]

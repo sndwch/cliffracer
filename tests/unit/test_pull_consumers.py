@@ -117,8 +117,12 @@ def test_the_pull_consumer_is_bounded_per_replica():
     assert config.max_ack_pending == 7
 
 
-def test_fetched_messages_go_through_the_same_ack_and_dlq_path():
-    """Verify fetched messages route through the shared handler and ack/dlq logic."""
+def test_pull_once_dispatches_every_fetched_message():
+    """`_pull_once` hands each message of a fetched batch to the shared handler.
+
+    The handler is replaced here, so this says nothing about what happens to a
+    message afterwards; the tests below run the real one.
+    """
 
     class S(CliffracerService):
         @listener("events.ping", durable="pinger", pull=True)
@@ -142,3 +146,67 @@ def test_fetched_messages_go_through_the_same_ack_and_dlq_path():
     asyncio.run(run_once())
 
     assert len(handled) == 2, "every fetched message goes through the shared handler"
+
+
+def _pulling_service(*, fails=False, **config):
+    class S(CliffracerService):
+        @listener("events.ping", durable="pinger", pull=True)
+        async def on_ping(self, subject: str, seq: int = 1) -> None:
+            if fails:
+                raise ValueError("poison")
+
+    svc = S(_config(**config))
+    svc._discover_handlers()
+    svc.nc = AsyncMock()
+    svc.js = AsyncMock()
+    return svc
+
+
+async def _pull(svc, *messages):
+    sub = AsyncMock()
+    sub.fetch = AsyncMock(return_value=list(messages))
+    await svc.container._pull_once(sub)
+
+
+@pytest.mark.asyncio
+async def test_a_pulled_message_that_is_handled_is_acked_and_nothing_else():
+    svc = _pulling_service()
+    first, second = _msg(), _msg()
+
+    await _pull(svc, first, second)
+
+    for msg in (first, second):
+        msg.ack.assert_awaited_once()
+        msg.nak.assert_not_awaited()
+        msg.term.assert_not_awaited()
+    assert svc.js.publish.await_count == svc.nc.publish.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_a_pulled_message_that_fails_before_its_last_delivery_is_naked_not_dead_lettered():
+    svc = _pulling_service(fails=True, jetstream_max_deliver=5)
+    msg = _msg()
+    msg.metadata = SimpleNamespace(num_delivered=2)
+
+    await _pull(svc, msg)
+
+    msg.nak.assert_awaited_once()
+    msg.ack.assert_not_awaited()
+    msg.term.assert_not_awaited()
+    assert svc.js.publish.await_count == svc.nc.publish.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_a_pulled_message_that_fails_its_last_delivery_is_dead_lettered_and_terminated():
+    svc = _pulling_service(fails=True, jetstream_max_deliver=5)
+    msg = _msg()
+    msg.metadata = SimpleNamespace(num_delivered=5)
+
+    await _pull(svc, msg)
+
+    msg.term.assert_awaited_once()
+    msg.ack.assert_not_awaited()
+    msg.nak.assert_not_awaited()
+    published = [c.args[0] for c in svc.js.publish.await_args_list + svc.nc.publish.await_args_list]
+    assert len(published) == 1
+    assert published[0].startswith("dlq."), published

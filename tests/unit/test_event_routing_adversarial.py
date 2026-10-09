@@ -22,7 +22,7 @@ from cliffracer_auth import (
 )
 from cliffracer_auth.extension import AuthExtension
 from cliffracer_auth.simple_auth import SimpleAuthService, auth_context_var
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from cliffracer import (
     CliffracerService,
@@ -32,7 +32,7 @@ from cliffracer import (
     rpc,
 )
 from cliffracer.core.container import DispatchOutcome
-from cliffracer.core.extension import RejectMessage, WorkerContext
+from cliffracer.core.extension import Extension, RejectMessage, WorkerContext
 from cliffracer.introspect import describe
 
 pytestmark = pytest.mark.unit
@@ -113,13 +113,29 @@ async def test_adversarial_five_level_overlapping_patterns():
     svc = MultiOverlapService(ServiceConfig(name="multi_overlap_svc"))
     svc._discover_handlers()
 
+    # The callbacks are the ones the service hands `nc.subscribe` at startup, not ones built here:
+    # a setup that dropped or merged an overlapping subscription would otherwise leave the
+    # handler unreached in production while the dispatch half below still passed.
+    mock_nc = AsyncMock()
+    mock_nc.is_connected = True
+    mock_nc.is_closed = False
+    mock_nc.is_draining = False
+    mock_nc.is_connecting = False
+    mock_nc.is_reconnecting = False
+    mock_nc.subscribe = AsyncMock(return_value=AsyncMock())
+    svc.container.nc = mock_nc
+    await svc.container._setup_subscriptions()
+    subscribed = {c.args[0]: c.kwargs["cb"] for c in mock_nc.subscribe.call_args_list}
+    for pattern in ("*.*", "orders.*", "*.created", "orders.created", "orders.>"):
+        assert pattern in subscribed, sorted(subscribed)
+
     # When NATS delivers to the registered callbacks for 'orders.created'
     msg = _make_msg("orders.created", {"order_id": 999})
-    cb_any_two = svc.container._make_event_callback("*.*")
-    cb_orders_wc = svc.container._make_event_callback("orders.*")
-    cb_any_created = svc.container._make_event_callback("*.created")
-    cb_orders_created = svc.container._make_event_callback("orders.created")
-    cb_orders_gt = svc.container._make_event_callback("orders.>")
+    cb_any_two = subscribed["*.*"]
+    cb_orders_wc = subscribed["orders.*"]
+    cb_any_created = subscribed["*.created"]
+    cb_orders_created = subscribed["orders.created"]
+    cb_orders_gt = subscribed["orders.>"]
 
     await asyncio.gather(
         cb_any_two(msg),
@@ -182,9 +198,30 @@ async def test_adversarial_unbound_dispatch_hierarchical_filtering():
 # ============================================================================
 
 
-class ValidItem(BaseModel):
-    item_id: str
-    price: float
+def _dlq_streams() -> list[StreamSpec]:
+    """Streams a service that dead-letters must declare: its events, and `dlq.*`.
+
+    The framework refuses to start without a stream that covers the dead-letter
+    subject, so a fixture that omits it describes a service that cannot run.
+    """
+    return [
+        StreamSpec(name="EVENTS", subjects=["events.*"]),
+        StreamSpec(name="DLQ", subjects=["dlq.>"]),
+    ]
+
+
+def _attach_broker(svc: CliffracerService) -> AsyncMock:
+    """Give `svc` a mock JetStream context and return it; the real DLQ publisher stays."""
+    js = AsyncMock()
+    svc.container.js = js
+    return js
+
+
+def _dead_letter(js: AsyncMock) -> tuple[str, dict[str, Any]]:
+    """The one record published to JetStream: its subject and decoded body."""
+    js.publish.assert_awaited_once()
+    subject, body = js.publish.await_args.args[:2]
+    return subject, json.loads(body)
 
 
 @pytest.mark.asyncio
@@ -218,18 +255,11 @@ async def test_corrupt_payload_matrix_routes_to_dlq_and_terminates(corrupt_paylo
         ServiceConfig(
             name="dlq_test_svc",
             jetstream_enabled=True,
-            jetstream_streams=[StreamSpec(name="EVENTS", subjects=["events.*"])],
+            jetstream_streams=_dlq_streams(),
         )
     )
     svc._discover_handlers()
-
-    dlq_records = []
-
-    async def mock_publish_event(subject, **kwargs):
-        dlq_records.append((subject, kwargs))
-
-    svc.publish_event = mock_publish_event
-    svc.container._publish_dlq = mock_publish_event
+    js = _attach_broker(svc)
 
     msg = _make_msg("events.orders", raw=corrupt_payload, headers=headers, num_delivered=1)
 
@@ -239,10 +269,11 @@ async def test_corrupt_payload_matrix_routes_to_dlq_and_terminates(corrupt_paylo
     assert msg.term.await_count == 1
     assert msg.ack.await_count == 0
     assert msg.nak.await_count == 0
-    assert len(dlq_records) == 1
-    assert dlq_records[0][0] == "dlq.dlq_test_svc"
-    assert dlq_records[0][1]["original_subject"] == "events.orders"
-    assert "Decode error" in dlq_records[0][1]["error"]
+    # The real publisher put it on the wire, on the subject its stream covers.
+    subject, body = _dead_letter(js)
+    assert subject == "dlq.dlq_test_svc"
+    assert body["original_subject"] == "events.orders"
+    assert "Decode error" in body["error"]
 
 
 @pytest.mark.asyncio
@@ -260,16 +291,12 @@ async def test_dlq_broker_failure_still_terminates_malformed_message():
         ServiceConfig(
             name="dlq_fail_svc",
             jetstream_enabled=True,
-            jetstream_streams=[StreamSpec(name="EVENTS", subjects=["events.*"])],
+            jetstream_streams=_dlq_streams(),
         )
     )
     svc._discover_handlers()
-
-    async def broken_publish_event(subject, **kwargs):
-        raise ConnectionError("DLQ broker stream unavailable or disc full")
-
-    svc.publish_event = broken_publish_event
-    svc.container._publish_dlq = broken_publish_event
+    js = _attach_broker(svc)
+    js.publish.side_effect = ConnectionError("DLQ broker stream unavailable or disc full")
 
     msg = _make_msg(
         "events.orders",
@@ -280,6 +307,9 @@ async def test_dlq_broker_failure_still_terminates_malformed_message():
 
     await svc.container._handle_jetstream_event(msg, pattern="events.orders")
 
+    # The dead-letter publish was attempted, and failed.
+    js.publish.assert_awaited_once()
+    assert js.publish.await_args.args[0] == "dlq.dlq_fail_svc"
     assert msg.term.await_count == 1
     assert msg.ack.await_count == 0
     assert msg.nak.await_count == 0
@@ -298,18 +328,14 @@ async def test_pull_consumer_malformed_json_routes_to_dlq_and_terminates():
         ServiceConfig(
             name="pull_dlq_svc",
             jetstream_enabled=True,
-            jetstream_streams=[StreamSpec(name="EVENTS", subjects=["events.*"])],
+            jetstream_streams=_dlq_streams(),
+            # Not the defaults, so a hard-coded batch or timeout is told from the configured one.
+            jetstream_pull_batch=3,
+            jetstream_pull_timeout=1.5,
         )
     )
     svc._discover_handlers()
-
-    dlq_records = []
-
-    async def mock_publish_event(subject, **kwargs):
-        dlq_records.append((subject, kwargs))
-
-    svc.publish_event = mock_publish_event
-    svc.container._publish_dlq = mock_publish_event
+    js = _attach_broker(svc)
 
     mock_msg = _make_msg(
         "events.pull",
@@ -321,12 +347,43 @@ async def test_pull_consumer_malformed_json_routes_to_dlq_and_terminates():
 
     count = await svc.container._pull_once(mock_sub, pattern="events.pull")
     assert count == 1
+    # What was asked of the consumer: the configured batch and timeout, once.
+    mock_sub.fetch.assert_awaited_once_with(3, timeout=1.5)
 
     assert mock_msg.term.await_count == 1
     assert mock_msg.ack.await_count == 0
     assert mock_msg.nak.await_count == 0
-    assert len(dlq_records) == 1
-    assert dlq_records[0][0] == "dlq.pull_dlq_svc"
+    subject, body = _dead_letter(js)
+    assert subject == "dlq.pull_dlq_svc"
+    assert body["original_subject"] == "events.pull"
+    assert "Decode error" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_pull_fetch_that_times_out_is_an_empty_batch():
+    """The TimeoutError path of `_pull_once`: nothing fetched, so nothing is dispatched, acked,
+    nak'd or dead-lettered, and the loop is told 0."""
+
+    class PullService(CliffracerService):
+        @listener("events.pull", durable="pull-worker", pull=True)
+        async def on_pull(self) -> None:
+            pass
+
+    svc = PullService(
+        ServiceConfig(
+            name="pull_idle_svc", jetstream_enabled=True, jetstream_streams=_dlq_streams()
+        )
+    )
+    svc._discover_handlers()
+    js = _attach_broker(svc)
+    mock_sub = AsyncMock()
+    mock_sub.fetch = AsyncMock(side_effect=TimeoutError)
+
+    count = await svc.container._pull_once(mock_sub, pattern="events.pull")
+
+    assert count == 0
+    mock_sub.fetch.assert_awaited_once()
+    js.publish.assert_not_awaited()
 
 
 # ============================================================================
@@ -385,16 +442,16 @@ def test_all_numeric_and_string_field_constraints_alter_signature_hash():
 
 
 def test_field_constraint_order_invariance():
-    """Constraint dictionary is sorted alphabetically so definition order does not affect hash."""
+    """Constraint keys are sorted alphabetically regardless of annotation declaration sequence."""
 
     class SvcOrderA(CliffracerService):
         @rpc
-        async def submit(self, val: Annotated[int, Field(ge=1, le=10, multiple_of=2)]) -> int:
+        async def submit(self, val: Annotated[int, Field(multiple_of=2), Field(ge=1)]) -> int:
             return val
 
     class SvcOrderB(CliffracerService):
         @rpc
-        async def submit(self, val: Annotated[int, Field(multiple_of=2, le=10, ge=1)]) -> int:
+        async def submit(self, val: Annotated[int, Field(ge=1), Field(multiple_of=2)]) -> int:
             return val
 
     descA = describe(SvcOrderA, service="order_svc", version="1.0.0")
@@ -404,7 +461,18 @@ def test_field_constraint_order_invariance():
     mB = descB.method("submit")
     assert mA is not None and mB is not None
 
-    assert mA.params[0].type["constraints"] == mB.params[0].type["constraints"]
+    constraints_a = mA.params[0].type["constraints"]
+    constraints_b = mB.params[0].type["constraints"]
+
+    # Compare key lists directly to assert preserved dictionary insertion order
+    keys_a = list(constraints_a.keys())
+    keys_b = list(constraints_b.keys())
+
+    assert keys_a == ["ge", "multiple_of"]
+    assert keys_b == ["ge", "multiple_of"]
+    assert keys_a == sorted(keys_a)
+    assert keys_b == sorted(keys_b)
+
     assert mA.signature_hash == mB.signature_hash
     assert descA.description_hash == descB.description_hash
 
@@ -468,8 +536,8 @@ async def test_max_rpc_concurrency_one_strict_serialization():
 
 
 @pytest.mark.asyncio
-async def test_semaphore_permit_restored_on_handler_crash_and_cancellation():
-    """When RPC handlers crash or are cancelled, semaphore permits are unconditionally released."""
+async def test_semaphore_permit_restored_on_handler_crash():
+    """When an RPC handler crashes, its semaphore permit is released."""
 
     class CrashService(CliffracerService):
         @rpc
@@ -511,28 +579,94 @@ async def test_semaphore_permit_restored_on_handler_crash_and_cancellation():
 
 
 @pytest.mark.asyncio
-async def test_shutdown_timeout_task_drain_and_on_shutdown_ordering():
-    """Verify shutdown drains in-flight tasks before calling on_shutdown(),
-    and stops extensions after on_shutdown().
-    """
-    timeline = []
+async def test_semaphore_permit_restored_when_the_request_task_is_cancelled():
+    """A permit comes back whether the task is cancelled mid-handler or before it ever ran."""
+    started = asyncio.Event()
+    never_set = asyncio.Event()
+
+    class HangService(CliffracerService):
+        @rpc
+        async def hang(self) -> str:
+            started.set()
+            await never_set.wait()
+            return "unreachable"
+
+    svc = HangService(ServiceConfig(name="hang_rpc_svc", max_rpc_concurrency=2))
+    svc._discover_handlers()
+    svc._running = True
+
+    sem = svc.container._get_rpc_semaphore()
+    assert sem is not None
+    assert sem._value == 2
+
+    # Cancelled mid-handler: the permit is held while it runs, and returned when it is cancelled.
+    await svc.container._on_rpc_request(_make_msg("hang_rpc_svc.rpc.hang"))
+    await asyncio.wait_for(started.wait(), timeout=10)
+    assert sem._value == 1, "the running request must hold a permit"
+    (running,) = svc.container._active_tasks
+    running.cancel()
+    await asyncio.gather(running, return_exceptions=True)
+    await asyncio.sleep(0)  # done-callbacks run on the next loop iteration
+    assert running.cancelled()
+    assert sem._value == 2
+
+    # Cancelled before its first step: the request's task takes its permit when it runs, so one
+    # that never runs holds none, and must not take one with it either.
+    started.clear()
+    await svc.container._on_rpc_request(_make_msg("hang_rpc_svc.rpc.hang"))
+    assert sem._value == 2, "a request whose task has not run must not hold a permit"
+    (queued,) = svc.container._active_tasks
+    queued.cancel()
+    await asyncio.gather(queued, return_exceptions=True)
+    await asyncio.sleep(0)
+    assert queued.cancelled()
+    assert not started.is_set(), "the handler must not have run"
+    assert sem._value == 2
+
+
+def _drain_service(timeline: list[str], *, work_seconds: float, shutdown_timeout: float):
+    """A service with one slow RPC, an on_shutdown hook and an extension, all on `timeline`."""
+
+    class TimelineExtension(Extension):
+        # Reaches `timeline` through the closure: the framework deep-copies an
+        # extension declared on a class, so a list held on the instance would
+        # be a copy and the append would land where the test cannot see it.
+        async def stop(self) -> None:
+            timeline.append("extensions_stopped")
 
     class DrainService(CliffracerService):
+        tracker = TimelineExtension()
+
         @rpc
         async def slow_work(self) -> str:
             timeline.append("work_started")
-            await asyncio.sleep(0.05)
+            try:
+                await asyncio.sleep(work_seconds)
+            except asyncio.CancelledError:
+                timeline.append("work_cancelled")
+                raise
             timeline.append("work_completed")
             return "done"
 
         async def on_shutdown(self):
             timeline.append("on_shutdown_called")
 
-    svc = DrainService(ServiceConfig(name="drain_svc", shutdown_timeout=2.0))
+    svc = DrainService(ServiceConfig(name="drain_svc", shutdown_timeout=shutdown_timeout))
     svc._discover_handlers()
     svc._running = True
     svc._startup_succeeded = True
     svc._on_startup_completed = True
+    return svc
+
+
+@pytest.mark.asyncio
+async def test_shutdown_timeout_task_drain_and_on_shutdown_ordering():
+    """Verify shutdown drains in-flight tasks before calling on_shutdown(),
+    and stops extensions after on_shutdown().
+    """
+    timeline: list[str] = []
+    svc = _drain_service(timeline, work_seconds=0.05, shutdown_timeout=2.0)
+    await svc.container._setup_extensions()
 
     msg = _make_msg("drain_svc.rpc.slow_work")
     # Launch slow RPC request
@@ -542,13 +676,36 @@ async def test_shutdown_timeout_task_drain_and_on_shutdown_ordering():
     # Initiate stop while work is in flight
     await svc._stop_internal()
 
-    # Timeline must confirm work_completed happened BEFORE on_shutdown_called
-    assert "work_started" in timeline
-    assert "work_completed" in timeline
-    assert "on_shutdown_called" in timeline
-    work_end_idx = timeline.index("work_completed")
-    shutdown_idx = timeline.index("on_shutdown_called")
-    assert work_end_idx < shutdown_idx, "Active task drain did not precede on_shutdown!"
+    # Work finishes inside the deadline, then the user hook, then the extensions.
+    assert timeline == [
+        "work_started",
+        "work_completed",
+        "on_shutdown_called",
+        "extensions_stopped",
+    ]
+    assert len(svc.container._active_tasks) == 0
+
+
+@pytest.mark.asyncio
+async def test_work_still_running_at_the_shutdown_timeout_is_cancelled_before_on_shutdown():
+    """Past the deadline the task is cancelled, and the hook and the extensions still run, in order."""
+    timeline: list[str] = []
+    # The work outlasts any deadline in this test; only cancellation ends it.
+    svc = _drain_service(timeline, work_seconds=60, shutdown_timeout=0.05)
+    await svc.container._setup_extensions()
+
+    msg = _make_msg("drain_svc.rpc.slow_work")
+    asyncio.create_task(svc.container._on_rpc_request(msg))
+    await asyncio.sleep(0.01)
+
+    await svc._stop_internal()
+
+    assert timeline == [
+        "work_started",
+        "work_cancelled",
+        "on_shutdown_called",
+        "extensions_stopped",
+    ]
     assert len(svc.container._active_tasks) == 0
 
 

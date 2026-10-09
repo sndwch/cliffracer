@@ -13,10 +13,21 @@ class DiscoveryError(Exception):
 
 
 def _import_module(module_path: str) -> types.ModuleType:
+    """Import a target's module, or raise DiscoveryError naming why not.
+
+    Any exception, not only ImportError: a service module fails at import far
+    more often by raising from module-level code -- a missing environment
+    variable, a config parsed at import -- than by importing a name that does
+    not exist. The exception's type is named, because its message alone rarely
+    says it was not an import problem, and the exception stays the cause so
+    the caller can log its traceback.
+    """
     try:
         return importlib.import_module(module_path)
-    except ImportError as e:
-        raise DiscoveryError(f"could not import module '{module_path}': {e}") from e
+    except Exception as e:
+        raise DiscoveryError(
+            f"could not import module '{module_path}': {type(e).__name__}: {e}"
+        ) from e
 
 
 def _is_own_service(obj: Any, module: types.ModuleType) -> bool:

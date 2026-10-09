@@ -29,9 +29,21 @@ class TestRedactNatsUrl:
         assert "p,w" not in out and "svc" not in out
         assert "broker:4222" in out
 
-    def test_garbage_input_does_not_raise(self):
-        # Must never take down a service just to format a log line.
-        assert isinstance(redact_nats_url("not a url"), str)
+    def test_a_string_with_no_credentials_is_returned_unchanged(self):
+        assert redact_nats_url("not a url") == "not a url"
+
+    def test_a_value_that_cannot_be_formatted_does_not_raise(self):
+        """Must never take down a service just to format a log line.
+
+        `"not a url"` has no `@`, so it returns before any parsing and never reaches the
+        guard. A value whose `str()` raises is what does.
+        """
+
+        class Unprintable:
+            def __str__(self) -> str:
+                raise RuntimeError("cannot be formatted")
+
+        assert redact_nats_url(Unprintable()) == "<unparseable nats url>"
 
     def test_scheme_less_url_still_redacts(self):
         out = redact_nats_url("user:secret@host:4222")
@@ -96,7 +108,7 @@ class TestConnectForwardsCredentials:
     @pytest.mark.asyncio
     async def test_no_credentials_passes_no_auth_kwargs(self):
         svc = CliffracerService(ServiceConfig(name="s"))
-        with patch("nats.connect", new=AsyncMock()) as m:
+        with patch("cliffracer.core.dial.connect", new=AsyncMock()) as m:
             await svc.connect()
         kwargs = m.call_args.kwargs
         for key in ("user", "password", "token", "user_credentials"):
@@ -106,26 +118,35 @@ class TestConnectForwardsCredentials:
     async def test_user_password_are_forwarded(self):
         cfg = ServiceConfig(name="s", nats_user="u", nats_password="p")
         svc = CliffracerService(cfg)
-        with patch("nats.connect", new=AsyncMock()) as m:
+        with patch("cliffracer.core.dial.connect", new=AsyncMock()) as m:
             await svc.connect()
         assert m.call_args.kwargs["user"] == "u"
         assert m.call_args.kwargs["password"] == "p"
 
     @pytest.mark.asyncio
-    async def test_token_and_credentials_file_are_forwarded(self):
-        cfg = ServiceConfig(name="s", nats_token="t", nats_credentials_file="/c.creds")
+    async def test_a_token_is_forwarded(self):
+        cfg = ServiceConfig(name="s", nats_token="t")
         svc = CliffracerService(cfg)
-        with patch("nats.connect", new=AsyncMock()) as m:
+        with patch("cliffracer.core.dial.connect", new=AsyncMock()) as m:
             await svc.connect()
         assert m.call_args.kwargs["token"] == "t"
+        assert "user_credentials" not in m.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_a_credentials_file_is_forwarded(self):
+        cfg = ServiceConfig(name="s", nats_credentials_file="/c.creds")
+        svc = CliffracerService(cfg)
+        with patch("cliffracer.core.dial.connect", new=AsyncMock()) as m:
+            await svc.connect()
         assert m.call_args.kwargs["user_credentials"] == "/c.creds"
+        assert "token" not in m.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_password_never_reaches_the_log(self):
         cfg = ServiceConfig(name="s", nats_url="nats://u:supersecret@h:4222")
         svc = CliffracerService(cfg)
         seen: list[str] = []
-        with patch("nats.connect", new=AsyncMock()):
+        with patch("cliffracer.core.dial.connect", new=AsyncMock()):
             with patch.object(
                 svc.logger, "info", side_effect=lambda m, *a, **k: seen.append(str(m))
             ):

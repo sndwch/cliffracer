@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cliffracer-cyanide"
+dynamic = ["version"]
+description = "Fault injection and mundane failure modes for Cliffracer services"
+requires-python = ">=3.12"
+readme = "README.md"
+license = {text = "MIT"}
+dependencies = [
+    "cliffracer",
+    "pydantic-settings>=2.0.0,<3.0.0",
+]
+
+[tool.cliffracer]
+lifecycle = "incubating"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options = { root = "../.." }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cliffracer_cyanide"]
+
+[tool.uv.sources]
+cliffracer = { workspace = true }

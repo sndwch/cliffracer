@@ -10,6 +10,7 @@ from cliffracer.core.correlation import with_correlation_id
 from cliffracer.core.decorators import (
     broadcast,
     listener,
+    refuse_bare_use,
     validated_listener,
 )
 from cliffracer.core.decorators import timer as decorators_timer
@@ -81,16 +82,44 @@ def test_CONTROL_the_correct_form_still_registers_every_factory():
 
 
 def test_CONTROL_a_class_first_argument_is_left_to_the_better_message():
-    """`@listener(Model)` is a different mistake with its own message.
-
-    The guard excludes classes on purpose -- a factory may take one by design,
-    and `_validate_subject` explains the model-instead-of-subject case better
-    than a generic factory message could. Pinning it here is what stops a later
-    widening of the guard from stealing that error.
-    """
+    """Verify @listener rejects model classes via subject validation with a targeted error message."""
     with pytest.raises(ConfigurationError) as caught:
         listener(Model)
     assert "model class" in str(caught.value), caught.value
+
+
+def test_refuse_bare_use_permits_class_first_argument():
+    """Decorator factories permit class objects as first arguments without bare-use rejection."""
+
+    class ResourceConfig:
+        pass
+
+    # Must not raise ConfigurationError
+    refuse_bare_use(ResourceConfig, "dependency", '@dependency("postgres")')
+
+
+def test_refuse_bare_use_rejects_function_first_argument():
+    """Decorator factories reject function objects passed as first arguments as bare usage."""
+
+    def target_method():
+        pass
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        refuse_bare_use(target_method, "dependency", '@dependency("postgres")')
+    assert "@dependency is a decorator factory" in str(exc_info.value)
+
+
+def test_dependency_factory_accepts_class_argument():
+    """The dependency decorator factory accepts class objects as its target parameter."""
+
+    class PostgresStore:
+        pass
+
+    async def sample_handler():
+        return None
+
+    decorated = dependency(PostgresStore)(sample_handler)
+    assert decorated._cliffracer_dependency["name"] is PostgresStore
 
 
 def test_CONTROL_the_three_that_already_refused_still_do():
@@ -113,13 +142,28 @@ def test_CONTROL_a_plain_decorator_still_takes_a_function(decorator):
     assert wrapped.__name__ == "handler", wrapped.__name__
 
 
-def test_the_auth_pair_are_the_ones_that_registered_a_wrong_handler():
-    """Verify bare factory under @rpc raises ConfigurationError at decoration time."""
+@pytest.mark.parametrize(
+    "factory, name",
+    [(requires_roles, "requires_roles"), (requires_permissions, "requires_permissions")],
+)
+def test_a_bare_auth_factory_stacked_under_rpc_is_refused_while_the_class_is_defined(factory, name):
+    """The refusal comes with the class statement, not later at discovery or at the first call.
+
+    Decorators apply bottom-up, so the factory is called, and refuses, before `@rpc`
+    is reached: `@rpc` is not what is being tested here, and this does not claim it.
+    What it fixes is *when* an author learns of the mistake -- at import, by name.
+    """
     from cliffracer.core.decorators import rpc
 
     with pytest.raises(ConfigurationError) as caught:
-        rpc(requires_roles(handler))
-    assert "@requires_roles" in str(caught.value), caught.value
+
+        class Svc:
+            @rpc
+            @factory
+            async def method(self):
+                return {}
+
+    assert f"@{name}" in str(caught.value), caught.value
 
 
 def test_CONTROL_the_correct_form_of_the_four_new_factories_still_wraps():

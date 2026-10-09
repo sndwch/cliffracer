@@ -8,10 +8,23 @@ Demonstrates calling dependent services via typed RpcProxy attributes:
 """
 
 import asyncio
+import os
 
 from pydantic import BaseModel
 
 from cliffracer import CliffracerService, RpcProxy, ServiceConfig, rpc
+
+
+def _port(fixed: int) -> int:
+    """The port to bind, or 0 to let the operating system choose one.
+
+    The fixed numbers in this file are what its URLs refer to, so they stay
+    readable as documentation. Setting `CLIFFRACER_EXAMPLE_PORTS=auto` asks for
+    a free port instead, which is what lets two copies of this example run at
+    the same time -- `tests/integration/test_examples_run.py` sets it, and
+    without it a second copy cannot bind and never starts.
+    """
+    return 0 if os.environ.get("CLIFFRACER_EXAMPLE_PORTS") == "auto" else fixed
 
 
 class Availability(BaseModel):
@@ -61,7 +74,7 @@ class OrderResult(BaseModel):
 class InventoryService(CliffracerService):
     """Manages product inventory"""
 
-    def __init__(self, health_port: int = 8010):
+    def __init__(self, health_port: int = _port(8010)):
         config = ServiceConfig(name="inventory_service", health_port=health_port)
         super().__init__(config)
         # Simulated inventory database
@@ -95,7 +108,7 @@ class InventoryService(CliffracerService):
 class PaymentService(CliffracerService):
     """Handles payment processing"""
 
-    def __init__(self, health_port: int = 8011):
+    def __init__(self, health_port: int = _port(8011)):
         config = ServiceConfig(name="payment_service", health_port=health_port)
         super().__init__(config)
 
@@ -127,7 +140,7 @@ class PaymentService(CliffracerService):
 class NotificationService(CliffracerService):
     """Sends notifications to customers"""
 
-    def __init__(self, health_port: int = 8012):
+    def __init__(self, health_port: int = _port(8012)):
         config = ServiceConfig(name="notification_service", health_port=health_port)
         super().__init__(config)
 
@@ -158,7 +171,7 @@ class OrderService(CliffracerService):
     payment = RpcProxy("payment_service")
     notifications = RpcProxy("notification_service")
 
-    def __init__(self, health_port: int = 8013):
+    def __init__(self, health_port: int = _port(8013)):
         config = ServiceConfig(name="order_service", health_port=health_port)
         super().__init__(config)
         self.orders = {}

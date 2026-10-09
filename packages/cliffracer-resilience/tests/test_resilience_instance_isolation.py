@@ -67,7 +67,6 @@ async def test_rate_limiter_not_shared_across_service_instances():
     assert s1.resilience is not s2.resilience
     assert s1.resilience.limiter is not s2.resilience.limiter
     assert s1.resilience._rate_limits is not s2.resilience._rate_limits
-    assert s1.resilience._event_rate_limits is not s2.resilience._event_rate_limits
     assert isinstance(s1.resilience.limiter, InMemoryRateLimiter)
     assert isinstance(s2.resilience.limiter, InMemoryRateLimiter)
 

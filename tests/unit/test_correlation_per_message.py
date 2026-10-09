@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from cliffracer.core.correlation import CorrelationContext, correlation_id_var
+from tests.conftest import broker_url
 
 pytestmark = pytest.mark.unit
 
@@ -81,7 +82,7 @@ def _service():
         ) -> None:
             self.seen.append(CorrelationContext.get())
 
-    svc = _Probe(ServiceConfig(name="svc", nats_url="nats://localhost:4222"))
+    svc = _Probe(ServiceConfig(name="svc", nats_url=broker_url()))
     svc._discover_handlers()
     return svc
 
@@ -151,7 +152,7 @@ def test_the_context_is_restored_even_when_the_handler_raises():
             seen_id.append(CorrelationContext.get())
             raise RuntimeError("handler failed")
 
-    svc = _Boom(ServiceConfig(name="boom", nats_url="nats://localhost:4222"))
+    svc = _Boom(ServiceConfig(name="boom", nats_url=broker_url()))
     svc._discover_handlers()
 
     async def run():

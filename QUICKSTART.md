@@ -37,14 +37,14 @@ async def my_method(self, param: str) -> dict[str, str]:
 from cliffracer import listener
 
 @listener("user.created", fanout=True)
-async def on_user_created(self, subject: str, **data):
+async def on_user_created(self, subject: str, user_id: str) -> None:
     """Listen for user.created events"""
     print(f"Event received: {subject}")
-    print(f"User {data.get('user_id')} was created")
+    print(f"User {user_id} was created")
 
 # Wildcard patterns
 @listener("user.*", fanout=True)  # Matches user.created, user.deleted, etc.
-async def on_any_user_event(self, subject: str, **data):
+async def on_any_user_event(self, subject: str, user_id: str) -> None:
     print(f"User event: {subject}")
 ```
 
@@ -63,23 +63,6 @@ async def cleanup_task(self):
     print("Running cleanup...")
 ```
 
-### `@get(path)` and `@post(path)` - HTTP Endpoints
-```python
-from cliffracer import CliffracerService
-from cliffracer_http import HttpExtension
-
-class MyHTTPService(CliffracerService):
-    http = HttpExtension(port=8080)
-
-    @http.get("/users/{user_id}")
-    async def get_user(self, user_id: str):
-        return {"user_id": user_id}
-
-    @http.post("/users")
-    async def create_user(self, username: str, email: str):
-        return {"status": "created"}
-```
-
 ## Important Notes
 
 1. **Use class-based services** - Inherit from `CliffracerService` or variants
@@ -93,44 +76,100 @@ There is one service class, `CliffracerService`. Everything optional is a
 class attribute:
 
 ```python
+from cliffracer_logging import LoggingExtension
+from cliffracer_metrics import MetricsExtension
+
 class MyService(CliffracerService):
-    http = HttpExtension(port=8080)      # REST routes and websockets
+    logging = LoggingExtension()         # structured logging and dispatch timing
     metrics = MetricsExtension()         # counters over the dispatch hooks
 ```
 
 ## Running Services
 
+These are alternative entry points. The first three use the `MyService` class
+from the minimal example above.
+
+### Blocking run
+
+For a single service, `run()` keeps the process alive and handles shutdown
+signals.
+
 ```python
-# Method 1: Blocking run (RECOMMENDED for most cases)
 if __name__ == "__main__":
     service = MyService()
-    service.run()  # Blocks forever, handles signals
+    service.run()
+```
 
-# Method 2: Async start/stop (for advanced control)
+### Async start and stop
+
+Use `start()` and `stop()` when an async host controls the service's lifetime.
+The host owns signal handling; `finally` ensures cleanup when its task is
+cancelled or raises.
+
+```python
 import asyncio
 
 async def main():
     service = MyService()
-    await service.start()
-    # Service is running...
-    await asyncio.sleep(3600)  # Keep alive
-    await service.stop()
+    try:
+        await service.start()
+        await asyncio.Event().wait()  # Serve until the host cancels this task
+    finally:
+        await service.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
+```
 
-# Method 3: Using ServiceRunner (for multiple services)
+### One service with restart handling
+
+`ServiceRunner` manages one service and uses its configured restart policy.
+`MyService` builds its own `ServiceConfig`, so no configuration argument is
+needed here.
+
+```python
 from cliffracer import ServiceRunner
 
-runner = ServiceRunner(MyService, config)
-runner.run_forever()
+if __name__ == "__main__":
+    runner = ServiceRunner(MyService)
+    runner.run_forever()
 ```
 
-**Common mistake:**
+The runner also accepts an optional `ServiceConfig` as its second argument.
+For a constructor that accepts configuration, it passes that object to the
+constructor. For a self-configuring class such as `MyService`, explicitly set
+fields are applied as overrides, preserving the service's own name. Use
+`overrides={"name": "another_name"}` when an explicit name override is intended.
+
+### Multiple services in one process
+
+`ServiceOrchestrator` manages a runner for each registered service. This example
+runs two distinct services, each with its own RPC address. `health_port=0`
+gives each health listener an available port so the listeners do not collide.
+
 ```python
-await service.start()  # start() is a coroutine
-service.run()          # run() is synchronous and blocks
+from cliffracer import CliffracerService, ServiceConfig, ServiceOrchestrator, rpc
+
+class Orders(CliffracerService):
+    @rpc
+    async def status(self) -> str:
+        return "accepting orders"
+
+class Shipments(CliffracerService):
+    @rpc
+    async def status(self) -> str:
+        return "ready to ship"
+
+if __name__ == "__main__":
+    orchestrator = ServiceOrchestrator()
+    orchestrator.add_service(Orders, ServiceConfig(name="orders", health_port=0))
+    orchestrator.add_service(Shipments, ServiceConfig(name="shipments", health_port=0))
+    orchestrator.run_forever()
 ```
+
+`service.run()` and the runners' `run_forever()` methods are synchronous process
+entry points. Inside an existing event loop, use the async lifecycle methods
+instead.
 
 ## Making RPC Calls
 
@@ -202,7 +241,7 @@ async def my_handler() -> None:
 ```python
 class MyService(CliffracerService):
     def __init__(self):
-        super().__init__(config)
+        super().__init__(ServiceConfig(name="my_service"))
 
     @rpc
     async def my_handler(self) -> None:

@@ -15,7 +15,9 @@ the package that defines it instead of carrying a copy.
 
 from __future__ import annotations
 
+import collections.abc
 import enum
+import functools
 import hashlib
 import inspect
 import json
@@ -29,11 +31,16 @@ from typing import Annotated, Any, Literal, Union, get_args, get_origin
 from pydantic import (
     BaseModel,
     ConfigDict,
+    PydanticInvalidForJsonSchema,
     PydanticUserError,
     TypeAdapter,
     ValidationError,
     create_model,
 )
+from pydantic.fields import FieldInfo
+
+#: The JSON Schema mode a model is hashed in: what a caller may send, or what a handler writes.
+SchemaMode = Literal["validation", "serialization"]
 
 SCALARS: dict[type, str] = {
     str: "str",
@@ -42,7 +49,6 @@ SCALARS: dict[type, str] = {
     bool: "bool",
     type(None): "none",
 }
-_SCALARS_BY_NAME = {name: tp for tp, name in SCALARS.items()}
 
 _RESERVED_PARAM_NAMES = set(dir(BaseModel)) | {
     "__config__",
@@ -53,18 +59,37 @@ _RESERVED_PARAM_NAMES = set(dir(BaseModel)) | {
     "model_config",
 }
 
-_RESERVED_RPC_METHOD_NAMES = {
-    "verify",
-    "close",
-    "service",
-    "namespace",
-    "timeout",
-    "headers",
-    "SERVICE",
-    "VERSION",
-    "DESCRIPTION_HASH",
-    "SIGNATURES",
-}
+
+# Names an RPC handler parameter cannot take because a caller could not pass it. `call_rpc`,
+# `call_async` and `call_rpc_no_wait` take the routing namespace as `namespace=` and collect the
+# remote arguments as `**kwargs`, so a remote `namespace` argument collides with the routing
+# one and the call fails with a `TypeError` that names an internal parameter. A caller going
+# through `RpcProxy` has no other way to pass it.
+_RPC_ROUTING_PARAM_NAMES = frozenset({"namespace"})
+
+
+@functools.cache
+def reserved_rpc_method_names() -> frozenset[str]:
+    """Every public name a `ServiceClient` already has.
+
+    A generated client subclasses `ServiceClient` and defines one method per
+    handler, so a handler named after a class member replaces it, and one named
+    after an attribute the constructor sets is shadowed by that attribute on
+    every instance -- `client.connect_timeout` is then a float, and calling it
+    raises. The names are read off the class and off a constructed client
+    rather than listed, so an attribute added to the constructor is reserved
+    with it. Imported here rather than at module level because `cliffracer.client`
+    imports this module's dependents.
+    """
+    from cliffracer.client import ServiceClient
+
+    # An empty prefix pins none: this client addresses nothing, and one given no prefix would
+    # read `CLIFFRACER_SUBJECT_PREFIX`, so a bad value there would stop every service that
+    # declares an RPC method from starting.
+    client = ServiceClient(service="reserved", verify=False, subject_prefix="")
+    names = set(dir(ServiceClient)) | set(vars(client))
+    return frozenset(name for name in names if not name.startswith("_"))
+
 
 # Bare containers and everything else that cannot describe its contents. Named
 # explicitly so the refusal message can name them, rather than falling through
@@ -116,6 +141,8 @@ CONSTRAINT_ATTRS: tuple[str, ...] = (
     "multiple_of",
     "max_digits",
     "decimal_places",
+    "allow_inf_nan",
+    "coerce_numbers_to_str",
 )
 
 
@@ -138,10 +165,15 @@ def extract_constraints(tp: Any) -> dict[str, Any]:
     return dict(sorted(constraints.items()))
 
 
-def type_ref(tp: Any) -> dict[str, Any]:
-    """Annotation -> TypeRef. Raises UnsupportedType for anything else."""
+def type_ref(tp: Any, *, mode: SchemaMode = "validation") -> dict[str, Any]:
+    """Annotation -> TypeRef. Raises UnsupportedType for anything else.
+
+    A model's `schema_hash` is the hash of its JSON Schema in `mode`: `"validation"` for what a
+    caller may send, `"serialization"` for what a handler returns (a `computed_field` or a
+    `serialization_alias` changes what is written and not what is read).
+    """
     if get_origin(tp) is Annotated:
-        base = type_ref(get_args(tp)[0])
+        base = type_ref(get_args(tp)[0], mode=mode)
         constraints = extract_constraints(tp)
         if constraints:
             existing = base.get("constraints", {})
@@ -156,7 +188,7 @@ def type_ref(tp: Any) -> dict[str, Any]:
         raise UnsupportedType(f"{_name(tp)} is unsupported; use a supported type")
     if inspect.isclass(tp) and issubclass(tp, BaseModel):
         # Model importability checks are deferred to client generation commands.
-        schema = tp.model_json_schema()
+        schema = _model_json_schema(tp, mode)
         schema_hash = hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest()[:16]
         return {
             "kind": "model",
@@ -166,16 +198,16 @@ def type_ref(tp: Any) -> dict[str, Any]:
         }
     is_opt, inner = _is_optional(tp)
     if is_opt:
-        return {"kind": "optional", "inner": type_ref(inner)}
+        return {"kind": "optional", "inner": type_ref(inner, mode=mode)}
     origin = get_origin(tp)
     if origin is list:
         (item,) = get_args(tp)
-        return {"kind": "list", "item": type_ref(item)}
+        return {"kind": "list", "item": type_ref(item, mode=mode)}
     if origin is dict:
         key, value = get_args(tp)
         if key is not str:
             raise UnsupportedType(f"dict keys must be str, got {_name(key)}; this is unsupported")
-        return {"kind": "dict", "value": type_ref(value)}
+        return {"kind": "dict", "value": type_ref(value, mode=mode)}
     if origin is Literal:
         raw_values = list(get_args(tp))
         if not raw_values:
@@ -187,29 +219,6 @@ def type_ref(tp: Any) -> dict[str, Any]:
             raise UnsupportedType("Literal values must be str, int or bool; this is unsupported")
         return {"kind": "literal", "values": values}
     raise UnsupportedType(f"{_name(tp)} is unsupported")
-
-
-def python_type(ref: dict[str, Any]) -> Any:
-    """TypeRef -> annotation. Imports models by module and qualname."""
-    kind = ref["kind"]
-    if kind == "scalar":
-        return _SCALARS_BY_NAME[ref["name"]]
-    if kind == "model":
-        import importlib
-
-        obj: Any = importlib.import_module(ref["module"])
-        for part in ref["qualname"].split("."):
-            obj = getattr(obj, part)
-        return obj
-    if kind == "list":
-        return list[python_type(ref["item"])]  # type: ignore[misc]
-    if kind == "dict":
-        return dict[str, python_type(ref["value"])]  # type: ignore[misc]
-    if kind == "optional":
-        return python_type(ref["inner"]) | None
-    if kind == "literal":
-        return Literal[tuple(ref["values"])]
-    raise UnsupportedType(f"unknown TypeRef kind {kind!r}")
 
 
 @dataclass(frozen=True)
@@ -236,6 +245,8 @@ class HandlerSpec:
     params: list[ParamSpec]
     return_annotation: Any
     return_ref: dict[str, Any]
+    #: What the handler returns, validated and dumped: the return type, or for a handler that
+    #: streams its reply, the type of each item it yields.
     return_adapter: TypeAdapter
     takes_correlation_id: bool
     payload_model: type[BaseModel]
@@ -243,14 +254,65 @@ class HandlerSpec:
     extra: dict[str, Any] = field(default_factory=dict)
     doc_summary: str | None = None
     doc_description: str | None = None
+    #: Whether the handler is an async generator that streams its reply, one item at a time.
+    streams: bool = False
 
     @property
     def description(self) -> str | None:
         return self.doc_description
 
 
-def collect_model_schemas(tp: Any, out: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Recursively collect Pydantic models into out keyed by schema_hash."""
+def _model_json_schema(tp: type[BaseModel], mode: SchemaMode = "validation") -> dict[str, Any]:
+    """The model's JSON Schema, or `UnsupportedType` naming the model that has none.
+
+    A model with a field pydantic cannot describe (an arbitrary class, a callable) has no JSON
+    Schema, and the contract is published as one. The refusal is the module's own, so the
+    handler that takes or returns the model is named by whoever catches it.
+    """
+    try:
+        return tp.model_json_schema(mode=mode)
+    except PydanticInvalidForJsonSchema as exc:
+        raise UnsupportedType(
+            f"{tp.__qualname__} has no JSON Schema, so a contract cannot carry it: "
+            f"{str(exc).splitlines()[0]}"
+        ) from exc
+
+
+def refuse_a_parameter_alias(qual: str, pname: str, annotation: Any) -> None:
+    """Refuse a handler parameter that declares a Pydantic alias.
+
+    A parameter is described, and called by a generated client or `RpcProxy`, under its Python
+    name, while the payload model validates it under its alias, so a caller that follows the
+    description is refused with `missing`. The alias has no use on a handler parameter, so it is
+    refused when the handler is discovered (at start, and by `describe`), naming the parameter.
+    """
+    if get_origin(annotation) is not Annotated:
+        return
+    for meta in get_args(annotation)[1:]:
+        if not isinstance(meta, FieldInfo):
+            continue
+        declared = {
+            kind: getattr(meta, kind)
+            for kind in ("alias", "validation_alias", "serialization_alias")
+            if getattr(meta, kind) is not None
+        }
+        if declared:
+            shown_aliases = ", ".join(f"{kind}={value!r}" for kind, value in declared.items())
+            raise UntypedHandler(
+                f"{qual}: parameter {pname!r} declares {shown_aliases}; a handler parameter is "
+                f"described and called by its Python name, so an alias would make the description "
+                f"and the handler disagree. Remove the alias"
+            )
+
+
+def collect_model_schemas(
+    tp: Any, out: dict[str, Any] | None = None, mode: SchemaMode = "validation"
+) -> dict[str, Any]:
+    """Recursively collect Pydantic models into out keyed by schema_hash.
+
+    A handler's parameters are collected in validation mode and its return in serialization
+    mode, the modes `type_ref` hashes them in.
+    """
     if out is None:
         out = {}
     if tp is None:
@@ -258,35 +320,94 @@ def collect_model_schemas(tp: Any, out: dict[str, Any] | None = None) -> dict[st
     if isinstance(tp, HandlerSpec):
         for p in tp.params:
             collect_model_schemas(p.annotation, out)
-        collect_model_schemas(tp.return_annotation, out)
+        collect_model_schemas(tp.return_annotation, out, mode="serialization")
         return out
     if isinstance(tp, ParamSpec):
-        return collect_model_schemas(tp.annotation, out)
+        return collect_model_schemas(tp.annotation, out, mode)
 
     origin = get_origin(tp)
     if origin is Annotated:
-        return collect_model_schemas(get_args(tp)[0], out)
+        return collect_model_schemas(get_args(tp)[0], out, mode)
     if inspect.isclass(tp) and issubclass(tp, BaseModel):
-        schema = tp.model_json_schema()
+        schema = _model_json_schema(tp, mode)
         schema_hash = hashlib.sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest()[:16]
         if schema_hash not in out:
             out[schema_hash] = schema
             for field_info in tp.model_fields.values():
-                collect_model_schemas(field_info.annotation, out)
+                collect_model_schemas(field_info.annotation, out, mode)
         return out
     if origin in (list, set, frozenset, tuple, dict):
         for arg in get_args(tp):
-            collect_model_schemas(arg, out)
+            collect_model_schemas(arg, out, mode)
         return out
     if origin is Union or origin is types.UnionType:
         for arg in get_args(tp):
-            collect_model_schemas(arg, out)
+            collect_model_schemas(arg, out, mode)
         return out
+    if origin in _STREAM_ORIGINS:
+        return collect_model_schemas(get_args(tp)[0], out, mode)
     return out
+
+
+#: The annotations a handler that streams its reply declares: what an async generator returns.
+_STREAM_ORIGINS = (collections.abc.AsyncIterator, collections.abc.AsyncGenerator)
+
+
+def stream_item(tp: Any) -> Any:
+    """The item type `tp` streams, for `AsyncIterator[X]` or `AsyncGenerator[X, None]` (under any
+    `Annotated`), or None when `tp` does not stream."""
+    while get_origin(tp) is Annotated:
+        tp = get_args(tp)[0]
+    if tp in _STREAM_ORIGINS:
+        raise UnsupportedType(f"{_name(tp)} without an item type is unsupported")
+    if get_origin(tp) not in _STREAM_ORIGINS:
+        return None
+    args = get_args(tp)
+    if not args:
+        raise UnsupportedType(f"{_name(tp)} without an item type is unsupported")
+    # `collections.abc.AsyncGenerator[X, None]` holds the literal `None`, the `typing` spelling
+    # `NoneType`: both mean no send type.
+    if len(args) == 2 and args[1] not in (None, type(None)):
+        raise UnsupportedType(
+            f"{_name(tp)} with a send type is unsupported: a stream is only iterated"
+        )
+    return args[0]
+
+
+def return_type_ref(tp: Any) -> dict[str, Any]:
+    """A handler's return as a TypeRef: `{"kind": "stream", "item": ...}` for an annotation that
+    streams, else what `type_ref` makes of it. A stream is a handler's whole return, so `type_ref`
+    itself refuses one nested in another type, and the item is read as a return is."""
+    item = stream_item(tp)
+    if item is None:
+        return type_ref(tp, mode="serialization")
+    return {"kind": "stream", "item": type_ref(item, mode="serialization")}
 
 
 class UntypedHandler(TypeError):
     """An @rpc handler that is not fully annotated. The service refuses to start."""
+
+
+def require_finite_json(qual: str, what: str, publish: Callable[[], Any]) -> None:
+    """Refuse a part of a contract that the published description could not carry.
+
+    The description is published as JSON, and JSON has no `inf`, `-inf` or `nan`: a parser in
+    another language rejects the whole document, so one such default would make every client
+    unable to read the service. `publish` builds the value the description carries; an error
+    that building it raises is reported by `describe`, which builds it again.
+    """
+    try:
+        value = publish()
+    except Exception:  # noqa: BLE001 - not this check's finding; describe raises it
+        return
+    try:
+        json.dumps(value, allow_nan=False)
+    except ValueError as exc:
+        raise UntypedHandler(
+            f"{qual}: {what} holds a number that is not finite (inf, -inf or nan), which JSON "
+            f"cannot carry and the service's description is published as JSON. Use None for "
+            f"'no limit' (`float | None = None`), or leave the bound out: {exc}"
+        ) from exc
 
 
 def build_handler_spec(name: str, func: Callable, *, owner: type) -> HandlerSpec:
@@ -297,10 +418,19 @@ def build_handler_spec(name: str, func: Callable, *, owner: type) -> HandlerSpec
     has a whole class of handlers to choose between.
     """
     qual = f"{owner.__qualname__}.{name}"
-    if name in _RESERVED_RPC_METHOD_NAMES:
+    if name in reserved_rpc_method_names():
         raise UntypedHandler(
             f"{qual}: RPC handler name {name!r} conflicts with ServiceClient member; choose a different name"
         )
+    # A decorator that keeps `__wrapped__` (`functools.wraps`) hides what the handler is; the
+    # function it wraps is what a call reaches.
+    target = inspect.unwrap(func)
+    if inspect.isgeneratorfunction(target):
+        raise UntypedHandler(
+            f"{qual}: an RPC handler cannot be a generator: calling it only builds the "
+            "generator, so its body would never run and no reply would carry what it yields"
+        )
+    is_async_generator = inspect.isasyncgenfunction(target)
     try:
         hints = typing.get_type_hints(func, include_extras=True)
     except Exception as exc:  # noqa: BLE001 - a hint that cannot resolve is an untyped handler
@@ -335,8 +465,14 @@ def build_handler_spec(name: str, func: Callable, *, owner: type) -> HandlerSpec
             raise UntypedHandler(
                 f"{qual}: parameter {pname!r} conflicts with BaseModel member; choose a different name"
             )
+        if pname in _RPC_ROUTING_PARAM_NAMES:
+            raise UntypedHandler(
+                f"{qual}: parameter {pname!r} is the routing argument of call_rpc and "
+                f"call_async, so a caller using RpcProxy could not pass it; choose a different name"
+            )
         if pname not in hints:
             raise UntypedHandler(f"{qual}: parameter {pname!r} has no annotation")
+        refuse_a_parameter_alias(qual, pname, hints[pname])
         try:
             ref = type_ref(hints[pname])
         except UnsupportedType as exc:
@@ -363,7 +499,27 @@ def build_handler_spec(name: str, func: Callable, *, owner: type) -> HandlerSpec
     if "return" not in hints:
         raise UntypedHandler(f"{qual}: the return has no annotation")
     try:
-        return_ref = type_ref(hints["return"])
+        streamed = stream_item(hints["return"])
+    except UnsupportedType as exc:
+        raise UntypedHandler(f"{qual}: return: {exc}") from exc
+    if streamed is not None and not is_async_generator:
+        raise UntypedHandler(
+            f"{qual}: return: annotated {_name(hints['return'])}, a stream, but the handler is not "
+            "an async generator; a handler that streams its reply yields each item"
+        )
+    if is_async_generator and streamed is None:
+        raise UntypedHandler(
+            f"{qual}: an RPC handler cannot be a generator unless it streams its reply: calling "
+            "it only builds the generator, so annotate its return AsyncIterator[X] to send each "
+            "item it yields"
+        )
+    if streamed is not None and getattr(func, "_cliffracer_async_rpc", False):
+        raise UntypedHandler(
+            f"{qual}: a handler that streams its reply cannot be @async_rpc: a fire-and-forget "
+            "call has nobody to stream to"
+        )
+    try:
+        return_ref = return_type_ref(hints["return"])
     except UnsupportedType as exc:
         raise UntypedHandler(f"{qual}: return: {exc}") from exc
     raw_doc = inspect.getdoc(func)
@@ -374,6 +530,25 @@ def build_handler_spec(name: str, func: Callable, *, owner: type) -> HandlerSpec
     else:
         doc_summary = None
         doc_description = None
+
+    for ps in params:
+        where = f"parameter {ps.name!r}"
+        require_finite_json(qual, f"the type of {where}", functools.partial(dict, ps.ref))
+        if ps.has_default:
+            require_finite_json(
+                qual,
+                f"the default of {where}",
+                functools.partial(ps.adapter.dump_python, ps.default, mode="json"),
+            )
+        require_finite_json(
+            qual, f"a model in {where}", functools.partial(collect_model_schemas, ps.annotation)
+        )
+    require_finite_json(qual, "the return type", functools.partial(dict, return_ref))
+    require_finite_json(
+        qual,
+        "a model in the return type",
+        functools.partial(collect_model_schemas, hints["return"], mode="serialization"),
+    )
 
     fields = {p.name: (p.annotation, p.default if p.has_default else ...) for p in params}
     try:
@@ -389,38 +564,54 @@ def build_handler_spec(name: str, func: Callable, *, owner: type) -> HandlerSpec
         params=params,
         return_annotation=hints["return"],
         return_ref=return_ref,
-        return_adapter=TypeAdapter(hints["return"]),
+        return_adapter=TypeAdapter(hints["return"] if streamed is None else streamed),
         takes_correlation_id=takes_cid,
         payload_model=payload_model,
         doc=doc_summary,
         doc_summary=doc_summary,
         doc_description=doc_description,
+        streams=streamed is not None,
+    )
+
+
+def shown(text: Any) -> str:
+    """`text` as one printable line: control characters and line breaks are escaped, not echoed."""
+    text = str(text)
+    return text if text.isprintable() else ascii(text)[1:-1]
+
+
+def _is_a_dotted_identifier_path(text: Any) -> bool:
+    """Whether `text` is a dotted path of plain identifiers, none of them a keyword."""
+    return isinstance(text, str) and all(
+        part.isidentifier() and not keyword.iskeyword(part) for part in text.split(".")
     )
 
 
 def unimportable_models(ref: dict[str, Any]) -> list[str]:
     """``"module:qualname"`` for every model in a TypeRef a client cannot import.
 
-    Refuse models whose module is private or
-    `__main__`, because the generated file imports it by module and qualname.
-    A service with such a model runs perfectly well; only a client generated
-    from it would not import.
+    Refuse models whose module is private or `__main__`, or is not a dotted path of plain
+    identifiers, and whose qualname is not one, because the generated file writes the module and
+    the qualname into an `import` line and a name. A module that is anything else is text from
+    whoever answered `describe`, and written into the file it is code that runs when the file is
+    imported. A service with such a model runs perfectly well; only a client generated from it
+    would not import.
 
     One compact identifier per model, not a sentence, because the command joins
-    them into a single line and adds the remedy once.
+    them into a single line and adds the remedy once. Control characters in the text are escaped,
+    so a refusal cannot be made to print them.
     """
     kind = ref["kind"]
     if kind == "model":
         module = ref["module"]
         qualname = ref["qualname"]
         if (
-            module == "__main__"
+            not _is_a_dotted_identifier_path(module)
+            or module == "__main__"
             or any(part.startswith("_") for part in module.split("."))
-            or not all(
-                part.isidentifier() and not keyword.iskeyword(part) for part in qualname.split(".")
-            )
+            or not _is_a_dotted_identifier_path(qualname)
         ):
-            return [f"{module}:{qualname}"]
+            return [f"{shown(module)}:{shown(qualname)}"]
         return []
     if kind == "list":
         return unimportable_models(ref["item"])
@@ -428,4 +619,6 @@ def unimportable_models(ref: dict[str, Any]) -> list[str]:
         return unimportable_models(ref["value"])
     if kind == "optional":
         return unimportable_models(ref["inner"])
+    if kind == "stream":
+        return unimportable_models(ref["item"])
     return []

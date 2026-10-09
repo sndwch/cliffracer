@@ -2,6 +2,7 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
+from loguru import logger
 
 from cliffracer import CliffracerService, ServiceConfig, listener, rpc
 from cliffracer.core.correlation import correlation_id_var
@@ -37,6 +38,18 @@ class Svc(CliffracerService):
 
     @listener("things.happened", fanout=True)
     async def on_thing(self, a: int = 0) -> None:
+        pass
+
+
+class MultiListenerSvc(CliffracerService):
+    spy = Spy()
+
+    @listener("things.*", fanout=True)
+    async def on_thing_wildcard(self, a: int = 0) -> None:
+        pass
+
+    @listener("things.happened", fanout=True)
+    async def on_thing_exact(self, a: int = 0) -> None:
         pass
 
 
@@ -84,7 +97,24 @@ async def test_a_handler_exception_still_reaches_result_and_teardown():
     assert "traceback" in opt_body
 
 
+async def _reply_logging_errors(svc) -> tuple[dict, list[str]]:
+    """Answer one `echo` call on `svc`, and every ERROR line logged meanwhile."""
+    errors: list[str] = []
+    sink = logger.add(lambda m: errors.append(m.record["message"]), level="ERROR")
+    try:
+        await svc.container._setup_extensions()
+        svc._discover_handlers()
+        msg = _msg("s.rpc.echo", {"value": "x"})
+        await svc.container._handle_rpc_request(msg)
+    finally:
+        logger.remove(sink)
+    return json.loads(msg.respond.call_args.args[0]), errors
+
+
 async def test_a_hook_exception_is_logged_and_does_not_change_the_result():
+    """The log line is the only place a broken hook shows: isolation keeps it
+    from changing the reply, so it has to name the extension and what it raised."""
+
     class Bad(Extension):
         async def worker_setup(self, ctx):
             raise RuntimeError("hook broke")
@@ -92,21 +122,47 @@ async def test_a_hook_exception_is_logged_and_does_not_change_the_result():
     class S(Svc):
         bad = Bad()
 
-    svc = S(ServiceConfig(name="s"))
-    await svc.container._setup_extensions()
-    svc._discover_handlers()
-    msg = _msg("s.rpc.echo", {"value": "x"})
-    await svc.container._handle_rpc_request(msg)
-    assert json.loads(msg.respond.call_args.args[0])["result"] == "x"
+    reply, errors = await _reply_logging_errors(S(ServiceConfig(name="s")))
+
+    assert reply["result"] == "x"
+    assert "extension bad.worker_setup raised: hook broke" in errors, errors
+
+
+async def test_a_teardown_hook_exception_is_logged_under_its_extensions_name():
+    """The same for the hooks run after the handler, which are guarded apart."""
+
+    class Bad(Extension):
+        async def worker_teardown(self, ctx):
+            raise RuntimeError("teardown broke")
+
+    class S(Svc):
+        bad = Bad()
+
+    reply, errors = await _reply_logging_errors(S(ServiceConfig(name="s")))
+
+    assert reply["result"] == "x"
+    assert "extension bad.worker_teardown raised: teardown broke" in errors, errors
 
 
 async def test_events_run_the_chain_per_handler():
-    svc = Svc(ServiceConfig(name="s"))
+    svc = MultiListenerSvc(ServiceConfig(name="multi_listener_s"))
     await svc.container._setup_extensions()
     svc._discover_handlers()
     await svc.container._handle_event(_msg("things.happened", {"a": 1}))
+
+    event_types = [e[0] for e in svc.spy.events]
+    assert event_types == ["setup", "result", "teardown", "setup", "result", "teardown"]
+
     kinds = [e[1] for e in svc.spy.events if e[0] == "setup"]
-    assert kinds == ["event"]
+    assert kinds == ["event", "event"]
+
+    setup_cids = [e[3] for e in svc.spy.events if e[0] == "setup"]
+    assert setup_cids == ["cid-1", "cid-1"]
+
+    teardown_cids = [e[1] for e in svc.spy.events if e[0] == "teardown"]
+    assert teardown_cids == ["cid-1", "cid-1"]
+
+    assert correlation_id_var.get() is None
 
 
 class OrderSpy(Extension):
@@ -211,7 +267,11 @@ async def test_a_failing_jetstream_handler_still_reaches_result_and_teardown():
 
     assert [e[0] for e in svc.spy.events] == ["setup", "result", "teardown"]
     assert svc.spy.events[1] == ("result", None, "ValueError")
+    # The branch the docstring names, and that the first delivery took it: not acked, not
+    # terminated, nak'd once. A dispatch that did none of the three would also leave ack unawaited.
     msg.ack.assert_not_awaited()
+    msg.term.assert_not_awaited()
+    msg.nak.assert_awaited_once()
 
 
 async def test_describe_runs_the_chain():

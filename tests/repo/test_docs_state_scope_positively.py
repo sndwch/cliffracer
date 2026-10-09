@@ -11,16 +11,8 @@ pytestmark = pytest.mark.repo
 REPO = Path(__file__).resolve().parents[2]
 
 
-@pytest.fixture(autouse=True)
-def _require_git():
-    if not (REPO / ".git").is_dir():
-        pytest.skip("Not running inside a git repository (release tarball)")
-
-
-EXEMPT = {
-    "CHANGELOG.md",
-    "docs/decisions.md",
-}
+EXEMPT_REASONS: dict[str, str] = {}
+EXEMPT = set(EXEMPT_REASONS)
 
 # Framework identity subject patterns.
 _SUBJECT = r"(?:cliffracer|core|the library|the framework|this package|the package)"
@@ -86,9 +78,14 @@ def negative_scope_lines(paths=None) -> list[str]:
 
 
 def test_the_sweep_reads_the_documentation():
-    """ "0 lines" is what a clean tree and a broken file list look like alike."""
+    """Verify tracked documentation files are discovered and non-empty."""
     docs = tracked_markdown()
-    assert len(docs) >= 15, f"only found {len(docs)} tracked .md files"
+    # Within a fifth of the tracked documents (42 when this was set), so a docs directory leaving
+    # the sweep is noticed. Every changelog fragment is a tracked .md file, and a release's assembly
+    # deletes them all (174 at the 1.1.0 release), so the figure is what the repository holds with
+    # none pending, not what it holds mid-release; the floor is set again from the count after an
+    # assembly, not from one taken while fragments are waiting.
+    assert len(docs) >= 34, f"only found {len(docs)} tracked .md files"
     assert all(d.exists() for d in docs), "git listed a file that is not on disk"
 
 
@@ -97,13 +94,108 @@ def test_the_exemptions_all_exist():
     assert not missing, f"exempt files that do not exist: {missing}"
 
 
-def test_no_document_enumerates_what_the_framework_does_not_do():
-    found = negative_scope_lines()
-    assert not found, (
-        "documentation is for what the code does. Put a removed name in "
-        "CHANGELOG.md, a still-binding scope decision in "
-        "docs/decisions.md, and delete the rest rather than softening it:\n  " + "\n  ".join(found)
+def test_the_exemptions_have_documented_reasons():
+    """Verify every exemption has a non-empty justification.
+
+    EXEMPT_REASONS is empty, so the loop body does not run and this test cannot
+    fail on the tree as it stands. The check below is what makes that explicit
+    rather than leaving a green result that means nothing: if an exemption is
+    ever added, the loop starts doing the work, and until then the emptiness is
+    the thing being asserted.
+    """
+    for rel, reason in EXEMPT_REASONS.items():
+        assert isinstance(reason, str) and reason.strip(), f"Missing justification for {rel}"
+    assert EXEMPT_REASONS == {} or all(r.strip() for r in EXEMPT_REASONS.values()), (
+        "an exemption was added without a reason"
     )
+
+
+def test_no_document_is_exempt_from_the_negative_scope_sweep():
+    """The sweep reads every tracked document.
+
+    Stated as its own check because three tests above iterate EXEMPT_REASONS
+    and all of them pass vacuously while it is empty; this one fails if the set
+    grows without someone deciding to widen the sweep's blind spot.
+    """
+    assert EXEMPT == set(), (
+        f"these documents are no longer read by the negative-scope sweep: {sorted(EXEMPT)}"
+    )
+
+
+def test_exemptions_are_load_bearing():
+    """Verify any entry in EXEMPT actually matches negative scope patterns.
+
+    An exemption that exempts nothing is a dead exemption that obscures guard scope.
+    """
+    dead = []
+    for rel in EXEMPT:
+        doc = REPO / rel
+        if not negative_scope_lines([doc]):
+            dead.append(rel)
+    assert not dead, f"dead exemptions that match no negative scope patterns: {dead}"
+
+
+# The advice the guard gives when it fails, and the samples that stand for it.
+# test_CONTROL_the_recommended_phrasings_pass ties the two together, so the
+# wording cannot change without the samples being revisited.
+GUIDANCE = (
+    "documentation is for what the code does. No file is exempt from this "
+    "check, so moving the sentence to CHANGELOG.md or docs/decisions.md does "
+    "not settle it: state the removal as a fact about what changed "
+    '("X is removed") or the decision as a fact about what the code does, '
+    "and delete the rest rather than softening it:"
+)
+
+RECOMMENDED_SAMPLES = {
+    '"X is removed"': "- `ServiceConfig.log_level` is removed.\n",
+    "a fact about what the code does": "- **Decision**: Scheduling is the caller's concern.\n",
+}
+
+
+def test_CONTROL_the_sweep_matches_a_negative_scope_line(tmp_path: Path):
+    """The sweep must report the shape the guard exists for.
+
+    Named for what it does. It exercises no exemption, and cannot: EXEMPT is
+    empty, so there is no file to bypass.
+    """
+    doc = tmp_path / "sample.md"
+    doc.write_text("The framework has no built-in scheduler.\n")
+    assert negative_scope_lines([doc]), "control text must match negative scope"
+
+
+def test_CONTROL_the_recommended_phrasings_pass(tmp_path: Path):
+    """The failure message tells an author what to write, so those must pass.
+
+    A message recommending a phrasing the guard then rejects sends readers in
+    circles. Each sample is keyed by the words the message uses for it, and the
+    phrase is asserted to still be in the message: rewriting the advice without
+    revisiting these samples fails here, rather than leaving a control that
+    vouches for wording nobody offers any more.
+    """
+    for phrase, sample in RECOMMENDED_SAMPLES.items():
+        assert phrase in GUIDANCE, (
+            f"the failure message no longer recommends {phrase!r}, so this "
+            "sample no longer stands for anything it says"
+        )
+        doc = tmp_path / "sample.md"
+        doc.write_text(sample)
+        assert negative_scope_lines([doc]) == [], (
+            f"the message recommends {phrase!r} and the guard rejects it: {sample!r}"
+        )
+
+
+def test_no_document_enumerates_what_the_framework_does_not_do():
+    """Report the negative-scope shapes in PATTERNS, which is fewer than the name.
+
+    The set is deliberately narrow, and what it does NOT attempt is worth
+    knowing before reading a green run as "no document says what the framework
+    cannot do". Measured: `has no` is caught, while `does not do`, `does not
+    provide`, `cannot` and `there is no support for` are not. Widening it is a
+    judgement about false positives on ordinary prose rather than an oversight
+    -- but a reader should not take this check for more than it is.
+    """
+    found = negative_scope_lines()
+    assert not found, GUIDANCE + "\n  " + "\n  ".join(found)
 
 
 @pytest.mark.parametrize(
@@ -193,7 +285,7 @@ def test_the_reported_line_number_is_the_paragraphs_first(tmp_path: Path):
     doc = tmp_path / "d.md"
     doc.write_text("intro\n\nfiller\n\nCore has\nno notion of identity.\n")
     found = negative_scope_lines([doc])
-    assert found and found[0].split(":")[1].startswith("5"), found
+    assert found and found[0].split(":")[1].split()[0] == "5", found
 
 
 @pytest.mark.parametrize(

@@ -15,11 +15,11 @@ Service (loguru) ──> NATS ──> log ingester ──> OpenObserve (storage 
 ### 1. Start the infrastructure
 
 ```bash
-cd deployment/docker
-docker-compose --profile logging up -d
+cd examples/logging
+docker compose up -d
 ```
 
-That profile brings up NATS, MinIO and OpenObserve.
+`docker-compose.yml` in this directory brings up NATS, MinIO and OpenObserve.
 
 ### 2. Stream a service's logs to NATS
 
@@ -71,26 +71,43 @@ Open http://localhost:5080, sign in as `admin@example.com` with password
 
 ## Log subjects
 
-Logs are published to a subject built from the service name and the level:
+Logs are published to a subject built from the service name and the level, and
+scoped like every other wire subject:
 
 ```
-logs.<service_name>.<level>
+<prefix>.<namespace>.logs.<service_name>.<level>
 ```
 
-For example `logs.user_service.info`, `logs.order_service.error`.
+The prefix and namespace are only present when the service sets them. With
+neither, the subject is `logs.user_service.info`; under `namespace="appA"` it is
+`appA.logs.user_service.info`.
+
+**The sink and the ingester derive this from the same builder**, so they cannot
+disagree: a namespaced service's logs go to that namespace's ingester. Watching
+every namespace is a deliberate choice rather than the default -- ask for it
+with the wildcard, in a `cross_namespace=True` listener or in the subject below.
 
 | subscription | what it gets |
 |---|---|
-| `logs.>` | every log line from every service |
-| `logs.user_service.>` | one service |
-| `logs.*.error` | errors from all services |
+| `logs.>` | every service, **only where no namespace is set** |
+| `appA.logs.>` | every service in `appA` |
+| `appA.logs.user_service.>` | one service in `appA` |
+| `appA.logs.*.error` | errors from all services in `appA` |
+| `*.logs.>` | every namespace, where no `subject_prefix` is set |
+| `*.*.logs.>` | every namespace under any prefix |
 
-Read them from the command line:
+**A `*` spans exactly one token, so there is no one pattern that covers every
+deployment** -- add one `*.` for each scoping token your services set. With
+neither a prefix nor a namespace that is `logs.>`; with a namespace, `*.logs.>`;
+with both, `*.*.logs.>`. A pattern with too few tokens matches nothing and says
+nothing about it, which is the same silence this whole section exists because of.
+
+Read them from the command line. These assume `namespace="appA"` and no prefix:
 
 ```bash
-nats sub "logs.>"
-nats sub "logs.*.error"
-nats sub "logs.>" --translate "jq ."
+nats sub "appA.logs.>"
+nats sub "appA.logs.*.error"
+nats sub "*.logs.>" --translate "jq ."
 ```
 
 ## Ingester environment variables
@@ -143,7 +160,7 @@ logger.bind(
 ).info("Processing payment")
 ```
 
-Bound values arrive in OpenObserve under `extra`.
+Bound values arrive in OpenObserve under `extra`, as long as they can be pickled: see below.
 
 Structured JSON is the default: `LoggingConfig.configure(service_name)` takes
 `structured=True`.
@@ -151,23 +168,33 @@ Structured JSON is the default: `LoggingConfig.configure(service_name)` takes
 Every sink `LoggingConfig` adds uses loguru's `enqueue=True`, which hands the
 record to a queue rather than formatting it on the calling task.
 
-## Filtering a sink
+The queue pickles each record, so a record that carries a value which cannot be pickled,
+such as a live connection, a lock, a lambda or a model holding one, is dropped by that sink.
+Loguru prints a `Logging error in Loguru Handler` traceback to stderr for it, and every other
+line keeps flowing. Bind plain values (ids, names, counts), or the value's `repr`, rather than
+the object.
+
+## Applying a domain-specific NATS redactor
 
 ```python
-from loguru import logger
+from cliffracer_logging import LoggingExtension
 
-def sanitize_logs(record):
-    if "password" in str(record["message"]):
-        record["message"] = "[REDACTED]"
-    return True
+def redact_customer_data(record):
+    record["record"]["extra"].pop("customer_email", None)
+    return record
 
-logger.add(sink, filter=sanitize_logs)
+logging = LoggingExtension(to_nats=True, redactor=redact_customer_data)
 ```
+
+Common credential fields are redacted recursively by default. A custom
+redactor replaces that policy and can remove domain-specific values before a
+record reaches NATS. Do not interpolate credentials into free-form messages.
 
 ## Examples in this directory
 
 - `extension_example.py` — a service declaring `LoggingExtension`
 - `log_ingester.py` — the `logs.>` subscriber that forwards to OpenObserve
+  (resolved to `<namespace>.logs.>` for a namespaced deployment)
 
 ## Troubleshooting
 
@@ -175,7 +202,8 @@ Logs not arriving in OpenObserve — work along the path:
 
 ```bash
 nats server ping                      # the broker is up
-nats sub "logs.>"                     # the service is publishing
+nats sub "*.logs.>"                   # the service is publishing (see Log subjects:
+                                      #   logs.> with no namespace, *.*.logs.> under a prefix)
 docker logs log_ingester              # the ingester is running
 curl http://localhost:5080/healthz    # OpenObserve is up
 ```

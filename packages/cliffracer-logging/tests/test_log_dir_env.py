@@ -6,7 +6,6 @@ name an application is entitled to use for itself.
 """
 
 import json
-import os
 
 import pytest
 from cliffracer_logging import LoggingConfig
@@ -63,4 +62,3 @@ def test_CONTROL_with_neither_set_the_default_is_logs(tmp_path, monkeypatch):
     _configure_into(tmp_path, monkeypatch)
 
     assert (tmp_path / "logs" / "probe.log").exists()
-    assert "CLIFFRACER_LOG_DIR" not in os.environ

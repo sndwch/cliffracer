@@ -3,13 +3,14 @@ Tests for RpcProxy - Nameko-style service calling
 """
 
 import asyncio
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
 from cliffracer import CliffracerService, RpcProxy, ServiceConfig, rpc
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.nats_required]
 
 
 class Availability(BaseModel):
@@ -48,6 +49,7 @@ class InventoryService(CliffracerService):
     def __init__(self):
         config = ServiceConfig(name="inventory_service")
         super().__init__(config)
+        self.reserved: list[dict[str, Any]] = []
 
     @rpc
     async def check_availability(self, product_id: str, quantity: int) -> Availability:
@@ -57,6 +59,7 @@ class InventoryService(CliffracerService):
     @rpc
     async def reserve_items(self, product_id: str, quantity: int) -> Reservation:
         """Reserve items in inventory"""
+        self.reserved.append({"product_id": product_id, "quantity": quantity})
         return Reservation(product_id=product_id, reserved=quantity, status="success")
 
 
@@ -195,7 +198,7 @@ class TestRpcProxy:
             await inventory_service.stop()
 
     async def test_rpc_proxy_fire_and_forget(self, nats_connection):
-        """Test RpcProxy call_async for fire-and-forget calls"""
+        """Verify RpcProxy call_async executes on the receiver without awaiting a reply."""
         inventory_service = InventoryService()
         order_service = OrderService()
 
@@ -203,80 +206,51 @@ class TestRpcProxy:
         await order_service.start()
 
         try:
-            # Fire-and-forget call using call_async
+            # Fire-and-forget call using call_async returns immediately
             await order_service.inventory.reserve_items.call_async(product_id="widget", quantity=10)
 
-            # Give it a moment to process
-            await asyncio.sleep(0.1)
+            # Await delivery to receiver state
+            delivered = False
+            for _ in range(20):
+                if len(inventory_service.reserved) > 0:
+                    delivered = True
+                    break
+                await asyncio.sleep(0.1)
 
-            # No exception means success (fire-and-forget doesn't wait for response)
+            assert delivered is True, "Fire-and-forget RPC was not received by InventoryService"
+            assert inventory_service.reserved == [{"product_id": "widget", "quantity": 10}]
 
         finally:
             await order_service.stop()
             await inventory_service.stop()
 
     async def test_rpc_proxy_multiple_instances(self, nats_connection):
-        """Test that each service instance gets its own proxy"""
+        """Test that each service instance gets its own proxy, and that each routes on its own"""
+        inventory_service = InventoryService()
         order_service1 = OrderService()
         order_service2 = OrderService()
 
         # Proxies should be different instances but work the same
         assert order_service1.inventory is not order_service2.inventory
-        assert order_service1.inventory._service_name == order_service2.inventory._service_name
+        # Against the literal the descriptor was declared with, not against the other proxy,
+        # which would agree for any value the descriptor propagated.
+        assert order_service1.inventory._service_name == "inventory_service"
+        assert order_service2.inventory._service_name == "inventory_service"
+        # Each proxy belongs to the service instance it was read from.
+        assert order_service1.inventory._service_instance() is order_service1
+        assert order_service2.inventory._service_instance() is order_service2
 
-
-class TestRpcProxyUnit:
-    """Unit tests for RpcProxy without NATS"""
-
-    def test_rpc_proxy_descriptor(self):
-        """Test that RpcProxy works as a descriptor"""
-
-        class TestService(CliffracerService):
-            other = RpcProxy("other_service")
-
-            def __init__(self):
-                config = ServiceConfig(name="test")
-                super().__init__(config)
-
-        service = TestService()
-
-        # Should get a ServiceProxy instance
-        proxy = service.other
-        assert hasattr(proxy, "_service_name")
-        assert proxy._service_name == "other_service"
-
-    def test_rpc_proxy_caching(self):
-        """Test that ServiceProxy is cached per instance"""
-
-        class TestService(CliffracerService):
-            other = RpcProxy("other_service")
-
-            def __init__(self):
-                config = ServiceConfig(name="test")
-                super().__init__(config)
-
-        service = TestService()
-
-        # Multiple accesses should return the same ServiceProxy
-        proxy1 = service.other
-        proxy2 = service.other
-        assert proxy1 is proxy2
-
-    def test_method_proxy_creation(self):
-        """Test that MethodProxy is created for method access"""
-
-        class TestService(CliffracerService):
-            other = RpcProxy("other_service")
-
-            def __init__(self):
-                config = ServiceConfig(name="test")
-                super().__init__(config)
-
-        service = TestService()
-
-        # Accessing a method should give us a MethodProxy
-        method = service.other.some_method
-        assert hasattr(method, "_service_name")
-        assert hasattr(method, "_method_name")
-        assert method._service_name == "other_service"
-        assert method._method_name == "some_method"
+        await inventory_service.start()
+        await order_service1.start()
+        await order_service2.start()
+        try:
+            for quantity, order_service in ((5, order_service1), (500, order_service2)):
+                availability = await order_service.inventory.check_availability(
+                    product_id="widget", quantity=quantity
+                )
+                assert availability["quantity"] == quantity
+                assert availability["available"] is (quantity <= 100)
+        finally:
+            await order_service2.stop()
+            await order_service1.stop()
+            await inventory_service.stop()

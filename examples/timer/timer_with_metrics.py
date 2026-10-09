@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Timer + PerformanceMetrics Integration Example
+Timer + MetricsExtension Example
 
-This example shows how timers automatically integrate with Cliffracer's
-PerformanceMetrics system for monitoring and observability.
+This example shows MetricsExtension recording the dispatches of timers: a count, an error
+count and a latency window for the `timer` kind, reported under `/health`. The timers' own
+statistics (`get_timer_stats`) are printed at the end.
 """
 
 import asyncio
@@ -36,6 +37,9 @@ class MetricsTimerService(CliffracerService):
         await asyncio.sleep(0.01)  # 10ms task
         self.task_count += 1
         print(f"[OK] Fast task #{self.task_count} completed")
+        if self.task_count == 1:
+            # The line the examples test waits for: a timer has run and been measured.
+            print("EXAMPLE READY: first fast task completed", flush=True)
 
     @timer(interval=3)  # Every 3 seconds
     async def slow_task(self):
@@ -66,7 +70,7 @@ async def run_metrics_demo():
     """
     Run the metrics demo showing timer integration
     """
-    print("[INFO] Timer + PerformanceMetrics Integration Demo")
+    print("[INFO] Timer + MetricsExtension Demo")
     print("=" * 55)
 
     service = MetricsTimerService()
@@ -108,12 +112,12 @@ async def run_metrics_demo():
             print(f"  • Avg Duration: {timer_info['average_execution_time']:.3f}s")
             print(f"  • Total Runtime: {timer_info['total_execution_time']:.2f}s")
 
-        print("\n[INFO] Timer Metrics Integration Features:")
-        print("  • Automatic execution counting")
-        print("  • Duration tracking in milliseconds")
-        print("  • Error rate monitoring")
-        print("  • Zero-overhead when metrics disabled")
-        print("  • Integrates with PerformanceMetrics system")
+        print("\n[INFO] What MetricsExtension recorded for the timers:")
+        print("  • A dispatch count, error count and rejection count for the `timer` kind")
+        print("  • A latency window in milliseconds, for the kind and not for each timer")
+        print("  • The same numbers under `metrics` in /health")
+        print("\n[INFO] What each timer recorded for itself:")
+        print("  • Its execution count, error rate and duration")
 
     except KeyboardInterrupt:
         print("\n[STOP]  Demo interrupted")

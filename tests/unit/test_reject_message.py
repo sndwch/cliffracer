@@ -110,4 +110,59 @@ async def test_gate_extension_fails_closed_on_unexpected_exception():
     svc, msg, reached = await _dispatch(GateBoomer, "gate_boomer")
     assert reached is False, "handler must not run when gate hook raises"
     body = json.dumps(_replies(msg)[0])
-    assert "refused: extension gate_boomer failed: 'missing_auth_header'" in body, body
+    # The caller is told which gate refused. The KeyError's own text is not the
+    # gate's message to anyone -- it passes the same gate as a handler's
+    # exception, and this service leaves expose_internal_errors at its default.
+    assert "extension gate_boomer failed: internal error" in body, body
+    # A crashed hook is reported as a fault, not as a refusal: the caller is not
+    # being turned away, the service is broken.
+    assert "refused" not in body, body
+    assert "missing_auth_header" not in body, body
+
+
+# --- a RejectMessage from any hook but worker_setup is swallowed like any other exception ------
+#
+# The guarantee holds only because `_guarded_hook` catches `Exception` generically. Every refusal
+# above is raised in `worker_setup`; these raise it where it must change nothing.
+
+
+@pytest.mark.parametrize("hook", ["worker_result", "worker_teardown"])
+async def test_a_refusal_from_a_hook_after_the_handler_does_not_rewrite_its_reply(hook):
+    ran: list[str] = []
+
+    async def refuse_too_late(self, *args):
+        ran.append(hook)
+        raise RejectMessage("too late to refuse")
+
+    late = type("LateRejecter", (Extension,), {hook: refuse_too_late})
+
+    svc, msg, reached = await _dispatch(late, "late")
+
+    assert ran == [hook], "the hook must have run, or this proves nothing"
+    assert reached is True
+    (reply,) = _replies(msg)
+    assert reply["success"] is True and reply["result"] == "handler ran", reply
+
+
+@pytest.mark.parametrize("hook", ["before_call", "after_call"])
+async def test_a_refusal_from_a_send_hook_does_not_stop_the_message_going_out(hook):
+    ran: list[str] = []
+
+    async def refuse_the_send(self, *args):
+        ran.append(hook)
+        raise RejectMessage("not from a send hook")
+
+    refuser = type("SendRejecter", (Extension,), {hook: refuse_the_send})
+
+    class Svc(CliffracerService):
+        sender = refuser()
+
+    svc = Svc(ServiceConfig(name="s"))
+    svc.nc = AsyncMock()
+    await svc.container._setup_extensions()
+
+    await svc.publish_event("orders.created", order_id="o1")
+
+    assert ran == [hook]
+    svc.nc.publish.assert_awaited_once()
+    assert svc.nc.publish.await_args.args[0] == "orders.created"

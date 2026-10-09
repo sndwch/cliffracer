@@ -4,15 +4,14 @@ Tracks latency, throughput, serialization, and extension overheads across:
 1. Core RPC concurrency (10, 100, 1000)
 2. Core JetStream batch pull consumption
 3. Serialization (JSON vs MsgPack at 1KB, 100KB, 1MB)
-4. cliffracer-http AutoGateway translation overhead
-5. cliffracer-faststream resilient ACK hypervisor overhead
-6. cliffracer-auth token validation & password verification
-7. cliffracer-kv bulk throughput and stress to failure
+4. cliffracer-auth token validation & password verification
+5. cliffracer-kv bulk throughput and stress to failure
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import platform
@@ -20,16 +19,24 @@ import subprocess
 import time
 import types
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
 
-import msgpack
 import nats
-from fastapi import FastAPI
+from loguru import logger
+from nats.errors import MaxPayloadError
 from pydantic import BaseModel
 
-from cliffracer import CliffracerService, rpc
+from cliffracer import CliffracerService, ServiceConfig, rpc
+from cliffracer.core.validation import (
+    CONTENT_TYPE_JSON,
+    deserialize_payload,
+    pack_msgpack,
+    serialize_payload,
+    unpack_msgpack,
+)
 
 DEFAULT_NATS_URL = os.environ.get("CLIFFRACER_TEST_NATS_URL", "nats://localhost:4222")
 
@@ -54,73 +61,101 @@ def get_git_commit() -> str:
 # ==============================================================================
 
 
+class BenchmarkEchoResponse(BaseModel):
+    status: str = "ok"
+    result: int = 42
+
+
+class BenchmarkRpcService(CliffracerService):
+    @rpc
+    async def echo(self, value: int = 42) -> BenchmarkEchoResponse:
+        return BenchmarkEchoResponse(status="ok", result=value)
+
+
+@contextlib.contextmanager
+def _cliffracer_logging_silenced() -> Iterator[None]:
+    """Silence cliffracer's own logs for one measurement.
+
+    Loguru's enable/disable is process-global and shared with every other test
+    in the session, so it has to be paired by a context manager rather than by
+    a `finally` further down: anything that raises between the disable and the
+    try -- `svc.start()` against an absent broker, say -- would otherwise leave
+    cliffracer logging off for the rest of the run, and the damage would land
+    in an unrelated test.
+    """
+    logger.disable("cliffracer")
+    try:
+        yield
+    finally:
+        logger.enable("cliffracer")
+
+
 async def benchmark_rpc(
     nats_url: str = DEFAULT_NATS_URL,
     concurrency_levels: tuple[int, ...] = (10, 100, 1000),
 ) -> dict[str, dict[str, float]]:
     """Measure Core RPC latency (p50/p95/p99) and throughput at concurrency levels."""
-    nc = await nats.connect(nats_url)
-    subject = f"bench.rpc.{uuid.uuid4().hex[:8]}"
-
-    async def rpc_handler(msg: Any) -> None:
-        await msg.respond(b'{"status": "ok", "result": 42}')
-
-    sub = await nc.subscribe(subject, cb=rpc_handler)
-    await nc.flush()
-
     results: dict[str, dict[str, float]] = {}
 
-    try:
-        # Warmup connection and event loop
-        for _ in range(50):
-            await nc.request(subject, b'{"method": "test"}', timeout=5.0)
+    with _cliffracer_logging_silenced():
+        svc_name = f"bench_rpc_{uuid.uuid4().hex[:8]}"
+        config = ServiceConfig(name=svc_name, nats_url=nats_url)
+        svc = BenchmarkRpcService(config)
+        await svc.start()
+        try:
+            # Warmup connection and service dispatch pipeline
+            for _ in range(50):
+                res = await svc.call_rpc(svc_name, "echo", value=42)
+                assert res == {"status": "ok", "result": 42}
 
-        for c in concurrency_levels:
-            # Determine total requests for statistical stability:
-            # Concurrency 10 needs at least 200 requests to eliminate microsecond OS jitter.
-            if c <= 10:
-                total_reqs = max(c * 20, 200)
-            elif c <= 100:
-                total_reqs = max(c * 10, 1000)
-            else:
-                total_reqs = max(c, 1000)
+            for c in concurrency_levels:
+                if c <= 10:
+                    total_reqs = max(c * 20, 200)
+                elif c <= 100:
+                    total_reqs = max(c * 10, 1000)
+                else:
+                    total_reqs = max(c, 1000)
 
-            async def send_req(s: asyncio.Semaphore) -> float:
-                async with s:
-                    t0 = time.perf_counter()
-                    resp = await nc.request(subject, b'{"method": "test"}', timeout=5.0)
-                    lat_ms = (time.perf_counter() - t0) * 1000.0
-                    assert resp.data == b'{"status": "ok", "result": 42}'
-                    return lat_ms
+                async def send_req(s: asyncio.Semaphore) -> float:
+                    async with s:
+                        t0 = time.perf_counter()
+                        resp = await svc.call_rpc(svc_name, "echo", value=42)
+                        lat_ms = (time.perf_counter() - t0) * 1000.0
+                        assert resp == {"status": "ok", "result": 42}
+                        return lat_ms
 
-            # Run 3 trials to eliminate OS scheduling jitter and record the best run
-            best_throughput = 0.0
-            best_latencies: list[float] = []
+                # Run 3 trials to eliminate OS scheduling jitter and record the best run
+                best_throughput = 0.0
+                best_latencies: list[float] = []
 
-            for _ in range(3):
-                sem = asyncio.Semaphore(c)
-                start = time.perf_counter()
-                latencies = list(await asyncio.gather(*[send_req(sem) for _ in range(total_reqs)]))
-                total_time = time.perf_counter() - start
-                throughput = total_reqs / total_time if total_time > 0 else 0.0
-                if throughput > best_throughput:
-                    best_throughput = throughput
-                    best_latencies = latencies
+                for _ in range(3):
+                    sem = asyncio.Semaphore(c)
+                    start = time.perf_counter()
+                    latencies = list(
+                        await asyncio.gather(*[send_req(sem) for _ in range(total_reqs)])
+                    )
+                    total_time = time.perf_counter() - start
+                    throughput = total_reqs / total_time if total_time > 0 else 0.0
+                    if throughput > best_throughput:
+                        best_throughput = throughput
+                        best_latencies = latencies
 
-            best_latencies.sort()
-            p50 = best_latencies[int(len(best_latencies) * 0.50)]
-            p95 = best_latencies[int(len(best_latencies) * 0.95)]
-            p99 = best_latencies[int(len(best_latencies) * 0.99)]
+                best_latencies.sort()
+                p50 = best_latencies[int(len(best_latencies) * 0.50)]
+                p95 = best_latencies[int(len(best_latencies) * 0.95)]
+                p99 = best_latencies[int(len(best_latencies) * 0.99)]
 
-            results[f"concurrency_{c}"] = {
-                "throughput_msgs_sec": round(best_throughput, 1),
-                "p50_latency_ms": round(p50, 3),
-                "p95_latency_ms": round(p95, 3),
-                "p99_latency_ms": round(p99, 3),
-            }
-    finally:
-        await sub.unsubscribe()
-        await nc.close()
+                results[f"concurrency_{c}"] = {
+                    "throughput_msgs_sec": round(best_throughput, 1),
+                    "p50_latency_ms": round(p50, 3),
+                    "p95_latency_ms": round(p95, 3),
+                    "p99_latency_ms": round(p99, 3),
+                }
+        finally:
+            try:
+                await svc.stop()
+            except Exception:
+                pass
 
     return results
 
@@ -131,7 +166,9 @@ async def benchmark_rpc(
 
 
 async def benchmark_jetstream(
-    nats_url: str = DEFAULT_NATS_URL, total_messages: int = 20000, batch_size: int = 250
+    nats_url: str = DEFAULT_NATS_URL,
+    total_messages: int = 20000,
+    batch_size: int = 250,
 ) -> dict[str, Any]:
     """Measure JetStream batch pull consumption throughput and latency."""
     nc = await nats.connect(nats_url)
@@ -145,6 +182,8 @@ async def benchmark_jetstream(
 
     best_throughput = 0.0
     best_p50 = 0.0
+    best_consumed = 0
+    best_acked = 0
 
     try:
         # Run 3 trials to eliminate OS scheduling jitter and record the best run
@@ -167,7 +206,8 @@ async def benchmark_jetstream(
 
             while consumed < total_messages:
                 b_start = time.perf_counter()
-                msgs = await psub.fetch(batch=batch_size, timeout=3.0)
+                fetch_batch = min(batch_size, total_messages - consumed)
+                msgs = await psub.fetch(batch=fetch_batch, timeout=3.0)
                 batch_lat = (time.perf_counter() - b_start) * 1000.0
                 batch_latencies.append(batch_lat)
 
@@ -181,14 +221,26 @@ async def benchmark_jetstream(
             batch_latencies.sort()
             p50 = batch_latencies[len(batch_latencies) // 2] if batch_latencies else 0.0
 
-            if throughput > best_throughput:
+            await nc.flush()
+            acked = 0
+            for _ in range(50):
+                c_info = await js.consumer_info(stream_name, consumer_durable)
+                acked = c_info.ack_floor.consumer_seq if c_info.ack_floor else 0
+                if acked >= consumed or c_info.num_ack_pending == 0:
+                    break
+                await asyncio.sleep(0.02)
+
+            if throughput > best_throughput or best_consumed == 0:
                 best_throughput = throughput
                 best_p50 = p50
+                best_consumed = consumed
+                best_acked = acked
 
         return {
             "throughput_msgs_sec": round(best_throughput, 1),
             "p50_batch_latency_ms": round(best_p50, 3),
-            "messages_consumed": total_messages,
+            "messages_consumed": best_consumed,
+            "messages_acked": best_acked,
             "batch_size": batch_size,
         }
     finally:
@@ -226,8 +278,10 @@ def benchmark_serialization(
         }
 
         # Warmup
-        _ = json.dumps(sample_data).encode("utf-8")
-        _ = msgpack.packb(sample_data)
+        warmup_json, _ = serialize_payload(sample_data, format="json")
+        _ = deserialize_payload(warmup_json, content_type=CONTENT_TYPE_JSON)
+        warmup_msgpack = pack_msgpack(sample_data)
+        _ = unpack_msgpack(warmup_msgpack)
 
         # Run 3 trials to eliminate OS scheduling jitter and record the best run
         best_json_ser_ms = float("inf")
@@ -236,12 +290,14 @@ def benchmark_serialization(
         best_msgpack_deser_ms = float("inf")
         json_bytes = b""
         msgpack_bytes = b""
+        deser_json: Any = None
+        deser_msgpack: Any = None
 
         for _ in range(3):
             # JSON Serialization
             t0 = time.perf_counter()
             for _ in range(iterations):
-                json_bytes = json.dumps(sample_data).encode("utf-8")
+                json_bytes, _ = serialize_payload(sample_data, format="json")
             best_json_ser_ms = min(
                 best_json_ser_ms, ((time.perf_counter() - t0) / iterations) * 1000.0
             )
@@ -249,7 +305,7 @@ def benchmark_serialization(
             # JSON Deserialization
             t0 = time.perf_counter()
             for _ in range(iterations):
-                _ = json.loads(json_bytes.decode("utf-8"))
+                deser_json = deserialize_payload(json_bytes, content_type=CONTENT_TYPE_JSON)
             best_json_deser_ms = min(
                 best_json_deser_ms, ((time.perf_counter() - t0) / iterations) * 1000.0
             )
@@ -257,7 +313,7 @@ def benchmark_serialization(
             # MessagePack Serialization
             t0 = time.perf_counter()
             for _ in range(iterations):
-                msgpack_bytes = msgpack.packb(sample_data)
+                msgpack_bytes = pack_msgpack(sample_data)
             best_msgpack_ser_ms = min(
                 best_msgpack_ser_ms, ((time.perf_counter() - t0) / iterations) * 1000.0
             )
@@ -265,10 +321,14 @@ def benchmark_serialization(
             # MessagePack Deserialization
             t0 = time.perf_counter()
             for _ in range(iterations):
-                _ = msgpack.unpackb(msgpack_bytes)
+                deser_msgpack = unpack_msgpack(msgpack_bytes)
             best_msgpack_deser_ms = min(
                 best_msgpack_deser_ms, ((time.perf_counter() - t0) / iterations) * 1000.0
             )
+
+        # Round-trip validation
+        assert deser_json == sample_data, f"JSON round-trip validation failed for {label}"
+        assert deser_msgpack == sample_data, f"MessagePack round-trip validation failed for {label}"
 
         speedup_ser = (
             round(best_json_ser_ms / best_msgpack_ser_ms, 2) if best_msgpack_ser_ms > 0 else 1.0
@@ -293,142 +353,12 @@ def benchmark_serialization(
     return results
 
 
-class PingResp(BaseModel):
-    reply: str
-
-
-class PingService(CliffracerService):
-    SERVICE = "pingsvc"
-    VERSION = "1.0.0"
-
-    @rpc
-    async def get_ping(self, text: str) -> PingResp:
-        return PingResp(reply=text)
-
-
 # ==============================================================================
-# 4. Extension: cliffracer-http AutoGateway Overhead
+# 4. Extension: cliffracer-auth Benchmarks
 # ==============================================================================
 
 
-async def benchmark_http_gateway(iterations: int = 100) -> dict[str, float]:
-    """Measure cliffracer-http AutoGateway translation overhead vs raw RPC."""
-    from cliffracer_http import mount_rpc_routes
-    from httpx import ASGITransport, AsyncClient
-
-    app = FastAPI()
-    mock_service = MagicMock()
-    mock_service.call_rpc = AsyncMock(return_value={"reply": "pong"})
-
-    _ = mount_rpc_routes(app=app, service=mock_service, target=PingService, prefix="")
-
-    # Raw RPC benchmark
-    t0 = time.perf_counter()
-    for _ in range(iterations):
-        _ = await mock_service.call_rpc("pingsvc", "get_ping", {"text": "bench"})
-    raw_ms = ((time.perf_counter() - t0) / iterations) * 1000.0
-
-    # HTTP Gateway benchmark via AsyncClient
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        t0 = time.perf_counter()
-        for _ in range(iterations):
-            resp = await ac.get("/pingsvc/get_ping?text=bench")
-            assert resp.status_code == 200
-        http_ms = ((time.perf_counter() - t0) / iterations) * 1000.0
-
-    overhead_ms = max(0.0, http_ms - raw_ms)
-
-    return {
-        "raw_rpc_latency_ms": round(raw_ms, 4),
-        "http_gateway_latency_ms": round(http_ms, 4),
-        "overhead_ms": round(overhead_ms, 4),
-    }
-
-
-# ==============================================================================
-# 5. Extension: cliffracer-faststream Hypervisor Overhead
-# ==============================================================================
-
-
-async def benchmark_faststream(iterations: int = 1000) -> dict[str, float]:
-    """Measure cliffracer-faststream resilient ACK hypervisor vs standalone FastStream."""
-    from cliffracer_faststream.middleware import CliffracerAckMiddleware
-
-    from cliffracer.core.service_config import ServiceConfig
-
-    config = ServiceConfig(name="bench_faststream", jetstream_ack_wait=30.0)
-    container = MagicMock()
-    container._active_tasks = set()
-    mw = CliffracerAckMiddleware(container=container, config=config)
-
-    class MockJetStreamMsg:
-        metadata = MagicMock()
-
-        async def in_progress(self) -> None:
-            pass
-
-        async def ack(self) -> None:
-            pass
-
-    msg = MockJetStreamMsg()
-
-    async def dummy_handler(m: Any) -> str:
-        return "success"
-
-    # Warmup both standalone and hypervisor execution
-    for _ in range(max(iterations // 10, 50)):
-        _ = await dummy_handler(msg)
-        _ = await mw.consume_scope(dummy_handler, msg)
-
-    # Run 3 trials to eliminate OS scheduling jitter and record the best run
-    best_standalone_tps = 0.0
-    best_hypervisor_tps = 0.0
-    min_dur_standalone = float("inf")
-    min_dur_hypervisor = float("inf")
-
-    for _ in range(3):
-        # Standalone execution
-        t0 = time.perf_counter()
-        for _ in range(iterations):
-            _ = await dummy_handler(msg)
-        dur_standalone = time.perf_counter() - t0
-        if dur_standalone > 0:
-            standalone_tps = iterations / dur_standalone
-            if standalone_tps > best_standalone_tps:
-                best_standalone_tps = standalone_tps
-            min_dur_standalone = min(min_dur_standalone, dur_standalone)
-
-        # Hypervisor middleware execution
-        t0 = time.perf_counter()
-        for _ in range(iterations):
-            _ = await mw.consume_scope(dummy_handler, msg)
-        dur_hypervisor = time.perf_counter() - t0
-        if dur_hypervisor > 0:
-            hypervisor_tps = iterations / dur_hypervisor
-            if hypervisor_tps > best_hypervisor_tps:
-                best_hypervisor_tps = hypervisor_tps
-            min_dur_hypervisor = min(min_dur_hypervisor, dur_hypervisor)
-
-    overhead_ms = (
-        ((min_dur_hypervisor - min_dur_standalone) / iterations) * 1000.0
-        if min_dur_hypervisor < float("inf") and min_dur_standalone < float("inf")
-        else 0.0
-    )
-    overhead_ms = max(overhead_ms, 0.0)
-
-    return {
-        "standalone_msgs_sec": round(best_standalone_tps, 1),
-        "hypervisor_msgs_sec": round(best_hypervisor_tps, 1),
-        "overhead_per_msg_ms": round(overhead_ms, 5),
-    }
-
-
-# ==============================================================================
-# 6. Extension: cliffracer-auth Benchmarks
-# ==============================================================================
-
-
-def benchmark_auth(token_iterations: int = 5000, hash_iterations: int = 5) -> dict[str, float]:
+def benchmark_auth(token_iterations: int = 5000, hash_iterations: int = 5) -> dict[str, Any]:
     """Measure cliffracer-auth token validation and password verification overhead."""
     from cliffracer_auth.simple_auth import AuthConfig, SimpleAuthService
 
@@ -469,6 +399,7 @@ def benchmark_auth(token_iterations: int = 5000, hash_iterations: int = 5) -> di
     # Password Hash Verification (Modern per-user salt PBKDF2) (best of 3 trials)
     modern_trials: list[float] = []
     modern_hash = auth_svc.hash_password("pass12345")
+    assert not auth_svc.verify_password("wrong-password", modern_hash)
     for _ in range(3):
         t0 = time.perf_counter()
         for _ in range(hash_iterations):
@@ -481,6 +412,7 @@ def benchmark_auth(token_iterations: int = 5000, hash_iterations: int = 5) -> di
     # Legacy Password Hash Verification (best of 3 trials)
     legacy_trials: list[float] = []
     legacy_hash = auth_svc._legacy_hash("pass12345")
+    assert not auth_svc.verify_password("wrong-password", legacy_hash)
     for _ in range(3):
         t0 = time.perf_counter()
         for _ in range(hash_iterations):
@@ -498,7 +430,7 @@ def benchmark_auth(token_iterations: int = 5000, hash_iterations: int = 5) -> di
 
 
 # ==============================================================================
-# 7. Extension: cliffracer-kv Bulk Throughput & Stress to Failure
+# 5. Extension: cliffracer-kv Bulk Throughput & Stress to Failure
 # ==============================================================================
 
 
@@ -519,9 +451,10 @@ async def benchmark_kv(nats_url: str = DEFAULT_NATS_URL, num_items: int = 5000) 
     try:
         # 1. Bulk Put (concurrent / pipelined across trials)
         put_trials: list[float] = []
+        last_put_results: list[int] = []
         for _ in range(3):
             t0 = time.perf_counter()
-            await asyncio.gather(
+            put_results = await asyncio.gather(
                 *[
                     kv.put(
                         bucket_name,
@@ -531,19 +464,42 @@ async def benchmark_kv(nats_url: str = DEFAULT_NATS_URL, num_items: int = 5000) 
                     for i in range(num_items)
                 ]
             )
-            put_trials.append(num_items / (time.perf_counter() - t0))
-        put_ops = max(put_trials)
+            elapsed = time.perf_counter() - t0
+            committed_count = len([r for r in put_results if isinstance(r, int) and r > 0])
+            put_trials.append(committed_count / elapsed if elapsed > 0 else 0.0)
+            last_put_results = put_results
+        put_ops = max(put_trials) if put_trials else 0.0
+        committed_puts = len([r for r in last_put_results if isinstance(r, int) and r > 0])
+
+        # Assertions on put revisions
+        assert committed_puts == num_items, (
+            f"Expected {num_items} committed puts, got {committed_puts}"
+        )
+        assert all(isinstance(r, int) and r > 0 for r in last_put_results), (
+            "All revisions must be positive integers"
+        )
 
         # 2. Bulk Get (concurrent / pipelined across trials)
         get_trials: list[float] = []
+        last_vals: list[Any] = []
         for _ in range(3):
             t0 = time.perf_counter()
             vals = await asyncio.gather(
                 *[kv.get(bucket_name, f"bench_key_{i}") for i in range(num_items)]
             )
-            assert len(vals) == num_items
-            get_trials.append(num_items / (time.perf_counter() - t0))
-        get_ops = max(get_trials)
+            elapsed = time.perf_counter() - t0
+            valid_reads = [v for v in vals if v is not None]
+            get_trials.append(len(valid_reads) / elapsed if elapsed > 0 else 0.0)
+            last_vals = vals
+        get_ops = max(get_trials) if get_trials else 0.0
+
+        # Assert non-None gets, exact length, and round-trip data consistency
+        assert all(v is not None for v in last_vals), "Cache misses detected in bulk get"
+        assert len(last_vals) == num_items, f"Expected {num_items} items, got {len(last_vals)}"
+        for i, val in enumerate(last_vals):
+            assert isinstance(val, dict), f"Item {i} is not a dict"
+            assert val.get("index") == i, f"Item {i} index mismatch: {val.get('index')}"
+            assert val.get("valid") is True, f"Item {i} valid flag mismatch"
 
         # Sample individual round-trip latencies
         for i in range(min(num_items, 250)):
@@ -559,8 +515,10 @@ async def benchmark_kv(nats_url: str = DEFAULT_NATS_URL, num_items: int = 5000) 
         oversized_payload = {"huge": "M" * (2 * 1024 * 1024)}
         try:
             await kv.put(bucket_name, "huge_key", oversized_payload)
-        except Exception:
-            # Service gracefully raises error rather than silently failing
+        except MaxPayloadError:
+            # The failure this check is for: the server's payload limit, refused by name. Any
+            # other exception (a serialization error, a closed connection, a missing bucket) is
+            # not graceful degradation under stress, so it propagates and fails the benchmark.
             stress_failure_handled = True
 
         # 4. Verify Recovery (No Corrupted Zombie State)
@@ -574,7 +532,7 @@ async def benchmark_kv(nats_url: str = DEFAULT_NATS_URL, num_items: int = 5000) 
             "bulk_put_ops_sec": round(put_ops, 1),
             "bulk_get_ops_sec": round(get_ops, 1),
             "p50_latency_ms": round(p50, 3),
-            "items_processed": num_items,
+            "items_processed": committed_puts,
             "stress_failure_handled": stress_failure_handled,
             "recovery_verified": recovery_verified,
         }
@@ -591,6 +549,28 @@ async def benchmark_kv(nats_url: str = DEFAULT_NATS_URL, num_items: int = 5000) 
 # ==============================================================================
 
 
+#: The memory cap of the control group this process runs in, which on a runner's job container is
+#: the cap the runner set. `psutil` reads the host's total instead, so a change to the cap does not
+#: show in `total_ram_gb`.
+CGROUP_MEMORY_MAX = Path("/sys/fs/cgroup/memory.max")
+
+
+def cgroup_memory_limit_gb(path: Path | None = None) -> float | None:
+    """The control group's memory limit in GiB, or None when it has none or cannot be read.
+
+    The file holds a byte count, or `max` for no limit. A missing file (no cgroup v2 here, or not
+    on Linux) and a value that is not a number are both "no figure", and the block records null for
+    them, as it does for a host that cannot report its load.
+    """
+    try:
+        text = (CGROUP_MEMORY_MAX if path is None else path).read_text().strip()
+    except OSError:
+        return None
+    if not text.isdigit():
+        return None
+    return round(int(text) / (1024**3), 2)
+
+
 def get_environment_context(nats_url: str = DEFAULT_NATS_URL) -> dict[str, Any]:
     """Capture node specifications, runner hardware, NATS allocations, and network topology."""
     import urllib.parse
@@ -600,13 +580,37 @@ def get_environment_context(nats_url: str = DEFAULT_NATS_URL) -> dict[str, Any]:
 
     # 1. Runner Node Specifications
     vm = psutil.virtual_memory()
-    runner_info = {
+    # The first five describe the hardware class and are what the regression checker compares. The
+    # rest (the memory limit, the load, the runner name) describe the conditions this particular run
+    # was taken under and differ between runs, so RUNNER_SPEC_FIELDS in
+    # scripts/check_benchmark_regression.py names which are which: a number here that varies per run
+    # would otherwise read as a different machine and the checker would refuse to score every run.
+    runner_info: dict[str, Any] = {
         "cpu_count": os.cpu_count() or 1,
         "cpu_arch": platform.machine(),
         "total_ram_gb": round(vm.total / (1024**3), 2),
         "os": f"{platform.system()} {platform.release()}",
         "python_version": platform.python_version(),
     }
+    # A condition of this run, not a hardware class: kept out of RUNNER_SPEC_FIELDS, so a cap that
+    # differs from the baseline's is on record without refusing to score the run.
+    runner_info["memory_limit_gb"] = cgroup_memory_limit_gb()
+
+    # What else the host was doing. A benchmark taken on a busy host reads as a
+    # regression, so the number travels with the load it was measured under.
+    try:
+        one, five, fifteen = os.getloadavg()
+        runner_info["load_average"] = {
+            "1min": round(one, 2),
+            "5min": round(five, 2),
+            "15min": round(fifteen, 2),
+        }
+    except OSError:
+        runner_info["load_average"] = None
+
+    runner_name = os.environ.get("RUNNER_NAME") or os.environ.get("GITEA_RUNNER_NAME")
+    if runner_name:
+        runner_info["runner_name"] = runner_name
 
     # 2. Network Topology Context
     parsed = urllib.parse.urlparse(nats_url)
@@ -626,11 +630,7 @@ def get_environment_context(nats_url: str = DEFAULT_NATS_URL) -> dict[str, Any]:
     }
 
     # 3. NATS Server Specifications & Resource Allocations
-    nats_info: dict[str, Any] = {
-        "version": "2.10.29",
-        "jetstream_enabled": True,
-        "max_payload_bytes": 1048576,
-    }
+    nats_info: dict[str, Any] = {}
 
     # Query monitoring port if available (default 8222)
     try:
@@ -640,14 +640,18 @@ def get_environment_context(nats_url: str = DEFAULT_NATS_URL) -> dict[str, Any]:
         )
         with urllib.request.urlopen(req, timeout=1.0) as resp:
             varz = json.loads(resp.read().decode("utf-8"))
-            nats_info["version"] = varz.get("version", "2.10.29")
+            nats_info["version"] = varz.get("version", "unknown")
             nats_info["server_id"] = varz.get("server_id", "unknown")
+            nats_info["jetstream_enabled"] = varz.get("jetstream") is not None
+            nats_info["max_payload_bytes"] = varz.get("max_payload", 1048576)
             nats_info["memory_usage_bytes"] = varz.get("mem", 0)
             nats_info["cpu_pct"] = varz.get("cpu", 0.0)
             nats_info["max_connections"] = varz.get("max_connections", 65536)
             nats_info["active_connections"] = varz.get("connections", 0)
-    except Exception:
-        pass
+    except Exception as exc:
+        nats_info = {
+            "probe_failed": f"{type(exc).__name__}: {exc}",
+        }
 
     return {
         "runner": runner_info,
@@ -667,42 +671,45 @@ async def run_all_benchmarks(
 ) -> dict[str, Any]:
     """Execute complete benchmarking battery and return structured dictionary."""
     metrics: dict[str, Any] = {}
+    failures: dict[str, str] = {}
 
     # 1. Core RPC
-    metrics["rpc"] = await benchmark_rpc(nats_url)
+    try:
+        metrics["rpc"] = await benchmark_rpc(nats_url)
+    except Exception as exc:
+        failures["rpc"] = f"{type(exc).__name__}: {exc}"
+        metrics["rpc"] = {"failed": True, "error": str(exc)}
 
     # 2. JetStream
-    metrics["jetstream"] = await benchmark_jetstream(nats_url)
+    try:
+        metrics["jetstream"] = await benchmark_jetstream(nats_url)
+    except Exception as exc:
+        failures["jetstream"] = f"{type(exc).__name__}: {exc}"
+        metrics["jetstream"] = {"failed": True, "error": str(exc)}
 
     # 3. Serialization
-    metrics["serialization"] = benchmark_serialization()
+    try:
+        metrics["serialization"] = benchmark_serialization()
+    except Exception as exc:
+        failures["serialization"] = f"{type(exc).__name__}: {exc}"
+        metrics["serialization"] = {"failed": True, "error": str(exc)}
 
     if include_extensions:
-        # 4. HTTP Gateway
-        try:
-            metrics["http_gateway"] = await benchmark_http_gateway()
-        except Exception as exc:
-            metrics["http_gateway"] = {"skipped": str(exc)}
-
-        # 5. FastStream Hypervisor
-        try:
-            metrics["faststream"] = await benchmark_faststream()
-        except Exception as exc:
-            metrics["faststream"] = {"skipped": str(exc)}
-
-        # 6. Auth
+        # 4. Auth
         try:
             metrics["auth"] = benchmark_auth()
         except Exception as exc:
-            metrics["auth"] = {"skipped": str(exc)}
+            failures["auth"] = f"{type(exc).__name__}: {exc}"
+            metrics["auth"] = {"failed": True, "error": str(exc)}
 
-        # 7. KV Throughput & Stress
+        # 5. KV Throughput & Stress
         try:
             metrics["kv"] = await benchmark_kv(nats_url)
         except Exception as exc:
-            metrics["kv"] = {"skipped": str(exc)}
+            failures["kv"] = f"{type(exc).__name__}: {exc}"
+            metrics["kv"] = {"failed": True, "error": str(exc)}
 
-    return {
+    result: dict[str, Any] = {
         "version": "1.0.0",
         "timestamp": datetime.now(UTC).isoformat(),
         "git_commit": get_git_commit(),
@@ -714,3 +721,7 @@ async def run_all_benchmarks(
         "environment": get_environment_context(nats_url),
         "metrics": metrics,
     }
+    if failures:
+        result["failures"] = failures
+
+    return result

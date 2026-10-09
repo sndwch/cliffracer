@@ -29,13 +29,13 @@ def test_load_yaml_unknown_field_raises(tmp_path):
 
 def test_build_overrides_precedence():
     yaml_config = {
-        "global": {"nats_url": "nats://g:4222", "log_level": "INFO"},
-        "services": {"alpha_service": {"log_level": "WARNING"}},
+        "global": {"nats_url": "nats://g:4222", "version": "1.0.0"},
+        "services": {"alpha_service": {"version": "2.0.0"}},
     }
-    flags = {"log_level": "DEBUG"}  # flags win
+    flags = {"version": "3.0.0"}  # flags win
     result = build_overrides("alpha_service", yaml_config, flags)
     assert result["nats_url"] == "nats://g:4222"  # from global
-    assert result["log_level"] == "DEBUG"  # flag beats per-service beats global
+    assert result["version"] == "3.0.0"  # flag beats per-service beats global
 
 
 def test_build_overrides_no_sources_is_empty():
@@ -59,6 +59,26 @@ def test_load_yaml_malformed_yaml_raises_config_error(tmp_path):
     p.write_text(": bad: yaml: [unterminated")
     with pytest.raises(ConfigError, match="could not read"):
         load_yaml_config(str(p))
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("- a\n- list\n", "--config must contain a mapping, got list"),
+        ("just a string\n", "--config must contain a mapping, got str"),
+        ("global: nope\n", "global must be a mapping, got str"),
+        ("services: [a, b]\n", "services must be a mapping, got list"),
+    ],
+    ids=["root-list", "root-scalar", "global-scalar", "services-list"],
+)
+def test_load_yaml_top_level_shape_errors_name_what_was_found(tmp_path, text, message):
+    p = tmp_path / "bad.yaml"
+    p.write_text(text)
+
+    with pytest.raises(ConfigError) as caught:
+        load_yaml_config(str(p))
+
+    assert message in str(caught.value)
 
 
 def test_load_yaml_non_dict_service_section_raises(tmp_path):

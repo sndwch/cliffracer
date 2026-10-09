@@ -7,11 +7,12 @@ and runtime validation with DLQ routing and message termination.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from cliffracer.core.decorators import broadcast, listener
 from cliffracer.core.dispatch.dlq import DeadLetterPublisher
@@ -66,6 +67,19 @@ def test_build_event_spec_synthesizes_forbid_model() -> None:
     assert spec.payload_model.model_config.get("extra") == "forbid"
 
 
+def test_a_single_shipment_parameter_forbids_undeclared_fields() -> None:
+    async def pack_shipment(self: Any, parcel_id: str) -> None:
+        pass
+
+    spec = build_event_spec("pack_shipment", pack_shipment, owner=DummyOwner)
+
+    assert spec.is_single_model_param is False
+    assert set(spec.payload_model.model_fields) == {"parcel_id"}
+    assert spec.payload_model.model_config.get("extra") == "forbid"
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        spec.payload_model.model_validate({"parcel_id": "parcel-7", "warehouse": "north"})
+
+
 def test_build_event_spec_zero_domain_parameters() -> None:
     async def on_heartbeat(self: Any, subject: str) -> None:
         pass
@@ -85,20 +99,80 @@ def test_build_event_spec_rejects_unannotated_parameter() -> None:
         build_event_spec("bad_handler", bad_handler, owner=DummyOwner)
 
 
-def test_build_event_spec_rejects_var_keyword() -> None:
-    async def var_kw_handler(self: Any, **kwargs: Any) -> None:
+class _DataPayload(BaseModel):
+    order_id: str
+
+
+@pytest.mark.parametrize("name", ["kwargs", "data", "payload"])
+def test_build_event_spec_rejects_a_var_keyword_parameter_whatever_it_is_called(name) -> None:
+    """`build_event_spec` branches on the parameter's KIND and never reads its name, so these are
+    one rule. What differs is the message, which names the parameter the author wrote: that is
+    what is asserted per name. (`data` is also the name the untyped dispatch path treats as the
+    envelope's sink, which the next tests cover for a plain, non-variadic `data` parameter.)"""
+    namespace: dict[str, Any] = {}
+    exec(  # noqa: S102 - a handler whose variadic parameter has a chosen name
+        f"async def handler(self, **{name}): pass", {"Any": Any}, namespace
+    )
+
+    with pytest.raises(UntypedHandler, match=rf"\*{name} is not allowed on an event handler"):
+        build_event_spec("handler", namespace["handler"], owner=DummyOwner)
+
+
+def test_a_plain_parameter_named_data_is_an_ordinary_single_model_parameter() -> None:
+    async def on_order(self: Any, data: _DataPayload) -> None:
         pass
 
-    with pytest.raises(UntypedHandler, match=r"\*kwargs is not allowed on an event handler"):
-        build_event_spec("var_kw_handler", var_kw_handler, owner=DummyOwner)
+    spec = build_event_spec("on_order", on_order, owner=DummyOwner)
+
+    assert spec.is_single_model_param is True
+    assert [p.name for p in spec.params] == ["data"]
+    assert spec.payload_model.model_validate({"order_id": "o1"})
 
 
-def test_build_event_spec_rejects_var_data() -> None:
-    async def var_data_handler(self: Any, **data: Any) -> None:
-        pass
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "data": {"order_id": "o1"},
+            "timestamp": "t",
+            "source_service": "x",
+            "correlation_id": "c",
+        },
+        {"order_id": "o1"},
+    ],
+    ids=["enveloped", "flat"],
+)
+async def test_a_handler_with_a_data_model_parameter_receives_the_model_for_either_wire_shape(
+    body,
+) -> None:
+    """How strict typing meets the envelope's `data` sink: the envelope is unwrapped and the
+    handler's `data: Payload` is built from what was inside it, the same as from a flat body."""
+    import json
 
-    with pytest.raises(UntypedHandler, match=r"\*data is not allowed on an event handler"):
-        build_event_spec("var_data_handler", var_data_handler, owner=DummyOwner)
+    from cliffracer import CliffracerService, ServiceConfig, listener
+
+    received: list[_DataPayload] = []
+
+    class Svc(CliffracerService):
+        @listener("orders.created", fanout=True)
+        async def on_order(self, data: _DataPayload) -> None:
+            received.append(data)
+
+    class Msg:
+        subject = "orders.created"
+        headers: dict[str, str] = {}
+        reply = None
+
+        def __init__(self, raw: bytes) -> None:
+            self.data = raw
+
+    svc = Svc(ServiceConfig(name="typed_data_svc"))
+    svc._discover_handlers()
+
+    await svc.container._dispatch_event(Msg(json.dumps(body).encode()))
+    await svc.container.lifecycle.drain_active_tasks(timeout=2)
+
+    assert received == [_DataPayload(order_id="o1")]
 
 
 def test_build_event_spec_rejects_var_positional() -> None:
@@ -181,8 +255,6 @@ def test_discovery_inspects_listener_and_broadcast() -> None:
     svc = SampleService(config)
     svc.container.discover_handlers()
 
-    assert "on_user" in svc.container.registry.event_specs
-    assert "on_alert" in svc.container.registry.event_specs
     assert "events.user" in svc.container.registry.event_specs_by_subject
     assert "broadcast.alert" in svc.container.registry.event_specs_by_subject
 
@@ -263,7 +335,45 @@ async def test_event_dispatcher_valid_synthesized_model_dispatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_event_dispatcher_invalid_payload_routes_to_dlq_and_safe_term() -> None:
+async def test_a_single_parameter_shipment_listener_terminates_an_undeclared_field() -> None:
+    packed: list[str] = []
+
+    class ShipmentService(CliffracerService):
+        @listener("shipments.packed", durable="shipment-packer")
+        async def on_packed(self, parcel_id: str) -> None:
+            packed.append(parcel_id)
+
+    config = ServiceConfig(name="shipments", jetstream_enabled=True, dlq_subject="dlq.shipments")
+    service = ShipmentService(config)
+    service.container.discover_handlers()
+    dispatcher = service.container.event_dispatcher
+    mock_dlq = AsyncMock(spec=DeadLetterPublisher)
+    dispatcher.dlq = mock_dlq
+
+    message = AsyncMock()
+    message.subject = "shipments.packed"
+    message.data = b'{"parcel_id": "parcel-7", "warehouse": "north"}'
+    message.headers = {"Content-Type": "application/json"}
+    message.metadata = SimpleNamespace(num_delivered=1)
+
+    await service.container._handle_jetstream_event(message)
+
+    assert packed == []
+    mock_dlq.handle_invalid_message.assert_awaited_once()
+    assert message.term.await_count == 1
+    assert message.ack.await_count == 0
+    assert message.nak.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_event_dispatcher_invalid_payload_routes_to_dlq_and_reports_invalid() -> None:
+    """The dispatcher reports INVALID and dead-letters; the caller terminates.
+
+    Terminating is the caller's, because the caller is the layer that knows
+    whether the delivery can be redelivered at all. The JetStream entry point
+    doing it for an INVALID outcome is covered by
+    tests/unit/test_jetstream_ack_policy.py.
+    """
     handled = False
 
     class StrictService(CliffracerService):
@@ -282,12 +392,15 @@ async def test_event_dispatcher_invalid_payload_routes_to_dlq_and_safe_term() ->
 
     msg = AsyncMock()
     msg.subject = "accounts.opened"
-    # extra field violates extra="forbid", and amount is wrong type
-    msg.data = b'{"account_id": "acc-1", "initial_deposit": "invalid", "extra_bad_field": 123}'
+    # one rule broken: the amount is the wrong type. An undeclared field is the next test's.
+    msg.data = b'{"account_id": "acc-1", "initial_deposit": "invalid"}'
     msg.headers = {"Content-Type": "application/json"}
 
     outcome = await dispatcher.handle_event(msg)
     assert outcome == DispatchOutcome.INVALID
     assert handled is False
     assert mock_dlq.handle_invalid_message.called
-    assert msg.term.called
+    assert msg.term.await_count == 0, (
+        "the event dispatcher terminated the message itself; the JetStream layer "
+        "terminates on INVALID, so doing it here too sends a second terminal ack"
+    )

@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "cliffracer-kv"
 dynamic = ["version"]
 description = "NATS Key-Value and Object Store integration for cliffracer services"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 readme = "README.md"
 # Hatchling auto-detects the LICENSE file. It must be copied, not symlinked,
 # to avoid sdist unpacking errors.
@@ -14,8 +14,11 @@ license = {text = "MIT"}
 dependencies = [
     "cliffracer",
     "nats-py>=2.6.0,<3.0.0",
-    "pydantic>=2.0.0,<3.0.0",
+    "pydantic>=2.11.0,<3.0.0",  # the floor cliffracer declares, for the same reason
 ]
+
+[tool.cliffracer]
+lifecycle = "incubating"
 
 [tool.hatch.version]
 source = "vcs"

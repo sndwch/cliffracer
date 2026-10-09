@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import time
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -184,12 +183,10 @@ async def test_shutdown_timeout_cancels_stuck_tasks():
 
         assert len(svc.container._active_tasks) == 1
 
-        start_time = time.monotonic()
         await svc.stop()
-        duration = time.monotonic() - start_time
 
-        # Stop must complete quickly without hanging for 30s
-        assert duration < 0.5
+        # The listener sleeps 30s; only the cancellation stop issues at its
+        # deadline sets this flag, and waiting it out would leave it False.
         assert svc.cancelled is True
         assert svc._stopped is True
 

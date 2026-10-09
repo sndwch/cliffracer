@@ -79,9 +79,12 @@ class HealthMonitorService(CliffracerService):
     # Timer Examples
 
     @timer(interval=30)  # Every 30 seconds
-    async def health_check(self):
+    async def check_dependencies(self):
         """
-        Perform health checks every 30 seconds
+        Check the service's dependencies every 30 seconds.
+
+        Not named `health_check`: that is the method `/health` answers from, and a
+        method of that name on the service replaces it.
         """
         self.health_check_count += 1
 
@@ -136,6 +139,9 @@ class HealthMonitorService(CliffracerService):
         await self.publish_event(
             "metrics.collected", service_name=self.config.name, metrics=current_metrics
         )
+        if self.metrics_collected == 1:
+            # The line the examples test waits for: the eager timer has run and published.
+            print("EXAMPLE READY: eager metrics timer ran", flush=True)
 
     @timer(interval=300)  # Every 5 minutes
     async def cleanup_old_data(self):
@@ -247,48 +253,6 @@ class HealthMonitorService(CliffracerService):
             self.metrics_cache.items(), key=lambda x: x[1]["timestamp"], reverse=True
         )
         return {key: MetricsSample(**sample) for key, sample in sorted_metrics[:limit]}
-
-
-class TimerClientExample:
-    """Example client to interact with the timer service"""
-
-    def __init__(self):
-        config = ServiceConfig(name="timer_client")
-        self.service = CliffracerService(config)
-
-    async def run_demo(self):
-        """Run a demo of the timer service"""
-        await self.service.start()
-
-        try:
-            print("[INFO] Timer Service Demo Client")
-            print("=" * 50)
-
-            # Wait a bit for the service to run some timers
-            print("[INFO]  Waiting for timers to execute...")
-            await asyncio.sleep(65)  # Wait over a minute to see multiple timer executions
-
-            # Query service status
-            print("\n[METRICS] Querying service status...")
-
-            health = await self.service.call_rpc("health_monitor_service", "get_health_status")
-            print(f"Health Status: {health}")
-
-            metrics = await self.service.call_rpc("health_monitor_service", "get_metrics_summary")
-            print(f"Metrics Summary: {metrics}")
-
-            timer_stats = await self.service.call_rpc(
-                "health_monitor_service", "get_timer_statistics"
-            )
-            print(f"Timer Statistics: {timer_stats}")
-
-            recent_metrics = await self.service.call_rpc(
-                "health_monitor_service", "get_recent_metrics", limit=3
-            )
-            print(f"Recent Metrics: {recent_metrics}")
-
-        finally:
-            await self.service.stop()
 
 
 async def main():

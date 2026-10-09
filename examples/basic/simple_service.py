@@ -108,6 +108,23 @@ class InventoryService(CliffracerService):
         super().__init__(config)
         self.inventory = {"widget": 100, "gadget": 50, "doohickey": 25}
 
+    async def on_startup(self) -> None:
+        # Subscriptions are made after this returns, so whether the service is serving is told by
+        # asking it, from a task that outlives startup.
+        self._serving_check = asyncio.create_task(self._say_when_serving())
+
+    async def _say_when_serving(self) -> None:
+        while True:
+            try:
+                await self.call_rpc(
+                    self.config.name, "check_availability", item="widget", quantity=1
+                )
+                break
+            except Exception:
+                await asyncio.sleep(0.1)
+        # The line the examples test waits for: the services answer RPCs.
+        print("EXAMPLE READY: inventory_service answered check_availability", flush=True)
+
     @rpc
     async def check_availability(self, item: str, quantity: int) -> Availability:
         """Check if item is available"""

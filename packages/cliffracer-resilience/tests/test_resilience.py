@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock
 
+import nats.js.errors
 import pytest
 from cliffracer_resilience import (
     CLOSED,
@@ -25,11 +26,15 @@ from cliffracer_resilience import (
     RpcCircuitOpenError,
     rate_limit,
 )
+from cliffracer_resilience import rate_limiter as rate_limiter_module
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
-from cliffracer.client import RpcRefused
-from cliffracer.core.exceptions import ConnectionError as CliffracerConnectionError
-from cliffracer.core.exceptions import RPCError, RPCTimeoutError
+from cliffracer.core.exceptions import (
+    RpcConnectionError,
+    RPCError,
+    RpcServerError,
+    RPCTimeoutError,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -47,6 +52,36 @@ def _rpc_msg(subject: str, data: dict, headers: dict | None = None) -> AsyncMock
 def _get_replies(msg: AsyncMock) -> list[dict]:
     """Helper to extract JSON decoded replies from msg.respond."""
     return [json.loads(c.args[0].decode()) for c in msg.respond.await_args_list]
+
+
+class _LimiterClock:
+    """The time the rate limiters read, moved by the test and by nothing else."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def time(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def limiter_clock(monkeypatch: pytest.MonkeyPatch) -> _LimiterClock:
+    """Replace the `time` the limiter module reads, and only that module's.
+
+    A window of 50 ms is a window the host can outrun: two calls the test means
+    to be "immediately" apart land on opposite sides of it on a loaded runner,
+    and the second is allowed. With the clock held by the test, how long the
+    host takes between two calls no longer decides anything.
+    """
+    clock = _LimiterClock()
+    monkeypatch.setattr(rate_limiter_module, "time", clock)
+    return clock
 
 
 # ============================================================================
@@ -112,13 +147,10 @@ async def test_circuit_breaker_fast_fail_when_open():
         network_called = True
         return "result"
 
-    t0 = time.monotonic()
     with pytest.raises(RpcCircuitOpenError) as exc_info:
         await cb.call(mock_remote_call)
-    elapsed = time.monotonic() - t0
 
     assert network_called is False, "No network call must be made when circuit is OPEN"
-    assert elapsed < 0.05, f"Fast-fail must be near-instantaneous (took {elapsed:.4f}s)"
     assert "payment-service" in str(exc_info.value)
     assert exc_info.value.details.get("state") == "open"
 
@@ -173,13 +205,39 @@ async def test_circuit_breaker_half_open_probe_failure_trips_to_open():
     assert cb.state == HALF_OPEN
 
     # Probe call fails
-    with pytest.raises(RpcRefused):
+    with pytest.raises(RpcServerError):
         async with cb:
-            raise RpcRefused("service unavailable")
+            raise RpcServerError("service unavailable")
 
     # Trips immediately back to OPEN with renewed cooldown
     assert cb.state == OPEN
     assert cb.is_open is True
+
+
+@pytest.mark.parametrize("half_open_max_calls", [1, 3])
+async def test_circuit_breaker_half_open_admits_exactly_the_configured_probes(half_open_max_calls):
+    """The knob, at a value that is not its default: with 3, three probes enter and the fourth is
+    refused. 1 is the default, and a hard-coded `>= 1` satisfies it."""
+    config = CircuitBreakerConfig(
+        failure_threshold=1, recovery_timeout=0.05, half_open_max_calls=half_open_max_calls
+    )
+    cb = CircuitBreaker("test-service", config=config)
+    cb.trip()
+    await asyncio.sleep(0.06)
+    assert cb.state == HALF_OPEN
+
+    entered = 0
+    try:
+        for _ in range(half_open_max_calls):
+            await cb.__aenter__()
+            entered += 1
+        with pytest.raises(RpcCircuitOpenError) as exc_info:
+            async with cb:
+                pass
+        assert "HALF-OPEN" in str(exc_info.value)
+    finally:
+        for _ in range(entered):
+            await cb.__aexit__(None, None, None)
 
 
 async def test_circuit_breaker_half_open_max_calls():
@@ -216,15 +274,15 @@ async def test_circuit_breaker_monitored_exceptions_filtering():
     assert cb.state == CLOSED
 
     # Monitored exceptions do count
-    with pytest.raises(CliffracerConnectionError):
+    with pytest.raises(RpcConnectionError):
         async with cb:
-            raise CliffracerConnectionError("connection dropped")
+            raise RpcConnectionError("broker unreachable")
 
     assert cb.failure_count == 1
 
-    with pytest.raises(RPCError):
+    with pytest.raises(RpcServerError):
         async with cb:
-            raise RPCError("RPC Error: refused: rate limit exceeded")
+            raise RpcServerError("handler raised")
 
     assert cb.failure_count == 2
     assert cb.state == OPEN
@@ -310,18 +368,18 @@ def test_resilient_rpc_proxy_call_async_fails_when_open():
         svc.inventory.check_stock.call_async(item_id="item-1")
 
 
-def test_resilient_rpc_proxy_call_async_returns_coroutine_when_closed():
+def test_resilient_rpc_proxy_call_async_passes_the_dispatch_through_when_closed():
     class TestService(CliffracerService):
         inventory = ResilientRpcProxy("inventory_service")
 
     svc = TestService(ServiceConfig(name="test_svc"))
     dummy_coro = object()
-    svc.call_rpc_no_wait = MagicMock(return_value=dummy_coro)
+    svc.call_async = MagicMock(return_value=dummy_coro)
 
     assert svc.inventory.circuit_breaker.state == CLOSED
     coro = svc.inventory.check_stock.call_async(item_id="item-1", count=5)
 
-    svc.call_rpc_no_wait.assert_called_once_with(
+    svc.call_async.assert_called_once_with(
         "inventory_service", "check_stock", namespace=None, item_id="item-1", count=5
     )
     assert coro is dummy_coro
@@ -332,7 +390,7 @@ def test_resilient_rpc_proxy_call_async_returns_coroutine_when_closed():
 # ============================================================================
 
 
-async def test_in_memory_rate_limiter_sliding_window():
+async def test_in_memory_rate_limiter_sliding_window(limiter_clock):
     limiter = InMemoryRateLimiter()
     key = "user_1"
 
@@ -345,10 +403,19 @@ async def test_in_memory_rate_limiter_sliding_window():
     assert await limiter.acquire(key, calls=3, window=0.05) is False
 
     retry_after = await limiter.get_retry_after(key, window=0.05)
-    assert retry_after > 0.0
+    assert retry_after == pytest.approx(0.05)
 
-    # Wait for window to slide
-    await asyncio.sleep(0.06)
+    # Still inside the window: still refused, and the wait has shrunk
+    limiter_clock.advance(0.04)
+    assert await limiter.acquire(key, calls=3, window=0.05) is False
+    assert await limiter.get_retry_after(key, window=0.05) == pytest.approx(0.01)
+
+    # The window slides past the first three calls
+    limiter_clock.advance(0.02)
+
+    # Nothing is in flight now, so there is nothing to wait for: 0.0 says "retry now", where a
+    # positive number says "wait". A function that always answered a large number fails here.
+    assert await limiter.get_retry_after(key, window=0.05) == 0.0
 
     # Allowed again
     assert await limiter.acquire(key, calls=3, window=0.05) is True
@@ -378,7 +445,7 @@ class _MockKvStore:
 
     async def get(self, key: str) -> _MockKvEntry:
         if key not in self.store:
-            raise KeyError(key)
+            raise nats.js.errors.KeyNotFoundError()
         return self.store[key]
 
     async def create(self, key: str, value: bytes) -> int:
@@ -403,7 +470,7 @@ class _MockKvStore:
         self.store.pop(key, None)
 
 
-async def test_kv_rate_limiter_distributed_sliding_window():
+async def test_kv_rate_limiter_distributed_sliding_window(limiter_clock):
     mock_kv = _MockKvStore()
     limiter = KvRateLimiter(kv=mock_kv, bucket_name="rate_limits")
 
@@ -419,8 +486,8 @@ async def test_kv_rate_limiter_distributed_sliding_window():
     timestamps = json.loads(entry.value.decode())
     assert len(timestamps) == 2
 
-    # Wait for window to expire
-    await asyncio.sleep(0.06)
+    # Move past the window
+    limiter_clock.advance(0.06)
     assert await limiter.acquire(key, calls=2, window=0.05) is True
 
 
@@ -441,7 +508,7 @@ async def test_kv_rate_limiter_fallback_to_in_memory():
 # ============================================================================
 
 
-async def test_rate_limit_decorator_standalone():
+async def test_rate_limit_decorator_standalone(limiter_clock):
     @rate_limit(calls=2, window=0.05)
     async def greet(name: str) -> str:
         return f"hello {name}"
@@ -455,7 +522,7 @@ async def test_rate_limit_decorator_standalone():
     assert "rate limit exceeded" in str(exc_info.value)
 
     # Window expires
-    await asyncio.sleep(0.06)
+    limiter_clock.advance(0.06)
     assert await greet("dave") == "hello dave"
 
 
@@ -581,7 +648,7 @@ async def test_resilience_extension_partitioned_by_key():
     assert _get_replies(msg_b2)[0]["error"] == "refused: rate limit exceeded"
 
 
-async def test_resilience_extension_sliding_window_replenishes():
+async def test_resilience_extension_sliding_window_replenishes(limiter_clock):
     class FastService(CliffracerService):
         resilience = ResilienceExtension()
 
@@ -603,13 +670,45 @@ async def test_resilience_extension_sliding_window_replenishes():
     await svc.container._handle_rpc_request(m2)
     assert _get_replies(m2)[0]["error"] == "refused: rate limit exceeded"
 
-    # Wait for window to elapse
-    await asyncio.sleep(0.06)
+    # Move past the window
+    limiter_clock.advance(0.06)
 
     # Allowed again
     m3 = _rpc_msg("fast.rpc.tick", {})
     await svc.container._handle_rpc_request(m3)
     assert _get_replies(m3)[0].get("result") == "tock"
+
+
+async def test_CONTROL_real_time_passing_between_calls_does_not_open_the_window(limiter_clock):
+    """The straddle is impossible, not merely unlikely.
+
+    The same two calls as above with 60 ms of REAL time, longer than the 50 ms
+    window, between them. The limiter reads the test's clock, which has not
+    moved, so the second call is still refused. Under the wall clock it would be
+    allowed, which is what reddened CI when a loaded host took that long.
+    """
+
+    class FastService(CliffracerService):
+        resilience = ResilienceExtension()
+
+        @rpc
+        @rate_limit(calls=1, window=0.05)
+        async def tick(self) -> str:
+            return "tock"
+
+    svc = FastService(ServiceConfig(name="fast"))
+    await svc.container._setup_extensions()
+    svc._discover_handlers()
+
+    first = _rpc_msg("fast.rpc.tick", {})
+    await svc.container._handle_rpc_request(first)
+    assert _get_replies(first)[0].get("result") == "tock"
+
+    await asyncio.sleep(0.06)
+
+    second = _rpc_msg("fast.rpc.tick", {})
+    await svc.container._handle_rpc_request(second)
+    assert _get_replies(second)[0]["error"] == "refused: rate limit exceeded"
 
 
 def test_resilient_rpc_proxy_call_async_preserves_half_open_state():
@@ -622,7 +721,7 @@ def test_resilient_rpc_proxy_call_async_preserves_half_open_state():
     cb = svc.inventory.circuit_breaker
     cb._state = CircuitState.HALF_OPEN
     dummy_coro = object()
-    svc.call_rpc_no_wait = MagicMock(return_value=dummy_coro)
+    svc.call_async = MagicMock(return_value=dummy_coro)
 
     coro = svc.inventory.check_stock.call_async(item_id="item-1")
     assert coro is dummy_coro
@@ -642,11 +741,11 @@ async def test_resilient_rpc_proxy_call_async_awaitable_and_zero_warnings():
     svc = TestService(ServiceConfig(name="test_svc"))
     called = False
 
-    async def mock_call_rpc_no_wait(*args, **kwargs):
+    async def mock_call_async(*args, **kwargs):
         nonlocal called
         called = True
 
-    svc.call_rpc_no_wait = mock_call_rpc_no_wait
+    svc.call_async = mock_call_async
 
     with warnings.catch_warnings(record=True) as recorded_warnings:
         warnings.simplefilter("always")
@@ -658,12 +757,138 @@ async def test_resilient_rpc_proxy_call_async_awaitable_and_zero_warnings():
     assert len(coroutine_warnings) == 0
 
 
-def test_resilient_method_proxy_call_async_typing():
-    """Inspect return type of ResilientMethodProxy.call_async."""
-    import typing
-    from collections.abc import Coroutine
+async def test_circuit_breaker_custom_monitored_exceptions_strictly_honored():
+    """Verify custom monitored_exceptions excludes RpcError when configured."""
+    config = CircuitBreakerConfig(
+        monitored_exceptions=[ConnectionError],
+        failure_threshold=1,
+    )
+    cb = CircuitBreaker("custom-cb", config=config)
 
-    from cliffracer_resilience.circuit_breaker import ResilientMethodProxy
+    # RpcError is not in monitored_exceptions; breaker must remain CLOSED
+    with pytest.raises(RPCError):
+        async with cb:
+            raise RPCError("RPC Error: validation failure")
 
-    hints = typing.get_type_hints(ResilientMethodProxy.call_async)
-    assert hints["return"] == Coroutine[typing.Any, typing.Any, typing.Any]
+    assert cb.failure_count == 0
+    assert cb.state == CLOSED
+
+    # The builtin ConnectionError is monitored; trips breaker to OPEN
+    with pytest.raises(ConnectionError):
+        async with cb:
+            raise ConnectionError("connection dropped")
+
+    assert cb.failure_count == 1
+    assert cb.state == OPEN
+
+
+async def test_in_memory_rate_limiter_prunes_expired_tokens_and_empty_keys():
+    """Verify expired timestamps and empty key queues are pruned from memory."""
+    limiter = InMemoryRateLimiter()
+
+    # get_retry_after on non-existent key must not allocate empty queue
+    retry_after = await limiter.get_retry_after("nonexistent", window=1.0)
+    assert retry_after == 0.0
+    assert "nonexistent" not in limiter._windows
+
+    # Acquire and let window expire
+    assert await limiter.acquire("k1", calls=2, window=0.04) is True
+    assert await limiter.acquire("k1", calls=2, window=0.04) is True
+    assert "k1" in limiter._windows
+
+    await asyncio.sleep(0.05)
+
+    # prune_expired removes expired key from _windows
+    pruned = await limiter.prune_expired(window=0.04)
+    assert pruned >= 1
+    assert "k1" not in limiter._windows
+
+    # Acquire again succeeds with clean queue
+    assert await limiter.acquire("k1", calls=2, window=0.04) is True
+
+
+async def test_kv_rate_limiter_safe_key_sanitization_and_nats_safety():
+    """Verify _safe_key produces valid NATS KV keys without empty subject tokens."""
+    limiter = KvRateLimiter()
+
+    # Pathological keys that would break NATS subject parsing
+    keys = [".", "..", "...", ".lead", "trail.", "a..b", "a...b", "", "x" * 300]
+    for raw_key in keys:
+        safe = limiter._safe_key(raw_key)
+        assert safe, f"Empty safe key for {raw_key!r}"
+        assert not safe.startswith("."), f"Leading dot in safe key: {safe}"
+        assert not safe.endswith("."), f"Trailing dot in safe key: {safe}"
+        assert ".." not in safe, f"Consecutive dots in safe key: {safe}"
+        assert len(safe) <= 128, f"Key exceeds maximum length: {safe}"
+
+
+async def test_two_partition_keys_never_share_one_kv_key():
+    """Shape rules cannot catch the failure that matters here.
+
+    The partition key comes off the wire. Sanitising `.lead`, `trail.` and
+    `a..b` used to yield `lead`, `trail` and `a.b` -- the same keys their
+    already-clean neighbours produce -- so a caller that picked its own key
+    could spend another tenant's budget by choosing one that sanitised onto
+    it. Every assertion about dots and lengths still passed while that was
+    true.
+    """
+    limiter = KvRateLimiter()
+    colliding_pairs = [
+        (".lead", "lead"),
+        ("trail.", "trail"),
+        ("a..b", "a.b"),
+        ("tenant a", "tenant_a"),
+    ]
+
+    for left, right in colliding_pairs:
+        assert limiter._safe_key(left) != limiter._safe_key(right), (
+            f"{left!r} and {right!r} share a KV key, and so share a budget"
+        )
+
+    many = [".lead", "lead", "trail.", "trail", "a..b", "a.b", ".", "..", "", "x" * 300]
+    mapped = [limiter._safe_key(k) for k in many]
+    assert len(set(mapped)) == len(set(many)), "distinct keys must stay distinct"
+    assert all(len(k) <= 128 for k in mapped), "and stay inside the NATS KV limit"
+
+
+async def test_keys_that_used_to_collide_get_their_own_budget():
+    """Read through the store rather than off the key function.
+
+    `_safe_key` returning two strings proves nothing on its own if `acquire`
+    reaches the store by some other route. This spends one key's whole
+    allowance and then asserts the other key is still allowed, and that the
+    store holds an entry apiece.
+    """
+    mock_kv = _MockKvStore()
+    limiter = KvRateLimiter(kv=mock_kv, bucket_name="rate_limits")
+
+    assert await limiter.acquire(".lead", calls=1, window=60.0) is True
+    assert await limiter.acquire(".lead", calls=1, window=60.0) is False, "budget spent"
+
+    assert await limiter.acquire("lead", calls=1, window=60.0) is True, (
+        "a different partition key has its own budget"
+    )
+
+    assert len(mock_kv.store) == 2, f"one entry per key, got {sorted(mock_kv.store)}"
+
+
+async def test_kv_rate_limiter_prunes_expired_tokens_on_rejection():
+    """Verify expired timestamps in KV store are pruned when request is rejected."""
+    mock_kv = _MockKvStore()
+    limiter = KvRateLimiter(kv=mock_kv, bucket_name="rate_limits")
+
+    # Seed an entry with two expired timestamps and one fresh timestamp
+    safe_key = limiter._safe_key("tenant:api")
+    now = time.time()
+    old_ts = [now - 10.0, now - 9.0, now - 0.01]
+    await mock_kv.create(safe_key, json.dumps(old_ts).encode())
+
+    # Limit is 1 call per 1.0 second. Active count is 1, so acquiring 1 call should reject.
+    allowed = await limiter.acquire("tenant:api", calls=1, window=1.0)
+    assert allowed is False
+
+    # Stored entry should have had the two expired timestamps pruned
+    entry = await mock_kv.get(safe_key)
+    stored_ts = json.loads(entry.value.decode())
+    assert len(stored_ts) == 1
+    assert stored_ts[0] == old_ts[2]

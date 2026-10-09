@@ -7,7 +7,43 @@ over NATS to `{target_service}.rpc.{method}`.
 from __future__ import annotations
 
 import weakref
-from typing import Any, overload
+from collections.abc import AsyncGenerator, Callable, Coroutine
+from typing import Any, cast, overload
+
+from cliffracer.core.exceptions import RpcValidationError
+
+
+class InstanceCache:
+    """A per-instance cache keyed by the instance's identity, not its equality or hash.
+
+    A proxy descriptor lives on the class, so one cache serves every instance of a service. Keyed
+    on the instance itself (a `WeakKeyDictionary`), two service instances that compare equal share
+    an entry, and a service whose class defines `__eq__` without `__hash__`, which includes every
+    `@dataclass` service, cannot be a key at all. Here the key is `id(instance)`, and an entry
+    is dropped, by a weak-reference callback, when its instance is collected, so an id is never
+    looked up after its owner has gone.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[int, tuple[weakref.ref[Any], Any]] = {}
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def get_or_make(self, instance: Any, make: Callable[[], Any]) -> Any:
+        key = id(instance)
+        entry = self._entries.get(key)
+        if entry is not None:
+            return entry[1]
+
+        def evict(ref: weakref.ref[Any], key: int = key) -> None:
+            current = self._entries.get(key)
+            if current is not None and current[0] is ref:
+                del self._entries[key]
+
+        value = make()
+        self._entries[key] = (weakref.ref(instance, evict), value)
+        return value
 
 
 class MethodProxy:
@@ -49,23 +85,58 @@ class MethodProxy:
         instance = self._service_instance()
         if instance is None:
             raise RuntimeError("Service instance was garbage collected")
-        return await instance.call_rpc(
-            self._service_name, self._method_name, namespace=self._namespace, **kwargs
-        )
+        try:
+            return await instance.call_rpc(
+                self._service_name, self._method_name, namespace=self._namespace, **kwargs
+            )
+        except RpcValidationError as exc:
+            if not any(d.get("type") == "stream_mismatch" for d in exc.details):
+                raise
+            raise RpcValidationError(
+                exc.details,
+                f"{self._service_name}.{self._method_name} streams its reply: iterate "
+                f"`.{self._method_name}.stream(...)` instead of awaiting it",
+            ) from exc
 
-    def call_async(self, **kwargs: Any) -> Any:
-        """
-        Make a fire-and-forget RPC call (no response expected).
+    def stream(self, **kwargs: Any) -> AsyncGenerator[Any]:
+        """Call a remote method that streams its reply, for `async for item in ...`.
 
-        Args:
-            **kwargs: Arguments to pass to the remote method
+        Goes through the service's `stream_rpc`, so it is bounded and hooked as that is.
         """
-        # This returns a coroutine that can be awaited
         instance = self._service_instance()
         if instance is None:
             raise RuntimeError("Service instance was garbage collected")
-        return instance.call_rpc_no_wait(
-            self._service_name, self._method_name, namespace=self._namespace, **kwargs
+        return cast(
+            AsyncGenerator[Any],
+            instance.stream_rpc(
+                self._service_name, self._method_name, namespace=self._namespace, **kwargs
+            ),
+        )
+
+    def call_async(self, **kwargs: Any) -> Coroutine[Any, Any, Any]:
+        """
+        Make a fire-and-forget RPC call (no response expected).
+
+        Publishes to the target's ``{service}.async.{method}`` subject, so the
+        callee runs it under its ``max_async_rpc_concurrency`` budget rather
+        than the request/reply one. Same subject as ``service.call_async``.
+
+        Args:
+            **kwargs: Arguments to pass to the remote method
+
+        Returns:
+            A coroutine that publishes the message when awaited. Nothing is
+            sent until it is awaited, so a call whose result is dropped sends
+            nothing; mypy reports that as ``unused-coroutine``.
+        """
+        instance = self._service_instance()
+        if instance is None:
+            raise RuntimeError("Service instance was garbage collected")
+        return cast(
+            Coroutine[Any, Any, Any],
+            instance.call_async(
+                self._service_name, self._method_name, namespace=self._namespace, **kwargs
+            ),
         )
 
 
@@ -121,9 +192,9 @@ class RpcProxy:
         """
         self.service_name = service_name
         self._namespace = namespace
-        self._proxies: weakref.WeakKeyDictionary[Any, ServiceProxy] = (
-            weakref.WeakKeyDictionary()
-        )  # Cache per instance
+        self._proxies = InstanceCache()  # One ServiceProxy per service instance, by identity
+        #: The class attribute this proxy is bound to, set when the class body is built.
+        self.attr_name: str | None = None
 
     @overload
     def __get__(self, instance: None, owner: type | None = None) -> RpcProxy: ...
@@ -148,18 +219,26 @@ class RpcProxy:
             # Accessed from class, not instance
             return self
 
-        # Cache the ServiceProxy per service instance
-        if instance not in self._proxies:
-            self._proxies[instance] = ServiceProxy(instance, self.service_name, self._namespace)
-
-        return self._proxies[instance]
+        # Cache the ServiceProxy per service instance, by identity
+        proxy: ServiceProxy = self._proxies.get_or_make(
+            instance, lambda: ServiceProxy(instance, self.service_name, self._namespace)
+        )
+        return proxy
 
     def __set_name__(self, owner: type, name: str) -> None:
-        """
-        Called when the descriptor is assigned to a class attribute.
-
-        Args:
-            owner: The class that owns this descriptor
-            name: The name of the attribute
-        """
+        """Remember the attribute this proxy is bound to, so a refused assignment can name it."""
         self.attr_name = name
+
+    def __set__(self, instance: Any, value: Any) -> None:
+        """Refuse to give one instance an attribute of its own under the proxy's name.
+
+        Without this the proxy is a non-data descriptor, and an instance attribute of the same
+        name wins, so `self.inventory = something` in `__init__` would silently replace the
+        proxy for that instance and every call through it would stop reaching the service.
+        Replace the proxy on the class to change what a name resolves to.
+        """
+        raise AttributeError(
+            f"{type(instance).__name__}.{self.attr_name or self.service_name} is a proxy to "
+            f"{self.service_name!r}, so assigning to it would hide the proxy on this instance. "
+            f"Replace it on the class instead."
+        )

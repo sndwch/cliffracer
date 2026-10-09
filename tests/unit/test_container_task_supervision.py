@@ -1,9 +1,12 @@
 """Tests for structured task supervision and JetStream acknowledgment coordination."""
 
 import asyncio
+import gc
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from loguru import logger
 
 from cliffracer import CliffracerService, ServiceConfig, listener, rpc
 from cliffracer.core.jetstream import StreamSpec
@@ -13,23 +16,43 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.asyncio
 async def test_supervised_task_retrieves_exception_eliminating_warning():
-    """Uncaught exception in supervised task is retrieved and logged without event loop warning."""
+    """An uncaught exception in a supervised task is logged by the supervisor,
+    and the loop never reports it as unretrieved.
+
+    Waited on with `asyncio.wait`, and the exception is never read here:
+    `gather(..., return_exceptions=True)` or a `task.exception()` call would
+    retrieve it on the supervisor's behalf, and the test could not fail.
+    """
     config = ServiceConfig(name="test_svc")
     svc = CliffracerService(config)
 
     async def _failing_coro():
         raise RuntimeError("simulated task explosion")
 
-    task = svc.container._spawn_supervised_task(_failing_coro(), name="fail_task")
-    assert task in svc.container._active_tasks
+    loop = asyncio.get_running_loop()
+    previous = loop.get_exception_handler()
+    reported: list[str] = []
+    logged: list[Any] = []
+    loop.set_exception_handler(lambda _loop, ctx: reported.append(ctx["message"]))
+    sink = logger.add(lambda message: logged.append(message.record), level="ERROR")
+    try:
+        task = svc.container._spawn_supervised_task(_failing_coro(), name="fail_task")
+        assert task in svc.container._active_tasks
+        await asyncio.wait({task})
+        del task
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        logger.remove(sink)
+        loop.set_exception_handler(previous)
 
-    # Await completion
-    await asyncio.gather(task, return_exceptions=True)
-
-    # Task removed from active tasks
     assert len(svc.container._active_tasks) == 0
-    # Exception retrieved; does not raise UnretrievedException warning
-    assert isinstance(task.exception(), RuntimeError)
+    assert len(logged) == 1, logged
+    assert "fail_task" in logged[0]["message"], logged[0]["message"]
+    assert "simulated task explosion" in logged[0]["message"], logged[0]["message"]
+    assert logged[0]["exception"] is not None
+    assert reported == [], reported
 
 
 @pytest.mark.asyncio
@@ -66,6 +89,12 @@ async def test_guarded_nak_term_and_in_progress_guard_transport_errors():
     assert await svc.container._safe_nak(msg) is False
     assert await svc.container._safe_term(msg) is False
     assert await svc.container._safe_in_progress(msg) is False
+
+    # Each broker call was attempted, once: a `False` returned without touching the message
+    # (a worker that quietly stops terminating poison or naking transient failures) is not this.
+    msg.nak.assert_awaited_once_with(delay=0.0)
+    msg.term.assert_awaited_once_with()
+    msg.in_progress.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

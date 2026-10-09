@@ -8,7 +8,7 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.correlation import CorrelationContext
-from cliffracer.core.exceptions import RPCError, RPCTimeoutError
+from cliffracer.core.exceptions import RPCError, RpcError, RpcNoRespondersError, RPCTimeoutError
 
 pytestmark = pytest.mark.unit
 
@@ -53,6 +53,24 @@ async def test_call_rpc_timeout_raises_rpc_timeout_error():
 
 
 @pytest.mark.asyncio
+async def test_call_rpc_with_nothing_subscribed_raises_rpc_no_responders_error():
+    # nats raises nats.errors.NoRespondersError when the broker has no subscriber for the subject
+    from nats.errors import NoRespondersError
+
+    svc = _caller()
+    svc.nc.request.side_effect = NoRespondersError()
+
+    with pytest.raises(RpcNoRespondersError) as caught:
+        await svc.call_rpc("user_service", "get_user")
+
+    # Catchable as the unified parent, which is what a caller's `except RpcError` and the circuit
+    # breaker's monitored set read; the nats error is kept as the cause.
+    assert isinstance(caught.value, RpcError)
+    assert isinstance(caught.value.__cause__, NoRespondersError)
+    assert "user_service.rpc.get_user" in str(caught.value)
+
+
+@pytest.mark.asyncio
 async def test_call_rpc_success_returns_result():
     svc = _caller()
     svc.nc.request.return_value = _resp({"success": True, "result": {"id": "u1"}})
@@ -78,9 +96,10 @@ async def test_publish_event_sets_correlation_header():
 
 @pytest.mark.asyncio
 async def test_correlation_propagates_into_spawned_task():
-    """Regression lock-in: asyncio.create_task inherits the correlation contextvar
-    (Python copies the context at task creation). Threads/run_in_executor are the
-    documented exception, not covered here."""
+    """A note on the interpreter, not a test of this framework: `asyncio.create_task` copies the
+    creating context, which is why the framework's spawners keep the id. Threads and
+    `run_in_executor` are the documented exception. The spawners themselves are tested in
+    `test_correlation_reaches_a_handler_through_the_frameworks_own_spawners.py`."""
     CorrelationContext.set("trace-task")
     seen = []
 

@@ -52,11 +52,14 @@ class TestRefreshSucceeds:
         messages = []
         sink_id = _logger.add(messages.append, level="WARNING")
         try:
-            svc.refresh_token(token)
+            refreshed = svc.refresh_token(token)
         finally:
             _logger.remove(sink_id)
 
-        assert not any("invalid password" in str(m).lower() for m in messages)
+        # The decision, and then every warning: a message literal can be reworded while the
+        # misleading warning is still what the operator reads.
+        assert refreshed is not None
+        assert messages == [], [str(m) for m in messages]
 
 
 class TestRefreshRefuses:
@@ -90,9 +93,9 @@ class TestRefreshReadsCurrentState:
 
 
 class TestLifetimeCap:
-    def test_unbounded_by_default(self):
+    def test_bounded_by_default_at_thirty_days(self):
         svc = _service()
-        assert svc.config.refresh_max_lifetime_hours is None
+        assert svc.config.refresh_max_lifetime_hours == 720
         token = svc.authenticate("alice", "s3cret-password")
         assert svc.refresh_token(token) is not None
 
@@ -114,24 +117,53 @@ class TestLifetimeCap:
         assert svc.refresh_token(stale) is None
         assert svc.refresh_token(token) is not None  # inside the window
 
-    def test_a_token_without_oiat_falls_back_to_iat(self):
-        """Tokens minted before 1.4.0 carry no oiat."""
+
+def _without_oiat(svc, *, iat: float) -> str:
+    """A token with a jti but no oiat, signed with the service's secret.
+
+    The service's minter never produces one: every minted token carries both.
+    Only something signing tokens itself with the shared secret could.
+    """
+    user = svc._users["alice"]["user"]
+    return jwt.encode(
+        {
+            "jti": "a-jti-without-oiat",
+            "user_id": user.user_id,
+            "username": user.username,
+            "email": user.email,
+            "roles": list(user.roles),
+            "permissions": list(user.permissions),
+            "exp": time.time() + 3600,
+            "iat": iat,
+        },
+        SECRET,
+        algorithm=svc.config.algorithm,
+    )
+
+
+class TestATokenWithoutOiat:
+    """The refresh lifetime cap is measured from oiat, so a token without one is not refreshed."""
+
+    def test_it_is_not_refreshed(self):
+        """Uncapped, so no lifetime could refuse it for another reason."""
+        svc = _service()
+        assert svc.refresh_token(_without_oiat(svc, iat=time.time())) is None
+
+    def test_one_issued_past_the_cap_is_not_refreshed(self):
+        """The shape a missing oiat must never turn into: a cap that no longer applies.
+
+        With the lifetime read as `payload.get("oiat")` alone, this token has no
+        original issue time, the cap check is skipped, and it refreshes two
+        hours after issue under a one-hour cap.
+        """
         svc = _service(refresh_max_lifetime_hours=1)
-        user = svc._users["alice"]["user"]
-        legacy = jwt.encode(
-            {
-                "user_id": user.user_id,
-                "username": user.username,
-                "email": user.email,
-                "roles": list(user.roles),
-                "permissions": list(user.permissions),
-                "exp": time.time() + 3600,
-                "iat": time.time(),
-            },
-            SECRET,
-            algorithm=svc.config.algorithm,
-        )
-        assert svc.refresh_token(legacy) is not None
+        assert svc.refresh_token(_without_oiat(svc, iat=time.time() - 7200)) is None
+
+    def test_CONTROL_a_minted_token_with_oiat_still_refreshes(self):
+        svc = _service(refresh_max_lifetime_hours=1)
+        token = svc.authenticate("alice", "s3cret-password")
+        assert "oiat" in _decode(svc, token)
+        assert svc.refresh_token(token) is not None
 
 
 def test_the_unused_refresh_token_map_is_gone():

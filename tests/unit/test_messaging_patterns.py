@@ -6,21 +6,53 @@ import asyncio
 import json
 from unittest.mock import AsyncMock
 
+import nats.errors
 import pytest
+from pydantic import BaseModel
 
 from cliffracer import (
-    BroadcastMessage,
     CliffracerService,
     RPCRequest,
     RPCResponse,
     ServiceConfig,
     async_rpc,
-    broadcast,
     listener,
     rpc,
 )
+from cliffracer.core.exceptions import RpcServerError, RpcTimeoutError
+from cliffracer.testing import MockMessage
 
 pytestmark = pytest.mark.unit
+
+
+def _published(svc: CliffracerService) -> list[tuple[str, bytes, dict]]:
+    """What a service put on the wire through its (mock) connection: subject, bytes, headers."""
+    return [
+        (call.args[0], call.args[1], dict(call.kwargs.get("headers") or {}))
+        for call in svc.nc.publish.call_args_list
+    ]
+
+
+async def _deliver(consumer: CliffracerService, wire: tuple[str, bytes, dict]) -> None:
+    """Hand one published message to a consumer's own dispatcher, as the broker would."""
+    subject, data, headers = wire
+    await consumer.container._dispatch_event(
+        MockMessage(subject=subject, data=data, headers=headers), raise_on_error=True
+    )
+
+
+async def _rpc(svc: CliffracerService, method: str, **payload) -> dict:
+    """Send one RPC request through the service's own dispatcher; return the reply envelope.
+
+    Calling the decorated method directly runs the function body and nothing
+    else -- no discovery, no validation, no envelope -- so it cannot tell a
+    working `@rpc` from a plain method.
+    """
+    svc._discover_handlers()
+    msg = MockMessage(subject=f"{svc.config.name}.rpc.{method}", data=json.dumps(payload).encode())
+    await svc.container._handle_rpc_request(msg)
+    assert msg.responded_data is not None, "the dispatcher sent no reply"
+    return json.loads(msg.responded_data)
 
 
 class TestMessagingPatterns:
@@ -42,20 +74,19 @@ class TestMessagingPatterns:
         service = CalculatorService(ServiceConfig(name="calculator"))
         service.nc = AsyncMock()
 
-        # Test direct method calls
-        result = await service.add(5, 3)
-        assert result == 8
+        # Served: each request is routed by method name and answered in an envelope.
+        assert (await _rpc(service, "add", a=5, b=3))["result"] == 8
+        assert (await _rpc(service, "multiply", a=4, b=7))["result"] == 28
 
-        result = await service.multiply(4, 7)
-        assert result == 28
-
-        # Test RPC call simulation
+        # Called: the request goes out on the method's subject, carrying its arguments.
         mock_response = AsyncMock()
         mock_response.data = json.dumps({"result": 15}).encode()
         service.nc.request = AsyncMock(return_value=mock_response)
 
         result = await service.call_rpc("calculator", "add", a=10, b=5)
         assert result == 15
+        assert service.nc.request.call_args.args[0] == "calculator.rpc.add"
+        assert json.loads(service.nc.request.call_args.args[1])["a"] == 10
 
     @pytest.mark.asyncio
     async def test_async_fire_and_forget_pattern(self):
@@ -82,49 +113,37 @@ class TestMessagingPatterns:
 
     @pytest.mark.asyncio
     async def test_broadcast_listener_pattern(self):
-        """Test broadcast/listener pattern"""
+        """A broadcast one service publishes is delivered, through dispatch, to a fanout listener."""
 
         received_events = []
 
-        class UserEvent(BroadcastMessage):
+        class UserEvent(BaseModel):
             user_id: str
             action: str
 
         class EventProducer(CliffracerService):
-            @broadcast("user.events.announced")
-            async def announce_user_action(self, user_id: str, action: str):
-                return UserEvent(source_service=self.config.name, user_id=user_id, action=action)
+            pass
 
         class EventConsumer(CliffracerService):
             @listener("user.events.announced", fanout=True)
             async def on_user_event(self, event: UserEvent):
-                received_events.append(
-                    {
-                        "user_id": event.user_id,
-                        "action": event.action,
-                        "source": event.source_service,
-                    }
-                )
+                received_events.append({"user_id": event.user_id, "action": event.action})
 
         producer = EventProducer(ServiceConfig(name="producer"))
         consumer = EventConsumer(ServiceConfig(name="consumer"))
-
-        # Mock NATS
         producer.nc = AsyncMock()
-        consumer.nc = AsyncMock()
+        consumer._discover_handlers()
 
-        # Test broadcast
-        result = await producer.announce_user_action("user123", "login")
-        assert isinstance(result, UserEvent)
-        assert result.user_id == "user123"
-        assert result.action == "login"
+        await producer.broadcast_message("user.events.announced", user_id="user123", action="login")
 
-        # Simulate receiving the broadcast
-        await consumer.on_user_event(result)
+        wire = _published(producer)
+        assert [subject for subject, _, _ in wire] == ["user.events.announced"]
+        # Declared fanout, so every replica of the consumer receives it.
+        assert "user.events.announced" in consumer.container.registry.event_fanout
 
-        assert len(received_events) == 1
-        assert received_events[0]["user_id"] == "user123"
-        assert received_events[0]["action"] == "login"
+        await _deliver(consumer, wire[0])
+
+        assert received_events == [{"user_id": "user123", "action": "login"}]
 
     @pytest.mark.asyncio
     async def test_a_model_parameter_is_the_schema(self):
@@ -154,20 +173,25 @@ class TestMessagingPatterns:
 
         service = UserService(ServiceConfig(name="user_service"))
 
-        # Test with valid request
-        request = CreateUserRequest(username="testuser", email="test@example.com", age=25)
+        valid = {"username": "testuser", "email": "test@example.com", "age": 25}
+        reply = await _rpc(service, "create_user", request=valid)
+        assert reply["success"] is True
+        assert reply["result"]["user_id"] == "user_1"
+        assert reply["result"]["username"] == "testuser"
+        assert service.user_count == 1
 
-        response = await service.create_user(request)
-        assert isinstance(response, CreateUserResponse)
-        assert response.user_id == "user_1"
-        assert response.username == "testuser"
-        assert response.success is True
+        # The annotation is the schema: a payload that does not fit it never reaches the body.
+        reply = await _rpc(service, "create_user", request={**valid, "age": "not a number"})
+        assert reply["success"] is False
+        assert reply["error"] == "validation failed"
+        assert [d["loc"] for d in reply["details"]] == [["request", "age"]]
+        assert service.user_count == 1
 
     @pytest.mark.asyncio
     async def test_multiple_listeners_pattern(self):
-        """Test multiple services listening to same event"""
+        """One published event reaches every service that listens on its subject."""
 
-        class OrderEvent(BroadcastMessage):
+        class OrderEvent(BaseModel):
             order_id: str
             amount: float
 
@@ -190,26 +214,29 @@ class TestMessagingPatterns:
             async def update_inventory(self, event: OrderEvent):
                 inventory.append(event.order_id)
 
-        # Create services
-        notif_svc = NotificationService(ServiceConfig(name="notifications"))
-        analytics_svc = AnalyticsService(ServiceConfig(name="analytics"))
-        inventory_svc = InventoryService(ServiceConfig(name="inventory"))
+        class OrderService(CliffracerService):
+            pass
 
-        # Create event
-        order_event = OrderEvent(source_service="order_service", order_id="ORD123", amount=99.99)
+        order_svc = OrderService(ServiceConfig(name="order_service"))
+        order_svc.nc = AsyncMock()
+        consumers = [
+            NotificationService(ServiceConfig(name="notifications")),
+            AnalyticsService(ServiceConfig(name="analytics")),
+            InventoryService(ServiceConfig(name="inventory")),
+        ]
+        for consumer in consumers:
+            consumer._discover_handlers()
+            assert "order.events.created" in consumer.container.registry.event_fanout
 
-        # Simulate all services receiving the event
-        await notif_svc.on_order(order_event)
-        await analytics_svc.track_order(order_event)
-        await inventory_svc.update_inventory(order_event)
+        await order_svc.publish_event("order.events.created", order_id="ORD123", amount=99.99)
+        (wire,) = _published(order_svc)
 
-        # Verify all services processed the event
-        assert len(notifications) == 1
-        assert len(analytics) == 1
-        assert len(inventory) == 1
-        assert "ORD123" in notifications[0]
-        assert analytics[0]["amount"] == 99.99
-        assert inventory[0] == "ORD123"
+        for consumer in consumers:
+            await _deliver(consumer, wire)
+
+        assert notifications == ["Order ORD123: $99.99"]
+        assert analytics == [{"order_id": "ORD123", "amount": 99.99}]
+        assert inventory == ["ORD123"]
 
     @pytest.mark.asyncio
     async def test_error_handling_in_rpc(self):
@@ -239,10 +266,9 @@ class TestMessagingPatterns:
         mock_response.data = json.dumps(error_response).encode()
         service.nc.request = AsyncMock(return_value=mock_response)
 
-        # RPC call should raise a typed RPCError for error responses
-        with pytest.raises(
-            Exception, match="RPC Error calling error_service.divide: Division by zero"
-        ):
+        # An envelope no recognised code or prefix names is the service's own fault: the typed
+        # RpcServerError, with the subject in front, as the standalone client raises it.
+        with pytest.raises(RpcServerError, match="error_service.rpc.divide: Division by zero"):
             await service.call_rpc("error_service", "divide", a=10, b=0)
 
     @pytest.mark.asyncio
@@ -270,27 +296,48 @@ class TestMessagingPatterns:
                 events_received.append(("system", subject))
 
         service = MultiEventService(ServiceConfig(name="multi_event"))
-
-        # Register decorated handlers (normally done during start())
         service._discover_handlers()
 
-        # Verify event handlers were registered
-        assert "orders.*" in service.container.registry.event_handlers
-        assert "users.*.created" in service.container.registry.event_handlers
-        assert "system.>" in service.container.registry.event_handlers
+        # Each pattern is judged by what it matches. The near misses are the half that can fail:
+        # `*` is one token, `>` is one or more, and a pattern's literal tokens must all be there.
+        deliveries = [
+            ("orders.created", [("orders", "orders.created")]),
+            ("orders.created.eu", []),
+            ("orders", []),
+            ("users.bob.created", [("user_created", "users.bob.created")]),
+            ("users.bob.deleted", []),
+            ("users.created", []),
+            ("users.a.b.created", []),
+            ("system.a", [("system", "system.a")]),
+            ("system.a.b.c", [("system", "system.a.b.c")]),
+            ("system", []),
+        ]
+        for subject, expected in deliveries:
+            before = len(events_received)
+            await service.container._dispatch_event(
+                MockMessage(subject=subject, data=b"{}"), raise_on_error=True
+            )
+            assert events_received[before:] == expected, subject
 
     @pytest.mark.asyncio
     async def test_rpc_timeout_handling(self):
-        """Test RPC timeout handling"""
+        """A NATS request timeout reaches the caller as the framework's own RpcTimeoutError.
+
+        The broker's timeout is `nats.errors.TimeoutError`; a builtin `TimeoutError` would be
+        a different class that the translation never matches, so the double raises the real one.
+        """
 
         service = CliffracerService(ServiceConfig(name="timeout_test", request_timeout=0.1))
         service.nc = AsyncMock()
+        service.nc.request = AsyncMock(side_effect=nats.errors.TimeoutError())
 
-        # Simulate timeout
-        service.nc.request = AsyncMock(side_effect=TimeoutError())
-
-        with pytest.raises(asyncio.TimeoutError):
+        with pytest.raises(RpcTimeoutError) as raised:
             await service.call_rpc("slow_service", "slow_method")
+
+        assert isinstance(raised.value.__cause__, nats.errors.TimeoutError)
+        assert "slow_service.slow_method" in str(raised.value)
+        # The configured timeout is the one the request was made with.
+        assert service.nc.request.call_args.kwargs["timeout"] == 0.1
 
     @pytest.mark.asyncio
     async def test_concurrent_rpc_calls(self):
@@ -306,26 +353,35 @@ class TestMessagingPatterns:
             @rpc
             async def concurrent_method(self, delay: float = 0.1) -> int:
                 self.call_count += 1
+                ticket = self.call_count
                 self.active_calls += 1
                 self.max_concurrent = max(self.max_concurrent, self.active_calls)
 
                 await asyncio.sleep(delay)
 
                 self.active_calls -= 1
-                return self.call_count
+                return ticket
 
         service = ConcurrentService(ServiceConfig(name="concurrent"))
 
-        # Make multiple concurrent calls
-        tasks = [service.concurrent_method(0.05) for _ in range(5)]
+        # Five requests in flight at once, each through the dispatcher.
+        service._discover_handlers()
+        messages = [
+            MockMessage(
+                subject="concurrent.rpc.concurrent_method",
+                data=json.dumps({"delay": 0.05}).encode(),
+            )
+            for _ in range(5)
+        ]
+        await asyncio.gather(*(service.container._handle_rpc_request(m) for m in messages))
 
-        results = await asyncio.gather(*tasks)
-
-        # Verify all calls completed
-        assert len(results) == 5
+        replies = [json.loads(m.responded_data) for m in messages]
+        assert all(r["success"] is True for r in replies), replies
+        # Each caller got its own call's answer: 1..5, none repeated or dropped.
+        assert sorted(r["result"] for r in replies) == [1, 2, 3, 4, 5]
         assert service.call_count == 5
         assert service.active_calls == 0
-        assert service.max_concurrent > 1  # Should have had multiple concurrent calls
+        assert service.max_concurrent == 5  # all five overlapped; none was serialised
 
     @pytest.mark.asyncio
     async def test_message_ordering_preservation(self):
@@ -341,10 +397,10 @@ class TestMessagingPatterns:
 
         service = OrderedService(ServiceConfig(name="ordered"))
 
-        # Send messages in order
+        # Send messages in order, each through the dispatcher
         for i in range(10):
-            result = await service.process_ordered(i)
-            assert result == i
+            reply = await _rpc(service, "process_ordered", sequence=i)
+            assert reply["result"] == i
 
         # Verify order was preserved
         assert received_order == list(range(10))

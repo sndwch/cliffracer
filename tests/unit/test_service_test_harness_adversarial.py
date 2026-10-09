@@ -12,6 +12,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from cliffracer import CliffracerService, ServiceConfig, listener, rpc
@@ -151,6 +152,9 @@ async def test_harness_rpc_successful_execution_and_envelope() -> None:
         assert resp.success is True
         assert resp.error is None
         assert resp.result == {"source": "acc_1", "target": "acc_2", "transferred": 150.75}
+        # The request's own type: `harness.rpc()` writes it, and a reply carries the request's
+        # headers unless the dispatcher overwrites them. The stamp is read in
+        # test_the_rpc_reply_is_stamped_with_its_own_content_type.py, where the two differ.
         assert resp.headers.get("Content-Type") == "application/json"
         assert isinstance(resp.data, dict)
         assert "timestamp" in resp.data
@@ -230,11 +234,11 @@ async def test_harness_emit_event_delivers_to_listener() -> None:
         assert svc.received_events[0]["user"] == "alice"
 
 
-async def test_harness_emit_event_unrouted_subject_returns_ok() -> None:
-    """Emitting to an unregistered subject completes with DispatchOutcome.OK and 0 invocations."""
+async def test_harness_emit_event_unrouted_subject_reports_no_handler() -> None:
+    """Emitting to an unregistered subject reports NO_HANDLER and invokes nothing."""
     async with ServiceTestHarness(MockBankingService) as harness:
         outcome = await harness.emit_event("unregistered.subject", {"key": "val"})
-        assert outcome == DispatchOutcome.OK
+        assert outcome == DispatchOutcome.NO_HANDLER
         svc: MockBankingService = harness.service  # type: ignore
         assert len(svc.received_events) == 0
 
@@ -306,10 +310,23 @@ async def test_harness_rpc_extension_non_rejection_exception_is_isolated() -> No
         def do_work(self) -> str:
             return "executed_safely"
 
-    async with ServiceTestHarness(BuggyExtService) as harness:
-        resp = await harness.rpc("do_work")
-        assert resp.success is True
-        assert resp.result == "executed_safely"
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(m.record["message"]), level="ERROR")
+    try:
+        async with ServiceTestHarness(BuggyExtService) as harness:
+            resp = await harness.rpc("do_work")
+            assert resp.success is True
+            assert resp.result == "executed_safely"
+    finally:
+        logger.remove(sink)
+
+    # "Logged" is half of the claim: isolation that drops the crash silently is how a broken
+    # telemetry or auth extension disappears in production. The line names the extension and says why.
+    assert any(
+        "extension audit.worker_setup raised" in line
+        and "Telemetry failure in worker_setup" in line
+        for line in lines
+    ), lines
 
 
 # ==============================================================================
@@ -341,8 +358,41 @@ async def test_harness_teardown_drains_active_tasks() -> None:
 
 
 async def test_harness_mock_nats_client_attributes() -> None:
-    """Harness binds mock NATS client with is_connected=True, no real sockets."""
+    """Harness binds a mock NATS client that reports itself connected and not closed.
+
+    Both flags matter: `broker_state` reads `is_closed` before it reads `is_connected`, so a
+    harness whose mock says closed reports every health read as a closed connection.
+    """
     async with ServiceTestHarness(MockBankingService) as harness:
         assert harness.container.nc is not None
         assert harness.container.nc.is_connected is True
         assert harness.container.nc.is_closed is False
+
+
+async def test_the_harness_dials_no_broker_and_opens_no_socket() -> None:
+    """The whole point of the harness is broker-free dispatch: setup, an RPC and teardown never
+    dial the broker and never connect a socket, so a dial added to `setup()` would be
+    caught here whatever it did with the result."""
+    import socket
+    from unittest.mock import AsyncMock, patch
+
+    dialled: list[object] = []
+
+    def refuse(self, address, *args, **kwargs):
+        dialled.append(address)
+        raise AssertionError(f"a socket connected to {address!r}")
+
+    with (
+        patch(
+            "cliffracer.core.dial.connect",
+            new=AsyncMock(side_effect=AssertionError("a dial was made")),
+        ) as nc,
+        patch.object(socket.socket, "connect", refuse),
+        patch.object(socket.socket, "connect_ex", refuse),
+    ):
+        async with ServiceTestHarness(MockBankingService) as harness:
+            resp = await harness.rpc("spawn_task")
+            assert resp.success is True
+
+    nc.assert_not_awaited()
+    assert dialled == []

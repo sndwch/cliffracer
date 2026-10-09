@@ -1,7 +1,5 @@
 """Tests for Timer and AuthExtension interaction."""
 
-import asyncio
-
 import pytest
 from cliffracer_auth import (
     AuthConfig,
@@ -14,10 +12,22 @@ from cliffracer_auth.extension import AuthExtension
 from cliffracer_auth.simple_auth import SimpleAuthService
 
 from cliffracer import CliffracerService, ServiceConfig, timer
+from cliffracer.testing import FakeClock, ServiceTestHarness
 
 pytestmark = pytest.mark.unit
 
 SECRET = "test-secret-not-a-real-one-0123456789abcdef"
+
+
+async def _one_interval(svc: CliffracerService) -> None:
+    """Start the service's 0.01 s timer on a fake clock, move the clock one interval, stop it."""
+    clock = FakeClock()
+    harness = ServiceTestHarness(svc)
+    try:
+        await harness.start_timers(clock=clock)
+        await clock.advance(0.01)
+    finally:
+        await harness.teardown()
 
 
 @pytest.fixture
@@ -46,19 +56,14 @@ async def test_timer_allowed_by_default_without_token(auth_service):
             executed = True
 
     svc = TimerService(ServiceConfig(name="timer-svc"))
-    await svc.container._setup_extensions()
-    svc._discover_handlers()
-
-    await svc.container._start_timers()
-    await asyncio.sleep(0.05)
-    await svc.container._stop_timers()
+    await _one_interval(svc)
 
     assert executed is True
 
 
 @pytest.mark.asyncio
 async def test_timer_rejected_when_allow_timers_is_false(auth_service):
-    """When allow_timers=False, timer execution without token raises AuthenticationError."""
+    """When allow_timers=False, a timer firing carries no token and is refused: `RejectMessage`."""
     executed = False
 
     class StrictTimerService(CliffracerService):
@@ -70,16 +75,16 @@ async def test_timer_rejected_when_allow_timers_is_false(auth_service):
             executed = True
 
     svc = StrictTimerService(ServiceConfig(name="strict-timer-svc"))
-    await svc.container._setup_extensions()
-    svc._discover_handlers()
+    await _one_interval(svc)
 
-    # When started, the timer loop will catch the error and back off
-    await svc.container._start_timers()
-    await asyncio.sleep(0.05)
-    await svc.container._stop_timers()
-
-    # The timer handler should NOT have executed because worker_setup raised AuthenticationError
+    # The handler did not run, and the timer says why: the firing was refused, which the timer
+    # counts apart from an error. A timer that never fired would leave `executed` False too, so
+    # the refusal is what shows it fired and was turned away.
     assert executed is False
+    (strict_timer,) = svc.container.registry.timers
+    assert strict_timer.refusal_count >= 1, "the timer never fired, so nothing was refused"
+    assert strict_timer.last_refusal == "unauthenticated", strict_timer.last_refusal
+    assert strict_timer.error_count == 0, strict_timer.last_error
 
 
 @pytest.mark.asyncio
@@ -104,12 +109,7 @@ async def test_timer_with_default_timer_user_populates_context_and_roles(auth_se
             seen_context = get_current_context()
 
     svc = RoleGuardedService(ServiceConfig(name="role-svc"))
-    await svc.container._setup_extensions()
-    svc._discover_handlers()
-
-    await svc.container._start_timers()
-    await asyncio.sleep(0.05)
-    await svc.container._stop_timers()
+    await _one_interval(svc)
 
     assert seen_context is not None
     assert seen_context.user.username == "system-cron"
@@ -138,14 +138,17 @@ async def test_timer_with_default_timer_user_fails_missing_role(auth_service):
             executed = True
 
     svc = RoleGuardedService(ServiceConfig(name="role-svc-fail"))
-    await svc.container._setup_extensions()
-    svc._discover_handlers()
-
-    await svc.container._start_timers()
-    await asyncio.sleep(0.05)
-    await svc.container._stop_timers()
+    await _one_interval(svc)
 
     assert executed is False
+    # AuthorizationError: the timer identity existed and lacked the role, and the decorator raised
+    # inside the handler, so it is an error. A missing identity also leaves the handler unrun, but
+    # `worker_setup` refuses it with `RejectMessage`, which the timer counts as a refusal.
+    (guarded_timer,) = svc.container.registry.timers
+    assert guarded_timer.error_count >= 1, "the timer never fired, so nothing was refused"
+    assert (guarded_timer.last_error or "").startswith("AuthorizationError"), (
+        guarded_timer.last_error
+    )
 
 
 @pytest.mark.asyncio
@@ -166,12 +169,7 @@ async def test_timer_with_static_headers(auth_service):
             seen_context = get_current_context()
 
     svc = HeaderTimerService(ServiceConfig(name="header-timer-svc"))
-    await svc.container._setup_extensions()
-    svc._discover_handlers()
-
-    await svc.container._start_timers()
-    await asyncio.sleep(0.05)
-    await svc.container._stop_timers()
+    await _one_interval(svc)
 
     assert seen_context is not None
     assert seen_context.user.username == "timer_runner"
@@ -197,12 +195,7 @@ async def test_timer_with_token_factory(auth_service):
             seen_context = get_current_context()
 
     svc = TokenFactoryService(ServiceConfig(name="factory-timer-svc"))
-    await svc.container._setup_extensions()
-    svc._discover_handlers()
-
-    await svc.container._start_timers()
-    await asyncio.sleep(0.05)
-    await svc.container._stop_timers()
+    await _one_interval(svc)
 
     assert seen_context is not None
     assert seen_context.user.username == "timer_runner"

@@ -65,18 +65,23 @@ class TestCorrelationContext:
 
     def test_get_or_create_id(self):
         """Test get_or_create_id functionality"""
-        # When no ID exists, should create one
+        # When no ID exists, should create one but not pollute ambient context
         cid1 = CorrelationContext.get_or_create_id()
         assert cid1.startswith("corr_")
 
-        # When ID exists, should return existing
+        # Therefore a second call mints a fresh one
         cid2 = CorrelationContext.get_or_create_id()
-        assert cid1 == cid2
+        assert cid1 != cid2
+
+        # When ID actually exists in ambient context, should return existing
+        CorrelationContext.set(cid1)
+        cid3 = CorrelationContext.get_or_create_id()
+        assert cid1 == cid3
 
         # When provided ID, should use that
         custom_id = "custom_correlation_456"
-        cid3 = CorrelationContext.get_or_create_id(custom_id)
-        assert cid3 == custom_id
+        cid4 = CorrelationContext.get_or_create_id(custom_id)
+        assert cid4 == custom_id
 
     def test_extract_from_headers(self):
         """Test extracting correlation ID from headers"""
@@ -273,7 +278,7 @@ class TestServiceCorrelation:
 
     @pytest.mark.asyncio
     async def test_client_call_correlation_propagation(self):
-        """Test correlation ID propagation in client RPC calls"""
+        """Correlation ID propagation in client RPC calls: in the request body and in both headers"""
         config = ServiceConfig(name="test_service")
         service = CliffracerService(config)
 
@@ -295,6 +300,11 @@ class TestServiceCorrelation:
         call_args = mock_nc.request.call_args
         request_data = json.loads(call_args[0][1].decode())
         assert request_data["correlation_id"] == "client_corr_789"
+        # And on the wire as headers, the half a consumer that does not parse the body reads:
+        # the standard one and the legacy spelling.
+        headers = call_args.kwargs["headers"]
+        assert headers["X-Correlation-ID"] == "client_corr_789", headers
+        assert headers["correlation_id"] == "client_corr_789", headers
 
         # Clear context
         CorrelationContext.clear()
@@ -302,7 +312,13 @@ class TestServiceCorrelation:
 
 @pytest.mark.asyncio
 async def test_end_to_end_correlation():
-    """Test correlation ID flows through entire service chain"""
+    """Correlation ID flows through a two-service chain, each hop run by its own dispatch.
+
+    Service1 handles the first request through its container. Its `call_rpc` goes out over a
+    transport that hands the exact bytes and headers it was given to Service2's container, and
+    returns what Service2 replied, so the second hop is Service2's own pipeline extracting the id
+    from the inbound message and stamping it on its own reply, not a copy of the first hop's id.
+    """
 
     # Create two services that communicate
     config1 = ServiceConfig(name="service1")
@@ -313,6 +329,8 @@ async def test_end_to_end_correlation():
 
         service1_correlation_id: str | None
         service2_result: dict[str, str | None]
+
+    seen_by_service2: list[tuple[str, str | None]] = []
 
     class Service1(CliffracerService):
         def __init__(self):
@@ -330,6 +348,7 @@ async def test_end_to_end_correlation():
 
         @rpc
         async def process(self, data: str, correlation_id: str = None) -> dict[str, str | None]:
+            seen_by_service2.append((data, correlation_id))
             return {"processed": data, "service2_correlation_id": correlation_id}
 
     service1 = Service1()
@@ -339,29 +358,30 @@ async def test_end_to_end_correlation():
     service1._discover_handlers()
     service2._discover_handlers()
 
-    # Mock NATS connections
+    sent_headers: list[dict[str, str]] = []
+    second_hop: list[MagicMock] = []
+
+    async def request_through_service2(subject, data, timeout, headers=None):
+        """What the broker does: deliver service1's request to service2, return its reply."""
+        assert subject == "service2.rpc.process", subject
+        sent_headers.append(dict(headers or {}))
+        inbound = MagicMock()
+        inbound.subject = subject
+        inbound.data = data
+        inbound.headers = dict(headers or {})
+        inbound.reply = "_INBOX.second_hop"
+        inbound.respond = AsyncMock()
+        await service2.container._handle_rpc_request(inbound)
+        second_hop.append(inbound)
+        reply = MagicMock()
+        reply.data = inbound.respond.call_args[0][0]
+        reply.headers = inbound.headers
+        return reply
+
     mock_nc1 = AsyncMock()
-    mock_nc2 = AsyncMock()
-
-    # Setup service2 to respond to service1's call
-    async def mock_request(subject, data, timeout, headers=None):
-        if subject == "service2.rpc.process":
-            # Simulate service2 handling the request
-            request_data = json.loads(data.decode())
-            response = {
-                "result": {
-                    "processed": request_data["data"],
-                    "service2_correlation_id": request_data["correlation_id"],
-                },
-                "correlation_id": request_data["correlation_id"],
-            }
-            mock_response = MagicMock()
-            mock_response.data = json.dumps(response).encode()
-            return mock_response
-
-    mock_nc1.request = mock_request
+    mock_nc1.request = request_through_service2
     service1.nc = mock_nc1
-    service2.nc = mock_nc2
+    service2.nc = AsyncMock()
 
     # Simulate initial RPC call to service1
     initial_correlation_id = "e2e_test_999"
@@ -372,6 +392,16 @@ async def test_end_to_end_correlation():
 
     # Handle the request
     await service1.container._handle_rpc_request(mock_msg)
+
+    # The second hop ran in service2, once, with the id the first hop sent
+    assert len(sent_headers) == 1 and len(second_hop) == 1
+    assert sent_headers[0]["X-Correlation-ID"] == initial_correlation_id, sent_headers
+    assert seen_by_service2 == [("test", initial_correlation_id)], seen_by_service2
+
+    # ...and service2's own reply envelope carries it, read where service2 wrote it
+    hop_reply = json.loads(second_hop[0].respond.call_args[0][0].decode())
+    assert hop_reply["correlation_id"] == initial_correlation_id, hop_reply
+    assert hop_reply["result"]["service2_correlation_id"] == initial_correlation_id, hop_reply
 
     # Verify correlation ID propagated through both services
     response_data = json.loads(mock_msg.respond.call_args[0][0].decode())

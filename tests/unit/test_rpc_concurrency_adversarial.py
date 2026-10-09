@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -19,6 +18,30 @@ from cliffracer import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+async def _settled_or_a_leak(svc, tasks, sem, permits, *, timeout: float = 5.0) -> None:
+    """Await the requests, bounded, and name a leaked permit when they do not finish.
+
+    More requests than permits means every request after the leak blocks in `sem.acquire()` and
+    `gather` never returns, so an unbounded wait turns the regression these tests exist for into
+    the suite's full timeout (120s) with no accounting in the failure. Bounded, the failure is the
+    count of permits that are still held.
+    """
+    try:
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=timeout)
+        pending = list(svc.container._active_tasks)
+        if pending:
+            await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True), timeout=timeout
+            )
+    except TimeoutError:
+        for task in tasks:
+            task.cancel()
+        pytest.fail(
+            f"requests never finished: {permits - sem._value} of {permits} permits are still held, "
+            "so a permit was leaked and every later request is blocked in acquire()"
+        )
 
 
 def _rpc_msg(
@@ -99,6 +122,12 @@ async def test_stress_concurrent_rpc_requests_exceeding_concurrency_bound():
     assert max_observed_concurrency <= 4, (
         f"Observed concurrency {max_observed_concurrency} exceeded max 4"
     )
+    # And the bound is reached, not just respected: 50 requests against 4 permits run four at a
+    # time. A semaphore that ignored the limit and admitted one request at a time would satisfy
+    # the upper bound alone, and serialise the fifty behind their sleeps.
+    assert max_observed_concurrency == 4, (
+        f"Observed concurrency {max_observed_concurrency}, expected the configured 4 to be reached"
+    )
     assert current_in_flight == 0
 
     # Verify all requests received valid replies
@@ -133,13 +162,8 @@ async def test_semaphore_never_leaked_on_handler_exceptions():
     # Send 24 failing requests
     msgs = [_rpc_msg("failing_svc.rpc.fail_work") for _ in range(24)]
     tasks = [asyncio.create_task(svc.container._on_rpc_request(m)) for m in msgs]
-    await asyncio.gather(*tasks)
-    if getattr(svc.container, "_active_tasks", None):
-        await asyncio.gather(*list(svc.container._active_tasks))
+    await _settled_or_a_leak(svc, tasks, sem, 3)
     await asyncio.sleep(0)
-
-    if svc.container._active_tasks:
-        await asyncio.gather(*list(svc.container._active_tasks), return_exceptions=True)
 
     # All permits must have been returned
     assert sem._value == 3
@@ -169,7 +193,14 @@ async def test_semaphore_never_leaked_on_handler_exceptions():
 
 @pytest.mark.asyncio
 async def test_semaphore_never_leaked_on_client_disconnect_or_respond_failure():
-    """Verify that if msg.respond fails (e.g. client disconnected), semaphore permits are not leaked."""
+    """A reply that fails to send is attempted, logged, and still releases its permit.
+
+    Each `respond()` raises, as it does for a caller that has gone. The attempt
+    is read off each message, the permit count is read at the moment of each
+    failing reply and again once they have all failed, and the failure must
+    be logged rather than raised out of the dispatch.
+    """
+    from loguru import logger
 
     class EchoService(CliffracerService):
         @rpc
@@ -185,25 +216,39 @@ async def test_semaphore_never_leaked_on_client_disconnect_or_respond_failure():
     sem = svc.container._get_rpc_semaphore()
     assert sem._value == 3
 
-    # Messages where respond() raises an exception (broken pipe / connection closed)
+    permits_while_replying: list[int] = []
+
+    async def client_gone(*args, **kwargs):
+        permits_while_replying.append(sem._value)
+        raise RuntimeError("Client closed connection")
+
     msgs = [
         _rpc_msg(
             "echo_svc.rpc.echo",
             data={"text": f"hello-{i}"},
-            respond_side_effect=RuntimeError("Client closed connection"),
+            respond_side_effect=client_gone,
         )
         for i in range(15)
     ]
-    tasks = [asyncio.create_task(svc.container._on_rpc_request(m)) for m in msgs]
-    await asyncio.gather(*tasks)
-    if getattr(svc.container, "_active_tasks", None):
-        await asyncio.gather(*list(svc.container._active_tasks))
-    await asyncio.sleep(0)
+    errors: list[str] = []
+    sink = logger.add(lambda m: errors.append(m.record["message"]), level="ERROR")
+    try:
+        # The subscription's own callback, bounded so a permit that is never
+        # returned fails here rather than waiting forever on the fourth acquire.
+        on_request = svc.container.dispatcher.on_rpc_request
+        tasks = [asyncio.create_task(on_request(m)) for m in msgs]
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
+        if svc.container._active_tasks:
+            await asyncio.wait_for(asyncio.gather(*list(svc.container._active_tasks)), timeout=5)
+        await asyncio.sleep(0)
+    finally:
+        logger.remove(sink)
 
-    if svc.container._active_tasks:
-        await asyncio.gather(*list(svc.container._active_tasks), return_exceptions=True)
-
-    # All permits returned despite respond() throwing
+    assert [m.respond.await_count for m in msgs] == [1] * 15
+    assert len(permits_while_replying) == 15
+    assert max(permits_while_replying) < 3, "a reply was sent without its permit held"
+    failed = [e for e in errors if "Failed to send RPC reply" in e]
+    assert len(failed) == 15, errors
     assert sem._value == 3
 
 
@@ -230,24 +275,25 @@ async def test_semaphore_never_leaked_on_task_cancellation():
     # Allow permits to be acquired
     await asyncio.sleep(0.05)
 
-    # 3 tasks should be active in container
+    # Every request is admitted as a task at once, and three of them hold the three permits; the
+    # other three wait for one on their own tasks, not in the subscription's callback.
     active = list(svc.container._active_tasks)
-    assert len(active) == 3
-    # Cancel all active tasks
+    assert len(active) == 6
+    assert sem._value == 0
+    # Cancel them all: three inside the handler, three inside the wait for a permit.
     for t in active:
         t.cancel()
-
-    # Wait for container tasks to complete cancellation
     await asyncio.gather(*active, return_exceptions=True)
-    # Remaining queued tasks can now proceed and be cancelled or finish
-    await asyncio.sleep(0.05)
-    remaining = list(svc.container._active_tasks)
-    for t in remaining:
-        t.cancel()
-    if remaining:
-        await asyncio.gather(*remaining, return_exceptions=True)
 
-    await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5)
+    except TimeoutError:
+        for task in tasks:
+            task.cancel()
+        pytest.fail(
+            f"requests never finished: {3 - sem._value} of 3 permits are still held, so a "
+            "cancelled request leaked its permit and the ones queued behind it never ran"
+        )
 
     # Semaphore permits must be fully restored to 3
     assert sem._value == 3
@@ -257,8 +303,15 @@ async def test_semaphore_never_leaked_on_task_cancellation():
 async def test_stress_mixed_failure_storm_preserves_semaphore_accounting():
     """Adversarial stress test: 80 concurrent requests under a semaphore bound of 5,
     combining success, handler errors, client disconnects, and external cancellations.
+
+    Every request the storm sends is accounted for: 40 complete (20 answered, 20 whose reply
+    the peer reset), 20 fail in the handler, 20 hang and are cancelled from outside. Cancelling
+    is done to the hanging handlers, once each, as they start; a fixed number of passes left
+    three quarters of them to run their full sleep and made the test take twenty seconds.
     """
     executed = 0
+    outcomes = {"ok": 0, "fail": 0, "cancelled": 0}
+    hanging: set[asyncio.Task] = set()
 
     class StormService(CliffracerService):
         @rpc
@@ -266,11 +319,19 @@ async def test_stress_mixed_failure_storm_preserves_semaphore_accounting():
             nonlocal executed
             executed += 1
             if op == "fail":
+                outcomes["fail"] += 1
                 raise ValueError("Crash")
             if op == "hang":
-                await asyncio.sleep(10.0)
-                return "hung"
+                task = asyncio.current_task()
+                assert task is not None
+                hanging.add(task)
+                try:
+                    await asyncio.Event().wait()  # only a cancellation ends this
+                except asyncio.CancelledError:
+                    outcomes["cancelled"] += 1
+                    raise
             await asyncio.sleep(0.01)
+            outcomes["ok"] += 1
             return "ok"
 
     config = ServiceConfig(name="storm_svc", max_rpc_concurrency=5)
@@ -301,16 +362,22 @@ async def test_stress_mixed_failure_storm_preserves_semaphore_accounting():
     tasks = [asyncio.create_task(svc.container._on_rpc_request(m)) for m in msgs]
     await asyncio.sleep(0)  # Let them all be created
 
-    # Let the storm run briefly then cancel all active container tasks periodically
-    for _ in range(5):
-        await asyncio.sleep(0.03)
-        for t in list(svc.container._active_tasks):
-            if not t.done():
-                t.cancel()
+    # Cancel each hanging handler as it starts, until all twenty have been cancelled. The bound
+    # reports a storm that cannot finish; it is not a claim about how long one takes.
+    async with asyncio.timeout(30):
+        while outcomes["cancelled"] < 20:
+            for task in list(hanging):
+                if not task.done():
+                    task.cancel()
+            await asyncio.sleep(0.005)
 
-    await asyncio.gather(*tasks, return_exceptions=True)
-    if svc.container._active_tasks:
-        await asyncio.gather(*list(svc.container._active_tasks), return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if svc.container._active_tasks:
+            await asyncio.gather(*list(svc.container._active_tasks), return_exceptions=True)
+
+    # The storm had the composition it claims: nothing ran twice and nothing was skipped.
+    assert executed == 80
+    assert outcomes == {"ok": 40, "fail": 20, "cancelled": 20}
 
     # After the entire storm, the semaphore MUST have exactly 5 permits
     assert sem._value == 5
@@ -329,6 +396,11 @@ async def test_stress_mixed_failure_storm_preserves_semaphore_accounting():
         assert reply["result"] == "ok"
 
 
+# The handler waits on an Event nothing sets, so a shutdown that waits for it
+# never returns at all. This bound turns that into a report rather than a
+# 120s stall, and nothing a slow host does can reach it: the alternative is
+# unbounded, not merely slower.
+@pytest.mark.timeout(10)
 @pytest.mark.asyncio
 async def test_shutdown_timeout_hung_handler_cancels_within_deadline():
     """Simulate a hung RPC handler and confirm shutdown cancels it within shutdown_timeout."""
@@ -351,14 +423,14 @@ async def test_shutdown_timeout_hung_handler_cancels_within_deadline():
     svc.container.lifecycle._running = True
 
     msg = _rpc_msg("hung_svc.rpc.hang")
-    await svc.container._on_rpc_request(msg)
+    # The callback the subscription uses, not the container's unsubscribed copy.
+    await svc.container.dispatcher.on_rpc_request(msg)
     assert len(svc.container._active_tasks) == 1
 
-    start_time = time.time()
     await svc.stop()
-    elapsed = time.time() - start_time
 
-    assert 0.20 <= elapsed < 0.8, f"Shutdown took {elapsed}s, expected ~0.25s"
+    # The handler waits on an Event nothing sets, so cancellation is its only
+    # way out: the except branch is what says shutdown reached it.
     assert was_cancelled is True
     assert len(svc.container._active_tasks) == 0
     assert svc._stopped is True
@@ -386,17 +458,15 @@ async def test_shutdown_multiple_hung_handlers_all_cancelled():
     svc.container.lifecycle._running = True
 
     msgs = [_rpc_msg("multi_hung_svc.rpc.hang") for _ in range(5)]
-    tasks = [asyncio.create_task(svc.container._on_rpc_request(m)) for m in msgs]
+    tasks = [asyncio.create_task(svc.container.dispatcher.on_rpc_request(m)) for m in msgs]
     await asyncio.gather(*tasks)
     await asyncio.sleep(0)
 
     assert len(svc.container._active_tasks) == 5
 
-    start_time = time.time()
     await svc.stop()
-    elapsed = time.time() - start_time
 
-    assert 0.20 <= elapsed < 0.8
+    # Each handler sleeps 100s, so this count is reached only by cancellation.
     assert cancelled_count == 5
     assert len(svc.container._active_tasks) == 0
 
@@ -660,6 +730,23 @@ async def test_adversarial_payloads_on_durable_validated_listener():
         dlq_subject, kwargs = published_dlq[0]
         assert dlq_subject == "dlq.secure_svc"
         assert kwargs["service"] == "secure_svc"
+        # Where the poison message came from and what it was: the two fields an operator reads to
+        # find the producer and reproduce the input.
+        assert kwargs["original_subject"] == "events.items", f"{label}: {kwargs}"
+        assert kwargs["payload"] == _the_payload_the_dead_letter_keeps(payload), (label, kwargs)
+
+
+def _the_payload_the_dead_letter_keeps(raw: bytes):
+    """What a dead letter records of `raw`: the decoded JSON when it decodes, which a schema
+    failure leaves intact, and otherwise the raw text, which is all a decode failure has."""
+    import json
+
+    if not raw:
+        return {}  # an empty body decodes to an empty mapping, which the schema then refuses
+    try:
+        return json.loads(raw.decode())
+    except ValueError:
+        return {"raw": raw.decode(errors="replace")}
 
 
 @pytest.mark.asyncio
@@ -715,3 +802,5 @@ async def test_adversarial_decode_payloads_on_durable_unvalidated_listener():
         assert len(published_dlq) == 1, f"Failed for {label}: DLQ event not published"
         assert published_dlq[0][0] == "dlq.raw_svc"
         assert "Decode error" in published_dlq[0][1]["error"]
+        assert published_dlq[0][1]["original_subject"] == "events.raw", f"{label}: {published_dlq}"
+        assert published_dlq[0][1]["payload"] == {"raw": payload.decode(errors="replace")}, label

@@ -4,7 +4,6 @@ import asyncio
 import importlib.util
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -12,8 +11,16 @@ from pathlib import Path
 import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, rpc
-from cliffracer.client import ClientError, ClientOutOfDate, RpcRefused, RpcValidationError
+from cliffracer.client import (
+    ClientOutOfDate,
+    RpcRefused,
+    RpcServerError,
+    RpcValidationError,
+)
+from cliffracer.core.discovery import HandlerDiscovery
 from cliffracer.core.exceptions import RPCError as CoreRPCError
+from cliffracer.generate_client.cli import describe_subject
+from conftest import console_script
 from tests.fixtures.typed_client import service as fixture
 from tests.fixtures.typed_client.consumer import Consumer
 from tests.fixtures.typed_client.models import Line, Order, Receipt
@@ -38,17 +45,32 @@ def token():
     return fixture.token()
 
 
+def _tree_env() -> dict[str, str]:
+    """The environment a generator subprocess runs in: it imports THIS tree.
+
+    The console script is installed, and its interpreter resolves `cliffracer`
+    through whatever the environment installed, which can be last week's wheel or
+    another checkout. `src` and the packages' `src` go first, so what runs is the
+    tree under test, and the repository root follows for the `tests.fixtures`
+    import of `--class` mode. An inherited `PYTHONPATH` is kept after them, not
+    replaced: replacing it left a mutation to the generator unseen by every test
+    here.
+    """
+    paths = [str(REPO / "src"), *(str(p) for p in sorted(REPO.glob("packages/*/src"))), str(REPO)]
+    inherited = os.environ.get("PYTHONPATH")
+    if inherited:
+        paths.append(inherited)
+    return {**os.environ, "PYTHONPATH": os.pathsep.join(paths)}
+
+
 async def _generate(mode_args: list[str], out) -> str:
     """Run the installed console script asynchronously."""
-    exe = shutil.which("cliffracer-generate-client")
-    assert exe, "console script not installed: run uv sync"
-    env = {**os.environ, "PYTHONPATH": str(REPO)}
+    exe = console_script("cliffracer-generate-client")
+    env = _tree_env()
     proc = await asyncio.create_subprocess_exec(
         exe,
         "--service",
         SERVICE,
-        "--version",
-        "3.1.4",
         "--out",
         str(out),
         *mode_args,
@@ -69,6 +91,20 @@ def _import(path):
     return mod
 
 
+def test_the_generator_subprocess_imports_the_tree_under_test():
+    """The property every generator test below depends on, observed rather than assumed."""
+    result = subprocess.run(
+        [sys.executable, "-c", "import cliffracer; print(cliffracer.__file__)"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=_tree_env(),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout.strip()).resolve().is_relative_to(REPO / "src")
+
+
 async def test_1_the_service_works_by_direct_calls(warehouse, token, nats_connection):
     """Before generating anything: the service is real, refuses without a token,
     answers with one, and refuses a bad payload."""
@@ -80,7 +116,7 @@ async def test_1_the_service_works_by_direct_calls(warehouse, token, nats_connec
             await caller.call_rpc(SERVICE, "create", order={"lines": [{"sku": "a"}]})
 
         reply = await nats_connection.request(
-            f"{SERVICE}.rpc.create",
+            HandlerDiscovery.outbound_subject(caller.config, SERVICE, "rpc", "create"),
             b'{"order": {"lines": [{"sku": "a", "qty": 2}]}}',
             timeout=2,
             headers={"authorization": f"bearer {token}"},
@@ -90,7 +126,7 @@ async def test_1_the_service_works_by_direct_calls(warehouse, token, nats_connec
         assert body["result"]["total_qty"] == 2
 
         bad = await nats_connection.request(
-            f"{SERVICE}.rpc.create",
+            HandlerDiscovery.outbound_subject(caller.config, SERVICE, "rpc", "create"),
             b'{"order": {"lines": "nope"}}',
             timeout=2,
             headers={"authorization": f"bearer {token}"},
@@ -101,10 +137,12 @@ async def test_1_the_service_works_by_direct_calls(warehouse, token, nats_connec
 
 
 async def test_2_no_service_answers_is_exit_2(nats_connection, tmp_path):
-    """The broker answers and no service does. Distinct from exit 3, and this
-    is the test that proves the distinction is real rather than intended."""
-    exe = shutil.which("cliffracer-generate-client")
-    assert exe, "console script not installed: run uv sync"
+    """The broker answers and no service does: exit 2, naming the service, writing nothing.
+
+    The other half of the pair, exit 3 for a broker that cannot be reached, is pinned by
+    `tests/unit/test_generate_client_cli.py::test_exit_3_when_no_broker`; this test
+    does not exercise it."""
+    exe = console_script("cliffracer-generate-client")
     out = tmp_path / "x.py"
     result = subprocess.run(
         [
@@ -121,6 +159,7 @@ async def test_2_no_service_answers_is_exit_2(nats_connection, tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        env=_tree_env(),
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "nobody_home" in result.stderr
@@ -129,9 +168,8 @@ async def test_2_no_service_answers_is_exit_2(nats_connection, tmp_path):
 
 async def test_2_slow_service_times_out_is_exit_2(nats_connection, tmp_path):
     """Verify timed out requests return exit code 2."""
-    sub = await nats_connection.subscribe("slow_poke.describe")
-    exe = shutil.which("cliffracer-generate-client")
-    assert exe, "console script not installed: run uv sync"
+    sub = await nats_connection.subscribe(describe_subject("slow_poke"))
+    exe = console_script("cliffracer-generate-client")
     out = tmp_path / "slow.py"
     try:
         result = subprocess.run(
@@ -149,6 +187,7 @@ async def test_2_slow_service_times_out_is_exit_2(nats_connection, tmp_path):
             capture_output=True,
             text=True,
             timeout=10,
+            env=_tree_env(),
         )
         assert result.returncode == 2, result.stdout + result.stderr
         assert "slow_poke" in result.stderr
@@ -176,8 +215,11 @@ async def test_3_live_and_class_generation_are_byte_identical(warehouse, token, 
         ],
         tmp_path / "live.py",
     )
+    # Only the class invocation is told the version. The live one reads it off
+    # the running service's config, so equal bytes mean the two agree.
     from_class = await _generate(
-        ["--class", "tests.fixtures.typed_client.service:Warehouse"], tmp_path / "cls.py"
+        ["--class", "tests.fixtures.typed_client.service:Warehouse", "--version", "3.1.4"],
+        tmp_path / "cls.py",
     )
 
     assert live == from_class
@@ -215,7 +257,8 @@ async def test_4_a_second_service_uses_the_generated_client(warehouse, token, tm
             await consumer.warehouse.create(Order.model_construct(lines="nope"))
         assert any("lines" in str(d.get("loc")) for d in caught.value.details)
 
-        with pytest.raises(ClientError, match="Internal server error"):
+        # A handler that raised is the service's fault, not the caller's.
+        with pytest.raises(RpcServerError, match="Internal server error"):
             await consumer.warehouse.fail("boom")
 
         anonymous = mod.WarehouseE2eClient(consumer.nc, service=SERVICE)
@@ -252,3 +295,45 @@ async def test_5_drift_is_named_before_any_call(warehouse, token, tmp_path, nats
         assert caught.value.missing == []
     finally:
         await changed.stop()
+
+
+async def test_a_live_orders_description_checks_the_artifact_without_rewriting_it(
+    warehouse, token, tmp_path, nats_connection
+):
+    """An authenticated live description drives the same read-only build check."""
+    out = tmp_path / "warehouse_client.py"
+    mode = [
+        "--nats-url",
+        nats_connection.connected_url.geturl(),
+        "--header",
+        f"authorization=bearer {token}",
+    ]
+    await _generate(mode, out)
+    for stale in (False, True):
+        if stale:
+            out.write_text(out.read_text().replace("async def find(", "async def lookup("))
+        before = (out.read_bytes(), out.stat().st_ino, out.stat().st_mtime_ns)
+        process = await asyncio.create_subprocess_exec(
+            console_script("cliffracer-generate-client"),
+            "--service",
+            SERVICE,
+            "--out",
+            str(out),
+            "--check",
+            *mode,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_tree_env(),
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.communicate()
+        assert process.returncode == (8 if stale else 0), stderr.decode()
+        assert stdout == b""
+        if stale:
+            assert b"missing RPCs: find" in stderr
+            assert b"extra RPCs: lookup" in stderr
+        assert (out.read_bytes(), out.stat().st_ino, out.stat().st_mtime_ns) == before

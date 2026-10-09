@@ -29,8 +29,6 @@ from run_benchmarks import generate_benchmarks_markdown  # noqa: E402
 from tests.benchmark.benchmarks import (  # noqa: E402
     DEFAULT_NATS_URL,
     benchmark_auth,
-    benchmark_faststream,
-    benchmark_http_gateway,
     benchmark_jetstream,
     benchmark_kv,
     benchmark_rpc,
@@ -70,21 +68,21 @@ async def run_benchmarks_for_worktree(
     metrics: dict[str, Any] = {}
 
     # 1. Core RPC
-    print("     [1/7] Core RPC benchmarks...")
+    print("     [1/5] Core RPC benchmarks...")
     try:
         metrics["rpc"] = await benchmark_rpc(nats_url)
     except Exception as exc:
         metrics["rpc"] = {"skipped": str(exc)}
 
     # 2. Core JetStream
-    print("     [2/7] Core JetStream pull benchmarks...")
+    print("     [2/5] Core JetStream pull benchmarks...")
     try:
         metrics["jetstream"] = await benchmark_jetstream(nats_url)
     except Exception as exc:
         metrics["jetstream"] = {"skipped": str(exc)}
 
     # 3. Serialization
-    print("     [3/7] Serialization benchmarks...")
+    print("     [3/5] Serialization benchmarks...")
     try:
         metrics["serialization"] = benchmark_serialization()
     except Exception as exc:
@@ -92,53 +90,29 @@ async def run_benchmarks_for_worktree(
 
     # Check extension presence in this tag
     packages_dir = worktree_path / "packages"
-    has_http = (packages_dir / "cliffracer-http").is_dir()
-    has_faststream = (packages_dir / "cliffracer-faststream").is_dir()
     has_auth = (packages_dir / "cliffracer-auth").is_dir()
     has_kv = (packages_dir / "cliffracer-kv").is_dir()
 
-    # 4. HTTP Gateway
-    if has_http:
-        print("     [4/7] cliffracer-http benchmarks...")
-        try:
-            metrics["http_gateway"] = await benchmark_http_gateway()
-        except Exception as exc:
-            metrics["http_gateway"] = {"skipped": str(exc)}
-    else:
-        print("     [4/7] cliffracer-http: Skipped (package not introduced in this version)")
-        metrics["http_gateway"] = {"skipped": "Package not introduced in this version"}
-
-    # 5. FastStream
-    if has_faststream:
-        print("     [5/7] cliffracer-faststream benchmarks...")
-        try:
-            metrics["faststream"] = await benchmark_faststream()
-        except Exception as exc:
-            metrics["faststream"] = {"skipped": str(exc)}
-    else:
-        print("     [5/7] cliffracer-faststream: Skipped (package not introduced in this version)")
-        metrics["faststream"] = {"skipped": "Package not introduced in this version"}
-
-    # 6. Auth
+    # 4. Auth
     if has_auth:
-        print("     [6/7] cliffracer-auth benchmarks...")
+        print("     [4/5] cliffracer-auth benchmarks...")
         try:
             metrics["auth"] = benchmark_auth()
         except Exception as exc:
             metrics["auth"] = {"skipped": str(exc)}
     else:
-        print("     [6/7] cliffracer-auth: Skipped (package not introduced in this version)")
+        print("     [4/5] cliffracer-auth: Skipped (package not introduced in this version)")
         metrics["auth"] = {"skipped": "Package not introduced in this version"}
 
-    # 7. KV
+    # 5. KV
     if has_kv:
-        print("     [7/7] cliffracer-kv benchmarks...")
+        print("     [5/5] cliffracer-kv benchmarks...")
         try:
             metrics["kv"] = await benchmark_kv(nats_url)
         except Exception as exc:
             metrics["kv"] = {"skipped": str(exc)}
     else:
-        print("     [7/7] cliffracer-kv: Skipped (package not introduced in this version)")
+        print("     [5/5] cliffracer-kv: Skipped (package not introduced in this version)")
         metrics["kv"] = {"skipped": "Package not introduced in this version"}
 
     return {

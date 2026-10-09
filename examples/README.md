@@ -9,17 +9,15 @@ Working examples of cliffracer. Each runs against a NATS broker on
 |---|---|
 | [`basic/`](basic/) | `simple_service.py` and `async_patterns.py` |
 | [`ecommerce/`](ecommerce/) | Order, inventory, payment and notification services, plus a load generator |
-| [`websocket/`](websocket/) | `notification_service.py` and a `test_client.py` that drives it |
 | [`timer/`](timer/) | `@timer` intervals, `@cron` schedules, and timers with metrics |
 | [`correlation/`](correlation/) | Correlation ids across service hops |
 | [`logging/`](logging/) | `LoggingExtension`, and an ingester that listens on `logs.>` |
 | [`validation/`](validation/) | `@validated_listener` |
 | [`namespaces/`](namespaces/) | Two apps sharing a service name, isolated by namespace, plus a cross-namespace watcher |
-| [`consolidated/`](consolidated/) | One service using `CliffracerService` with `HttpExtension` |
-| [`debugging/`](debugging/) | The backdoor console |
+| [`virtual_services/`](virtual_services/) | Two order parents, typed shipment children, runtime progress channels and bounded owner cleanup |
 
-Two single files sit at the top level: `rpc_proxy_example.py` for the `RpcProxy`
-pattern, and `backdoor_async_test.py`.
+One single file sits at the top level: `rpc_proxy_example.py` for the `RpcProxy`
+pattern.
 
 ## Decorators
 
@@ -40,20 +38,6 @@ class MyService(CliffracerService):
     @listener("events.*", fanout=True)
     async def on_event(self, subject: str):
         pass
-```
-
-HTTP routes and websockets come from the extension that serves them, so those
-decorators hang off the declared attribute:
-
-```python
-from cliffracer_http import HttpExtension
-
-class MyService(CliffracerService):
-    http = HttpExtension()
-
-    @http.get("/items/{item_id}")
-    async def get_item(self, item_id: str) -> dict[str, str]:
-        return {"id": item_id}
 ```
 
 `@cron` comes from `cliffracer_cron`.

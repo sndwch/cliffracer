@@ -1,7 +1,7 @@
 """cliffracer-kv: NATS JetStream Key-Value and Object Store integration for Cliffracer services."""
 
 from .config import BucketConfig, ObjectStoreConfig
-from .errors import BucketConfigError, JetStreamUnavailableError, KvError
+from .errors import BucketConfigError, JetStreamUnavailableError, KvError, ModelDoesNotReadBackError
 from .extension import KvExtension
 
 __all__ = [
@@ -11,4 +11,5 @@ __all__ = [
     "KvError",
     "JetStreamUnavailableError",
     "BucketConfigError",
+    "ModelDoesNotReadBackError",
 ]

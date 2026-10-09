@@ -1,12 +1,28 @@
 """In-memory dispatch timing and throughput tracking."""
 
+import math
 import time
 from collections import deque
 from typing import Any
 
+#: Connection events that add one to the count of the same name.
+CONNECTION_COUNTERS = ("total_connections", "failed_connections", "reconnections")
+
 
 class PerformanceMetrics:
-    """Rolling window metrics collector tracking latency and request outcomes."""
+    """Rolling window metrics collector tracking latency and request outcomes.
+
+    `targets` holds the four thresholds `check_performance_targets()` judges against, and it is
+    a plain dict you may replace entries of: `max_latency_ms` (10.0, against p95),
+    `min_success_rate` (99.0, a percentage), `max_memory_mb` (500.0, against the current sample)
+    and `min_throughput_rps` (100.0, against the average over the last minute's completed seconds).
+    They are defaults, not recommendations: pick the ones that mean something for your service.
+
+    The latency, success-rate and memory checks are only reported once there is data for them;
+    the throughput check is always reported. So an instance that has recorded nothing, or a
+    service that serves fewer requests a second than `min_throughput_rps`, reports
+    `overall.passing` as false until that target is set to its own rate.
+    """
 
     def __init__(self, history_size: int = 1000):
         """
@@ -24,7 +40,9 @@ class PerformanceMetrics:
         # Throughput tracking
         self._throughput_window: deque[int] = deque(maxlen=60)  # 60 seconds of data
         self._current_second_count = 0
-        self._last_second = int(time.time())
+        # The second `_current_second_count` is for; None until the first request, so the idle
+        # time before traffic begins is not a zero in the average.
+        self._last_second: int | None = None
 
         # Memory and resource tracking
         self._memory_samples: deque[dict[str, float]] = deque(maxlen=history_size)
@@ -53,35 +71,48 @@ class PerformanceMetrics:
     def record_latency(
         self, latency_ms: float, success: bool = True, timeout: bool = False
     ) -> None:
-        """Record request latency and outcome"""
-        current_time = time.time()
+        """Record request latency and outcome.
 
-        # Record latency
+        The outcome is decided once: a timeout is a timeout whatever `success` says, otherwise
+        it is a success or an error. Every success rate this reports counts the same way.
+        """
+        current_time = time.time()
+        outcome = "timeout" if timeout else "success" if success else "error"
+
         self._latencies.append(
             {
                 "latency_ms": latency_ms,
                 "timestamp": current_time,
-                "success": success,
-                "timeout": timeout,
+                "outcome": outcome,
+                "success": outcome == "success",
+                "timeout": outcome == "timeout",
             }
         )
+        self._request_counts[outcome] += 1
 
-        # Update request counts
-        if timeout:
-            self._request_counts["timeout"] += 1
-        elif success:
-            self._request_counts["success"] += 1
-        else:
-            self._request_counts["error"] += 1
+        self._advance_throughput_window(current_time)
+        self._current_second_count += 1
 
-        # Update throughput tracking
-        current_second = int(current_time)
-        if current_second != self._last_second:
-            self._throughput_window.append(self._current_second_count)
-            self._current_second_count = 1
-            self._last_second = current_second
-        else:
-            self._current_second_count += 1
+    def _advance_throughput_window(self, now: float) -> None:
+        """Close every second that has passed since the last one seen, idle ones as zeros.
+
+        Called by a write and by a read, so the figures follow the clock and not only the
+        traffic: a window read an hour after the last request is an hour of zeros, not the
+        last busy second.
+        """
+        second = int(now)
+        if self._last_second is None:
+            self._last_second = second
+            return
+        gap = second - self._last_second
+        if gap <= 0:
+            return
+        self._throughput_window.append(self._current_second_count)
+        # The window holds 60 seconds, so no more than that many idle ones can matter.
+        for _ in range(min(gap - 1, self._throughput_window.maxlen or 60)):
+            self._throughput_window.append(0)
+        self._current_second_count = 0
+        self._last_second = second
 
     def record_memory_usage(self, memory_mb: float) -> None:
         """Record memory usage sample"""
@@ -92,9 +123,43 @@ class PerformanceMetrics:
         self._cpu_samples.append({"cpu_percent": cpu_percent, "timestamp": time.time()})
 
     def record_connection_event(self, event_type: str) -> None:
-        """Record connection-related events"""
-        if event_type in self._connection_stats:
+        """Record a connection event.
+
+        - `total_connections`, `failed_connections`, `reconnections`: add one to that count.
+        - `connection_opened`: add one to `total_connections` and to `active_connections`.
+        - `connection_closed`: take one from `active_connections`, never below zero.
+
+        `active_connections` is how many are open now, so it is a level and not an event:
+        it moves with the two above, or is set outright by `set_active_connections`. Any
+        other name raises `ValueError`, because an event that is recorded nowhere reads as
+        one that never happened.
+        """
+        if event_type in CONNECTION_COUNTERS:
             self._connection_stats[event_type] += 1
+        elif event_type == "connection_opened":
+            self._connection_stats["total_connections"] += 1
+            self._connection_stats["active_connections"] += 1
+        elif event_type == "connection_closed":
+            self._connection_stats["active_connections"] = max(
+                0, self._connection_stats["active_connections"] - 1
+            )
+        else:
+            raise ValueError(
+                f"unknown connection event {event_type!r}: record one of "
+                f"{', '.join(sorted((*CONNECTION_COUNTERS, 'connection_opened', 'connection_closed')))}"
+                + (
+                    "; active_connections is a level, so use connection_opened, "
+                    "connection_closed or set_active_connections"
+                    if event_type == "active_connections"
+                    else ""
+                )
+            )
+
+    def set_active_connections(self, count: int) -> None:
+        """Set how many connections are open now, for a caller that counts them itself."""
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError(f"active connections must be an integer of 0 or more, got {count!r}")
+        self._connection_stats["active_connections"] = count
 
     def increment_counter(self, name: str, value: int = 1) -> None:
         """Increment a custom counter"""
@@ -104,14 +169,23 @@ class PerformanceMetrics:
         """Set a custom gauge metric"""
         self._custom_metrics[name] = {"value": value, "timestamp": time.time()}
 
+    def record_custom_metric(self, name: str, value: float) -> None:
+        """Record a custom value, which is read back as a gauge: the last one recorded."""
+        self.set_gauge(name, value)
+
     def get_latency_stats(self) -> dict[str, Any]:
-        """Get latency statistics"""
+        """Get latency statistics over the last `history_size` requests.
+
+        `success_rate_percent` here is the share of those requests that succeeded, a timeout
+        not being one; `get_throughput_stats` reports the same share over every request since
+        the last reset.
+        """
         if not self._latencies:
             return {"error": "No latency data available"}
 
         latencies = [metric["latency_ms"] for metric in self._latencies]
         successful_latencies = [
-            metric["latency_ms"] for metric in self._latencies if metric["success"]
+            metric["latency_ms"] for metric in self._latencies if metric["outcome"] == "success"
         ]
 
         return {
@@ -132,13 +206,19 @@ class PerformanceMetrics:
         }
 
     def get_throughput_stats(self) -> dict[str, Any]:
-        """Get throughput statistics"""
+        """Get throughput statistics.
+
+        `average_rps` and `max_rps` are over the completed seconds of the last minute, idle
+        seconds after the first request counted as zero. `current_rps` is the last completed
+        second, or the count so far when none has completed; it is zero once traffic stops.
+        """
+        self._advance_throughput_window(time.time())
         if not self._throughput_window:
             current_rps = self._current_second_count
             avg_rps: float = float(current_rps)
             max_rps = current_rps
         else:
-            current_rps = self._current_second_count
+            current_rps = self._throughput_window[-1]
             avg_rps = sum(self._throughput_window) / len(self._throughput_window)
             max_rps = max(self._throughput_window)
 
@@ -261,6 +341,7 @@ class PerformanceMetrics:
         self._request_counts = {"success": 0, "error": 0, "timeout": 0}
         self._throughput_window.clear()
         self._current_second_count = 0
+        self._last_second = None
         self._memory_samples.clear()
         self._cpu_samples.clear()
         self._connection_stats = {
@@ -283,11 +364,14 @@ class PerformanceMetrics:
         return sorted_values[n // 2]
 
     def _percentile(self, values: list[float], percentile: float) -> float:
-        """Calculate percentile of values"""
+        """Nearest-rank percentile: the smallest value that `percentile` of the values do not exceed.
+
+        `percentile` is a fraction. With 100 values, 0.95 is the 95th smallest; with 20, 0.95
+        is the 19th, so a single outlier is the maximum and does not set p95. An empty list is
+        0.0.
+        """
         if not values:
             return 0.0
         sorted_values = sorted(values)
-        index = int(percentile * len(sorted_values))
-        if index >= len(sorted_values):
-            index = len(sorted_values) - 1
-        return sorted_values[index]
+        rank = math.ceil(percentile * len(sorted_values))
+        return sorted_values[min(max(rank, 1), len(sorted_values)) - 1]

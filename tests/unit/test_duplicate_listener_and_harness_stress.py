@@ -22,15 +22,20 @@ Empirically validates:
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
+from unittest.mock import AsyncMock
 
+import msgpack
 import pytest
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from cliffracer.core.container import DispatchOutcome
 from cliffracer.core.decorators import broadcast, listener, rpc, validated_listener
 from cliffracer.core.discovery import HandlerDiscovery
 from cliffracer.core.exceptions import ConfigurationError
+from cliffracer.core.extension import Extension, WorkerContext
 from cliffracer.core.jetstream import StreamSpec
 from cliffracer.core.service import CliffracerService
 from cliffracer.core.service_config import ServiceConfig
@@ -154,18 +159,22 @@ def test_cross_decorator_broadcast_and_standard_listener_collision_raises() -> N
 
 
 def test_cross_namespace_subject_collision_raises() -> None:
-    """Cross-namespace subject collision (*.events vs pattern matching *.events) raises."""
+    """Two cross-namespace listeners on one pattern both subscribe `*.events.audit`: refused.
+
+    (A cross-namespace listener needs a namespace, and with one a plain listener on
+    `*.events.audit` resolves to `ns.*.events.audit`, so that pair no longer collides.)
+    """
 
     class CrossNamespaceCollisionService(CliffracerService):
         @listener("events.audit", cross_namespace=True, fanout=True)
         async def on_cross(self) -> None:
             pass
 
-        @listener("*.events.audit", cross_namespace=False, fanout=True)
-        async def on_exact_star(self) -> None:
+        @listener("events.audit", cross_namespace=True, fanout=True)
+        async def on_cross_again(self) -> None:
             pass
 
-    cfg = ServiceConfig(name="cross_ns_svc", namespace=None)
+    cfg = ServiceConfig(name="cross_ns_svc", namespace="ns")
     svc = CrossNamespaceCollisionService(cfg)
     with pytest.raises(ConfigurationError) as exc_info:
         HandlerDiscovery.discover(svc, cfg)
@@ -466,7 +475,19 @@ async def test_harness_publish_headers_and_content_type_parity() -> None:
     """publish preserves headers, custom correlation ID, and format encoding."""
     received_headers: list[dict[str, str]] = []
 
+    # What reached the service's dispatcher: (Content-Type, raw bytes) per message.
+    # Read from an extension's hook, not from the handler: a handler is given the
+    # decoded values, which a JSON message and a msgpack one both decode to.
+    on_the_wire: list[tuple[str, bytes]] = []
+
+    class WireRecorder(Extension):
+        async def worker_setup(self, ctx: WorkerContext) -> None:
+            if ctx.kind == "event":
+                on_the_wire.append((ctx.headers.get("Content-Type", ""), ctx.raw.data))
+
     class HeaderTrackingService(CliffracerService):
+        recorder = WireRecorder()
+
         @listener("headers.test", fanout=True)
         async def on_header_msg(
             self, correlation_id: str | None = None, val: int = 0, fmt: str = ""
@@ -499,6 +520,18 @@ async def test_harness_publish_headers_and_content_type_parity() -> None:
         assert out_msgpack_pub == DispatchOutcome.OK
         assert out_msgpack_emit == DispatchOutcome.OK
         assert len(received_headers) == 4
+
+        # Both msgpack publishes were handed to dispatch as msgpack: the content
+        # type says so, the bytes decode as msgpack and are not JSON, and the
+        # handler was given the values that were sent.
+        assert [content_type for content_type, _ in on_the_wire[:2]] == ["application/json"] * 2
+        for content_type, raw in on_the_wire[2:]:
+            assert content_type == "application/msgpack"
+            assert msgpack.unpackb(raw, raw=False) == {"fmt": "pack"}
+            with pytest.raises(ValueError):
+                json.loads(raw)
+        assert len(on_the_wire) == 4
+        assert [h["data"] for h in received_headers[2:]] == [str({"fmt": "pack"})] * 2
 
 
 # ==============================================================================
@@ -537,33 +570,93 @@ class AsyncHazardService(CliffracerService):
         return {"status": "spawned_failing"}
 
 
-async def test_harness_publish_error_isolation() -> None:
-    """Listener exception during publish does not crash harness and returns DispatchOutcome.OK."""
+async def test_harness_publish_surfaces_a_listener_exception() -> None:
+    """A crashing listener reaches the caller rather than becoming a log line."""
     async with ServiceTestHarness(AsyncHazardService) as harness:
         svc: AsyncHazardService = harness.service  # type: ignore
-        outcome = await harness.publish("hazard.crash", {"hazard": True})
+        with pytest.raises(RuntimeError, match="Intentional listener crash"):
+            await harness.publish("hazard.crash", {"hazard": True})
+        assert svc.crashed is True
+
+
+async def test_harness_publish_isolates_a_listener_exception_when_asked() -> None:
+    """raise_on_error=False keeps the exception off the caller and reports OK."""
+    async with ServiceTestHarness(AsyncHazardService) as harness:
+        svc: AsyncHazardService = harness.service  # type: ignore
+        outcome = await harness.publish("hazard.crash", {"hazard": True}, raise_on_error=False)
         assert outcome == DispatchOutcome.OK
         assert svc.crashed is True
 
 
 async def test_harness_teardown_drains_and_prevents_task_leaks() -> None:
-    """Teardown terminates running background tasks when is_running becomes False."""
+    """Teardown stops a running background task by clearing is_running, and lets it finish."""
     async with ServiceTestHarness(AsyncHazardService) as harness:
         resp = await harness.rpc("spawn_supervised_worker")
         assert resp.success is True
-        assert len(harness.container.lifecycle.active_tasks) == 1
+        assert resp.result == {"status": "spawned"}
+        (worker,) = harness.container.lifecycle.active_tasks
         await asyncio.sleep(0.03)
+        assert not worker.done(), "the worker must be running when teardown starts"
 
     svc: AsyncHazardService = harness.service  # type: ignore
-    assert svc.background_iterations >= 1
+    # Ended by its own loop observing is_running == False: finished, not cancelled
+    # and not failed. A teardown that cancels it, or only forgets it, leaves
+    # `active_tasks` empty just the same, so the task itself is read.
+    assert worker.done()
+    assert not worker.cancelled()
+    assert worker.exception() is None
     assert len(harness.container.lifecycle.active_tasks) == 0
+
+    # And it stopped looping rather than being abandoned while it ran.
+    assert svc.background_iterations >= 1
+    iterations_at_exit = svc.background_iterations
+    await asyncio.sleep(0.05)
+    assert svc.background_iterations == iterations_at_exit
 
 
 async def test_harness_teardown_handles_failing_supervised_tasks() -> None:
-    """Teardown cleanly drains tasks that raise exceptions without propagating errors to caller."""
-    async with ServiceTestHarness(AsyncHazardService) as harness:
-        resp = await harness.rpc("spawn_failing_worker")
-        assert resp.success is True
-        assert len(harness.container.lifecycle.active_tasks) == 1
+    """Teardown drains a task that raises: it runs to its exception, which is reported."""
+    reported: list[str] = []
+    sink = logger.add(lambda m: reported.append(m.record["message"]), level="ERROR")
+    try:
+        async with ServiceTestHarness(AsyncHazardService) as harness:
+            resp = await harness.rpc("spawn_failing_worker")
+            assert resp.success is True
+            assert resp.result == {"status": "spawned_failing"}
+            (failing,) = harness.container.lifecycle.active_tasks
+    finally:
+        logger.remove(sink)
 
     assert len(harness.container.lifecycle.active_tasks) == 0
+    # Drained, not cancelled: the task got as far as raising.
+    assert not failing.cancelled()
+    assert isinstance(failing.exception(), ValueError)
+    # And the framework reported the failure rather than swallowing it, once.
+    assert reported == [
+        "Unhandled exception in background task 'failing_worker': Supervised task deliberate error"
+    ]
+
+
+async def test_a_crashed_core_nats_listener_leaves_an_error_in_the_log() -> None:
+    """The core-NATS path does not re-raise (`raise_on_error=False`), so the log line is the only
+    trace a crashed listener leaves; nothing else would show that messages are being accepted and
+    dropped."""
+    svc = AsyncHazardService(ServiceConfig(name="hazard_log", health_port=0))
+    svc._discover_handlers()
+    lines: list[str] = []
+    sink = logger.add(lambda message: lines.append(str(message)), level="ERROR")
+    msg = AsyncMock()
+    msg.subject = "hazard.crash"
+    msg.data = json.dumps({"hazard": True}).encode()
+    msg.headers = {}
+    try:
+        outcome = await svc.container.dispatcher.handle_event(msg, raise_on_error=False)
+    finally:
+        logger.remove(sink)
+
+    assert svc.crashed is True
+    assert outcome is DispatchOutcome.OK
+    assert any(
+        "Error handling event hazard.crash" in line and "Intentional listener crash" in line
+        for line in lines
+    ), lines

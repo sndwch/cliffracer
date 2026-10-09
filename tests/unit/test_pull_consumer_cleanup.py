@@ -45,41 +45,80 @@ async def test_pull_loop_unsubscribes_on_cancel():
     pull_sub.unsubscribe.assert_awaited_once()
 
 
-async def test_pull_loop_skips_unsubscribe_when_closed_or_draining():
-    """Pull loop does not invoke unsubscribe if broker connection is closed or draining."""
+@pytest.mark.parametrize("parked_in", ["fetch", "idle_sleep"])
+async def test_an_external_cancel_of_a_running_pull_loop_unsubscribes(parked_in):
+    """The scenario the test above only imitates: the loop is RUNNING, parked in a fetch or in the
+    sleep after an empty one, when something cancels its task from outside. There, the
+    CancelledError arrives from the awaited call and not from the fetch's own side effect."""
     svc = DummyService()
     container = Container(svc, svc.config)
 
-    # Case 1: broker is CLOSED
     mock_nc = AsyncMock()
+    mock_nc.is_closed = False
+    mock_nc.is_draining = False
     container.nc = mock_nc
-    container._broker_state = BrokerConnectionState.CLOSED
 
-    pull_sub1 = AsyncMock()
-    pull_sub1.fetch = AsyncMock(side_effect=asyncio.CancelledError)
+    in_fetch = asyncio.Event()
 
-    task1 = asyncio.create_task(container._pull_loop(pull_sub1, "durable_1"))
-    await asyncio.sleep(0.01)
-    task1.cancel()
+    async def block_in_fetch(*args, **kwargs):
+        in_fetch.set()
+        await asyncio.Event().wait()  # never set: only a cancel ends this
+
+    pull_sub = AsyncMock()
+    pull_sub.unsubscribe = AsyncMock()
+    if parked_in == "fetch":
+        pull_sub.fetch = AsyncMock(side_effect=block_in_fetch)
+    else:
+        pull_sub.fetch = AsyncMock(side_effect=TimeoutError)  # an empty batch, then a 0.05s sleep
+
+    loop_task = asyncio.create_task(container._pull_loop(pull_sub, "test_durable"))
+    if parked_in == "fetch":
+        await asyncio.wait_for(in_fetch.wait(), timeout=2)
+    else:
+        await asyncio.sleep(0.01)  # past the first empty fetch, inside the 0.05s sleep
+        assert pull_sub.fetch.await_count == 1
+    assert not loop_task.done(), "the loop must still be running when it is cancelled"
+
+    loop_task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task1
+        await asyncio.wait_for(loop_task, timeout=2)
 
-    pull_sub1.unsubscribe.assert_not_called()
+    assert loop_task.cancelled()
+    pull_sub.unsubscribe.assert_awaited_once()
 
-    # Case 2: broker is draining
-    container._broker_state = BrokerConnectionState.CONNECTED
-    mock_nc.is_draining = True
 
-    pull_sub2 = AsyncMock()
-    pull_sub2.fetch = AsyncMock(side_effect=asyncio.CancelledError)
+@pytest.mark.parametrize(
+    ("is_closed", "is_draining", "unsubscribes"),
+    [(True, False, False), (False, True, False), (False, False, True)],
+    ids=["closed", "draining", "open"],
+)
+async def test_pull_loop_unsubscribes_only_while_the_connection_is_usable(
+    is_closed, is_draining, unsubscribes
+):
+    """The pull loop unsubscribes unless the connection is closed or draining.
 
-    task2 = asyncio.create_task(container._pull_loop(pull_sub2, "durable_2"))
+    The two flags the loop reads are set explicitly on the connection double: an
+    unset attribute of an `AsyncMock` is a truthy child mock, which would read as
+    "draining" and skip the unsubscribe whichever case is meant.
+    """
+    svc = DummyService()
+    container = Container(svc, svc.config)
+
+    mock_nc = AsyncMock()
+    mock_nc.is_closed = is_closed
+    mock_nc.is_draining = is_draining
+    container.nc = mock_nc
+
+    pull_sub = AsyncMock()
+    pull_sub.fetch = AsyncMock(side_effect=asyncio.CancelledError)
+
+    task = asyncio.create_task(container._pull_loop(pull_sub, "durable"))
     await asyncio.sleep(0.01)
-    task2.cancel()
+    task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task2
+        await task
 
-    pull_sub2.unsubscribe.assert_not_called()
+    assert pull_sub.unsubscribe.await_count == (1 if unsubscribes else 0)
 
 
 async def test_pull_consumer_unsubscribes_during_service_stop():

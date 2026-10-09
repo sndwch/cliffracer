@@ -461,6 +461,9 @@ async def generate_orders(order_service: OrderService):
             print(
                 f"\n[INFO] Order #{order_count} created: {order.order_id} (${order.total_amount})"
             )
+            if order_count == 1:
+                # The line the examples test waits for: an order has gone through the system.
+                print("EXAMPLE READY: first order created", flush=True)
             order_count += 1
 
             # Wait before next order

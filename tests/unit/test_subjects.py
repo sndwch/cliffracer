@@ -36,6 +36,16 @@ class TestSubjectMatches:
         assert not subject_matches("a.b.>", "a")
         assert not subject_matches("a.*.>", "a.b")
 
+    def test_star_in_a_middle_position_matches_one_token_of_an_equal_length_subject(self):
+        """The shape `@listener` patterns take. The final-position star is exercised above; a star
+        that has tokens after it is the same branch with more to walk past."""
+        assert subject_matches("users.*.created", "users.42.created")
+        assert subject_matches("*.b.*", "a.b.c")
+        assert not subject_matches("users.*.created", "users.42.deleted")
+        assert not subject_matches("*.b.*", "a.x.c")
+        assert not subject_matches("users.*.created", "users.created")
+        assert not subject_matches("users.*.created", "users.42.43.created")
+
     def test_gt_matches_one_or_more_tokens(self):
         assert subject_matches("a.>", "a.b")
         assert subject_matches("a.>", "a.b.c")

@@ -8,14 +8,42 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from cliffracer_logging.config import ContextualLogger, LoggingConfig, get_service_logger
+from loguru import logger
 
 from cliffracer import CliffracerService, ServiceConfig
+from conftest import broker_url
 
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _no_test_leaves_a_sink_it_added():
+    """Fail a test that finishes with a sink it added still attached to the logger.
+
+    `LoggingConfig.configure` attaches sinks pointed at a directory the test then deletes. A sink
+    left attached keeps writing there and is present for every test that runs after, so what a later
+    test sees depends on which ran before it. Only a sink that is new at the end of the test is
+    reported: `configure` begins with a bare `logger.remove()`, which also takes the sinks that were
+    there before.
+    """
+    before = set(logger._core.handlers)
+    yield
+    leaked = sorted(set(logger._core.handlers) - before)
+    for handler_id in leaked:  # so one leak is one failure, not every test after it
+        logger.remove(handler_id)
+    assert not leaked, f"the test left {len(leaked)} sink(s) it added attached to the logger"
+
+
 class TestLoggingConfig:
     """Test LoggingConfig class"""
+
+    @pytest.fixture(autouse=True)
+    def _detach_what_configure_attached(self):
+        """`configure` attaches sinks pointed at the temporary directory the test then deletes."""
+        before = set(logger._core.handlers)
+        yield
+        for handler_id in set(logger._core.handlers) - before:
+            logger.remove(handler_id)
 
     def test_configure_default_settings(self):
         """Test logging configuration with default settings"""
@@ -127,7 +155,9 @@ class TestContextualLogger:
         # Mock the internal _logger
         mock_logger = MagicMock()
         mock_bound_logger = MagicMock()
+        mock_located_logger = MagicMock()
         mock_logger.bind.return_value = mock_bound_logger
+        mock_bound_logger.opt.return_value = mock_located_logger
         test_logger._logger = mock_logger
 
         # Test each logging method
@@ -141,14 +171,17 @@ class TestContextualLogger:
         # Verify bind was called for each log method with extra fields
         assert mock_logger.bind.call_count == 6  # One for each log method
         mock_logger.bind.assert_called_with(extra_field="value")
+        # Each line is written one frame up, so it reports the caller's location
+        assert mock_bound_logger.opt.call_count == 6
+        mock_bound_logger.opt.assert_called_with(depth=1)
 
         # Verify logging methods were called
-        mock_bound_logger.debug.assert_called_once_with("Debug message")
-        mock_bound_logger.info.assert_called_once_with("Info message")
-        mock_bound_logger.warning.assert_called_once_with("Warning message")
-        mock_bound_logger.error.assert_called_once_with("Error message")
-        mock_bound_logger.critical.assert_called_once_with("Critical message")
-        mock_bound_logger.exception.assert_called_once_with("Exception message")
+        mock_located_logger.debug.assert_called_once_with("Debug message")
+        mock_located_logger.info.assert_called_once_with("Info message")
+        mock_located_logger.warning.assert_called_once_with("Warning message")
+        mock_located_logger.error.assert_called_once_with("Error message")
+        mock_located_logger.critical.assert_called_once_with("Critical message")
+        mock_located_logger.exception.assert_called_once_with("Exception message")
 
 
 class TestServiceLoggerFactory:
@@ -177,26 +210,12 @@ class TestLoggingDecorators:
     @pytest.fixture
     def mock_service(self):
         """Create a mock service for testing"""
-        return CliffracerService(
-            ServiceConfig(name="test_service", nats_url="nats://localhost:4222")
-        )
+        return CliffracerService(ServiceConfig(name="test_service", nats_url=broker_url()))
 
     @pytest.fixture
     def test_logger(self):
         """Create a test logger"""
         return ContextualLogger("test_service")
-
-    def test_log_rpc_calls_decorator_import(self):
-        """Test that log_rpc_calls decorator can be imported"""
-        from cliffracer_logging.config import log_rpc_calls
-
-        assert callable(log_rpc_calls)
-
-    def test_log_event_handling_decorator_import(self):
-        """Test that log_event_handling decorator can be imported"""
-        from cliffracer_logging.config import log_event_handling
-
-        assert callable(log_event_handling)
 
     @patch("cliffracer_logging.config.logger")
     @pytest.mark.asyncio

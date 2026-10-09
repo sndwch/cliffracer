@@ -1,0 +1,71 @@
+# The log-streaming stack from README.md in this directory: NATS for the
+# services, and OpenObserve storing what the ingester forwards in MinIO.
+#
+#   docker compose up -d
+
+services:
+  nats:
+    image: nats:2.12-alpine
+    ports:
+      - "4222:4222"   # client connections
+      - "8222:8222"   # HTTP monitoring
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    volumes:
+      - nats_data:/data
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: "admin"
+      MINIO_ROOT_PASSWORD: "password"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # API
+      - "9001:9001"   # console
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 admin password;
+      mc mb myminio/logs --ignore-existing;
+      mc anonymous set download myminio/logs;
+      echo 'MinIO bucket initialization complete';
+      "
+
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:latest
+    environment:
+      - ZO_DATA_DIR=/data
+      - ZO_ROOT_USER_EMAIL=admin@example.com
+      - ZO_ROOT_USER_PASSWORD=password
+      - ZO_S3_SERVER_URL=http://minio:9000
+      - ZO_S3_ACCESS_KEY=admin
+      - ZO_S3_SECRET_KEY=password
+      - ZO_S3_BUCKET_NAME=logs
+      - ZO_S3_REGION_NAME=us-east-1
+    volumes:
+      - openobserve_data:/data
+    ports:
+      - "5080:5080"
+    depends_on:
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+volumes:
+  nats_data:
+  minio_data:
+  openobserve_data:

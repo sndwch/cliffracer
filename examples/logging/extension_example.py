@@ -37,21 +37,7 @@ class LoggedService(CliffracerService):
 
 
 # Example 2: stream this service's logs to NATS as well
-class StreamingService(CliffracerService):
-    """Service configured to stream log records to NATS."""
-
-    logging = LoggingExtension(to_nats=True)
-
-    @rpc
-    async def echo(self, value: str) -> str:
-        return value
-
-
 # Example 3: timing off, sink on
-class QuietStreamingService(CliffracerService):
-    logging = LoggingExtension(to_nats=True, timing=False)
-
-
 async def main():
     print("[INFO] LoggingExtension example")
     print("=" * 50)

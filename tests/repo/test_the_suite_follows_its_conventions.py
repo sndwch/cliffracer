@@ -16,6 +16,9 @@ it once, at module level" half of the rule.
 """
 
 import ast
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -95,8 +98,9 @@ def declared_tiers(path: Path) -> list[str]:
         value = node.value
         items = value.elts if isinstance(value, ast.List | ast.Tuple) else [value]
         for item in items:
-            if isinstance(item, ast.Attribute) and item.attr in ALL_TIERS:
-                names.append(item.attr)
+            target = item.func if isinstance(item, ast.Call) else item
+            if isinstance(target, ast.Attribute) and target.attr in ALL_TIERS:
+                names.append(target.attr)
     return names
 
 
@@ -108,8 +112,9 @@ def per_function_tiers(path: Path) -> list[str]:
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             continue
         for dec in node.decorator_list:
-            if isinstance(dec, ast.Attribute) and dec.attr in ALL_TIERS:
-                found.append(f"{_rel(path)}::{node.name} @pytest.mark.{dec.attr}")
+            target = dec.func if isinstance(dec, ast.Call) else dec
+            if isinstance(target, ast.Attribute) and target.attr in ALL_TIERS:
+                found.append(f"{_rel(path)}::{node.name} @pytest.mark.{target.attr}")
     return found
 
 
@@ -213,6 +218,30 @@ def test_CONTROL_a_per_function_tier_decorator_is_caught(tmp_path: Path):
     assert tier_offenders([path])
 
 
+def test_CONTROL_a_per_function_tier_decorator_call_form_is_caught(tmp_path: Path):
+    """Verify tier marker applied as a call decorator is detected and rejected."""
+    path = _write(
+        tmp_path,
+        "tests/unit/test_x.py",
+        "import pytest\n\npytestmark = pytest.mark.unit\n\n\n"
+        "@pytest.mark.integration()\ndef test_a():\n    pass\n",
+    )
+    offenders = tier_offenders([path])
+    assert offenders, "Call-form per-function tier marker was not detected"
+    assert "@pytest.mark.integration" in offenders[0]
+
+
+def test_CONTROL_declared_tier_call_form_is_recognized(tmp_path: Path):
+    """Verify module-level pytestmark assigned via call form is parsed correctly."""
+    path = _write(
+        tmp_path,
+        "tests/unit/test_call_mark.py",
+        "import pytest\n\npytestmark = pytest.mark.unit()\n\n\ndef test_a():\n    pass\n",
+    )
+    assert declared_tiers(path) == ["unit"]
+    assert not tier_offenders([path])
+
+
 def test_CONTROL_a_correct_module_is_not_caught(tmp_path: Path):
     path = _write(
         tmp_path,
@@ -246,3 +275,266 @@ def test_CONTROL_stacked_trailing_qualifiers_are_not_caught(tmp_path: Path):
     """`_adversarial_stress` is two qualifiers in a row, not one out of place."""
     path = _write(tmp_path, "tests/unit/test_health_listener_adversarial_stress.py", "")
     assert not qualifier_offenders([path])
+
+
+# The one place `.is_dir()` on a .git path is the point rather than the defect:
+# the control that demonstrates a worktree pointer file is not a directory,
+# which is the whole reason the guards ask `.exists()`. Exempted by function
+# name, and asserted to still exist, so it cannot quietly cover anything else.
+IS_DIR_EXEMPT = {
+    (
+        "tests/repo/test_the_suite_follows_its_conventions.py",
+        "test_CONTROL_worktree_file_satisfies_exists",
+    )
+}
+
+
+def _enclosing_function(tree: ast.AST, lineno: int) -> str | None:
+    """Return the name of the top-level function containing `lineno`."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            if node.lineno <= lineno <= (node.end_lineno or node.lineno):
+                return node.name
+    return None
+
+
+def _is_dot_git_path(node: ast.AST | None) -> bool:
+    """True for the expression `<anything> / ".git"`."""
+    return (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Div)
+        and isinstance(node.right, ast.Constant)
+        and node.right.value == ".git"
+    )
+
+
+def git_dir_check_offenders(paths=None) -> list[str]:
+    """Test modules checking .git with .is_dir() rather than .exists().
+
+    In Git worktrees, .git is a pointer file rather than a directory.
+    Guards must check .exists() so they do not skip in worktrees.
+    """
+    bad = []
+    for path in paths if paths is not None else all_test_modules():
+        rel = _rel(path)
+        if not rel.startswith("tests/repo/"):
+            continue
+        tree = ast.parse(path.read_text(), str(path))
+
+        # Names bound to a `<expr> / ".git"` path anywhere in the module, so
+        # the two-line spelling -- bind it, then ask -- is not a way out.
+        git_paths: set[str] = set()
+        for node in ast.walk(tree):
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            if not targets or not _is_dot_git_path(getattr(node, "value", None)):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    git_paths.add(target.id)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and func.attr == "is_dir"):
+                continue
+            val = func.value
+            names_git = _is_dot_git_path(val) or (isinstance(val, ast.Name) and val.id in git_paths)
+            if names_git and (rel, _enclosing_function(tree, node.lineno)) not in IS_DIR_EXEMPT:
+                bad.append(
+                    f"{rel}:{node.lineno}: checks .git with .is_dir(); "
+                    "use .exists() for worktree compatibility"
+                )
+    return bad
+
+
+def test_no_repo_guard_checks_git_directory_shape():
+    """Ensure repository guards do not check .is_dir() on .git."""
+    offenders = git_dir_check_offenders()
+    assert not offenders, "repository guards checking .git with .is_dir():\n" + "\n".join(offenders)
+
+
+def test_git_repository_guards_do_not_skip_in_worktrees():
+    """No repository guard skips for want of git in this checkout.
+
+    Asserting `(REPO / ".git").exists()` would re-evaluate the very predicate
+    the fixtures use, so it cannot fail for any reason other than a genuinely
+    absent .git -- including the case it was written for, a worktree where the
+    guards skip. This collects tests/repo in a subprocess and reads the skips
+    back instead.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/repo", "-p", "no:cacheprovider", "-q", "-rs"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTEST_ADDOPTS": "--collect-only"},
+    )
+    assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-2000:]
+
+    skipped = [
+        line for line in (result.stdout + result.stderr).splitlines() if "release tarball" in line
+    ]
+    assert not skipped, (
+        "repository guards are skipping for want of git in this checkout:\n  "
+        + "\n  ".join(skipped)
+    )
+
+
+def test_the_is_dir_exemption_names_a_function_that_exists():
+    """An exemption for a function that has moved stops exempting and starts hiding."""
+    assert IS_DIR_EXEMPT, "the exemption set is empty; delete it and the branch that reads it"
+    for rel, func in sorted(IS_DIR_EXEMPT):
+        path = REPO / rel
+        assert path.is_file(), f"exempted file does not exist: {rel}"
+        tree = ast.parse(path.read_text(), str(path))
+        names = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+        }
+        assert func in names, f"{rel} no longer defines {func}; remove the exemption"
+
+
+def test_no_repo_guard_defines_its_own_git_fixture():
+    """The git fixture lives in tests/repo/conftest.py, once.
+
+    A copy per module is how the check came to disagree with itself: a fix
+    applied to one spelling left the others skipping. This is what stops a copy
+    returning one file at a time.
+    """
+    conftest = REPO / "tests" / "repo" / "conftest.py"
+    assert conftest.is_file(), "tests/repo/conftest.py is missing; the shared fixture lives there"
+    assert "_require_git" in conftest.read_text(), (
+        "tests/repo/conftest.py no longer defines _require_git"
+    )
+
+    offenders = []
+    for path in all_test_modules():
+        rel = _rel(path)
+        if not rel.startswith("tests/repo/") or rel.endswith("/conftest.py"):
+            continue
+        tree = ast.parse(path.read_text(), str(path))
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "_require_git":
+                offenders.append(f"{rel}:{node.lineno}")
+    assert not offenders, (
+        "these define their own copy of the git fixture instead of taking the "
+        "one in tests/repo/conftest.py:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_CONTROL_git_is_dir_check_is_caught(tmp_path: Path):
+    path = _write(
+        tmp_path,
+        "tests/repo/test_sample.py",
+        "import pytest\nfrom pathlib import Path\n"
+        "REPO = Path('.')\n\n"
+        "@pytest.fixture(autouse=True)\n"
+        "def _require_git():\n"
+        "    if not (REPO / '.git').is_dir():\n"
+        "        pytest.skip('Not git')\n",
+    )
+    assert git_dir_check_offenders([path])
+
+
+def test_CONTROL_git_exists_check_is_not_caught(tmp_path: Path):
+    path = _write(
+        tmp_path,
+        "tests/repo/test_sample.py",
+        "import pytest\nfrom pathlib import Path\n"
+        "REPO = Path('.')\n\n"
+        "@pytest.fixture(autouse=True)\n"
+        "def _require_git():\n"
+        "    if not (REPO / '.git').exists():\n"
+        "        pytest.skip('Not git')\n",
+    )
+    assert not git_dir_check_offenders([path])
+
+
+def test_CONTROL_worktree_file_satisfies_exists(tmp_path: Path):
+    """Verify that a worktree pointer file satisfies .exists() and fails .is_dir()."""
+    git_file = tmp_path / ".git"
+    git_file.write_text("gitdir: /path/to/main/.git/worktrees/branch\n")
+    assert git_file.exists()
+    assert not git_file.is_dir()
+
+
+def git_skip_rationale_offenders(paths=None) -> list[str]:
+    """Functions skipping on .git absence without documented rationale.
+
+    Any test or fixture checking .git presence and skipping must document
+    its rationale (such as intentional skip for unpacked release tarball users).
+    """
+    bad = []
+    for path in paths if paths is not None else all_test_modules():
+        rel = _rel(path)
+        tree = ast.parse(path.read_text(), str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            has_git_check = False
+            has_skip = False
+            for child in ast.walk(node):
+                if (
+                    isinstance(child, ast.BinOp)
+                    and isinstance(child.op, ast.Div)
+                    and isinstance(child.right, ast.Constant)
+                    and child.right.value == ".git"
+                ):
+                    has_git_check = True
+                if (
+                    isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Attribute)
+                    and child.func.attr == "skip"
+                ):
+                    has_skip = True
+            if has_git_check and has_skip:
+                docstring = ast.get_docstring(node) or ""
+                doc_lower = docstring.lower()
+                if not ("tarball" in doc_lower and "intentional" in doc_lower):
+                    bad.append(
+                        f"{rel}:{node.lineno}: {node.name} skips on .git without "
+                        "documenting intentional release tarball rationale in its docstring"
+                    )
+    return bad
+
+
+def test_git_skip_documents_tarball_rationale():
+    """Ensure any guard that skips when .git is absent documents its rationale."""
+    offenders = git_skip_rationale_offenders()
+    assert not offenders, (
+        "tests or fixtures skipping on .git absence without documented rationale:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_CONTROL_git_skip_without_rationale_is_caught(tmp_path: Path):
+    path = _write(
+        tmp_path,
+        "tests/repo/test_sample.py",
+        "import pytest\nfrom pathlib import Path\n"
+        "REPO = Path('.')\n\n"
+        "@pytest.fixture(autouse=True)\n"
+        "def _require_git():\n"
+        "    if not (REPO / '.git').exists():\n"
+        "        pytest.skip('Not git')\n",
+    )
+    assert git_skip_rationale_offenders([path])
+
+
+def test_CONTROL_git_skip_with_rationale_is_not_caught(tmp_path: Path):
+    path = _write(
+        tmp_path,
+        "tests/repo/test_sample.py",
+        "import pytest\nfrom pathlib import Path\n"
+        'REPO = Path(".")\n\n'
+        "@pytest.fixture(autouse=True)\n"
+        "def _require_git():\n"
+        '    """Intentional design for release tarball environments."""\n'
+        '    if not (REPO / ".git").exists():\n'
+        '        pytest.skip("Not git")\n',
+    )
+    assert not git_skip_rationale_offenders([path])

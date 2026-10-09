@@ -4,7 +4,7 @@ import decimal
 import json
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import msgpack
 import pytest
@@ -12,7 +12,7 @@ from pydantic import BaseModel, ValidationError
 
 from cliffracer import CliffracerService, ServiceConfig, listener, rpc
 from cliffracer.client import ServiceClient
-from cliffracer.core.exceptions import RPCError
+from cliffracer.core.exceptions import RPCError, RpcServerError
 from cliffracer.core.validation import (
     CONTENT_TYPE_JSON,
     CONTENT_TYPE_MSGPACK,
@@ -21,6 +21,8 @@ from cliffracer.core.validation import (
     serialize_payload,
     unpack_msgpack,
 )
+from cliffracer.testing import refuse_a_reply_with_no_subject
+from tests.conftest import broker_url
 
 pytestmark = pytest.mark.unit
 
@@ -86,6 +88,7 @@ class _MockMsg:
         self.response_headers: dict[str, str] | None = None
 
     async def respond(self, payload: bytes):
+        refuse_a_reply_with_no_subject(self)
         self.response_bytes = payload
         self.response_headers = dict(self.headers)
 
@@ -128,7 +131,8 @@ def test_pack_and_unpack_msgpack_primitives():
     packed = pack_msgpack(primitives)
     assert isinstance(packed, bytes)
     unpacked = unpack_msgpack(packed)
-    assert unpacked == primitives
+    # Bytes carry the value JSON would: a string.
+    assert unpacked == {**primitives, "bytes": "\x00\x01\x02\x03"}
 
 
 # 3. Complex types & Pydantic models roundtrip
@@ -414,7 +418,7 @@ async def test_outbound_call_rpc_msgpack(msgpack_svc):
 
 
 async def test_outbound_call_rpc_json_svc_decodes_msgpack_reply(json_svc):
-    """A service configured for JSON handles a MsgPack reply seamlessly."""
+    """A service configured for JSON decodes MsgPack replies based on the response Content-Type."""
     mock_nc = MagicMock()
     reply_payload = {"success": True, "result": "msgpack response"}
     reply_bytes = pack_msgpack(reply_payload)
@@ -426,22 +430,52 @@ async def test_outbound_call_rpc_json_svc_decodes_msgpack_reply(json_svc):
     mock_nc.request = AsyncMock(return_value=mock_reply)
     json_svc.nc = mock_nc
 
-    result = await json_svc.call_rpc("other_svc", "plain", value="hi")
-    assert result == "msgpack response"
+    with patch(
+        "cliffracer.core.rpc_calls.deserialize_payload", wraps=deserialize_payload
+    ) as spy_deserialize:
+        result = await json_svc.call_rpc("other_svc", "plain", value="hi")
+        assert result == "msgpack response"
+        spy_deserialize.assert_called_once_with(
+            reply_bytes,
+            content_type=CONTENT_TYPE_MSGPACK,
+            fallback_format=json_svc.config.serialization_format,
+        )
+
+    # Negative control: mismatched declared content-type fails instead of silently
+    # guessing. The decode is where it has to fail -- `ValueError` alone would
+    # also be satisfied by anything raised on the way there, so the spy pins
+    # that deserialization was reached and given the mismatched type.
+    mock_reply.headers = {"Content-Type": "application/json"}
+    with patch(
+        "cliffracer.core.rpc_calls.deserialize_payload", wraps=deserialize_payload
+    ) as spy_mismatch:
+        with pytest.raises((json.JSONDecodeError, UnicodeDecodeError)):
+            await json_svc.call_rpc("other_svc", "plain", value="hi")
+    spy_mismatch.assert_called_once()
+    assert spy_mismatch.call_args.kwargs["content_type"] == "application/json"
 
 
 async def test_outbound_call_rpc_raises_rpc_error(msgpack_svc):
     mock_nc = MagicMock()
     mock_reply = MagicMock()
-    mock_reply.data = pack_msgpack({"error": "remote failure", "details": [{"msg": "err"}]})
+    mock_reply.data = pack_msgpack(
+        {"success": False, "error": "validation failed", "details": [{"msg": "err"}]}
+    )
     mock_reply.headers = {"Content-Type": CONTENT_TYPE_MSGPACK}
     mock_nc.request = AsyncMock(return_value=mock_reply)
     msgpack_svc.nc = mock_nc
 
     with pytest.raises(RPCError) as exc_info:
         await msgpack_svc.call_rpc("other_svc", "failing", x=1)
-    assert "remote failure" in str(exc_info.value)
+    # The typed member of the hierarchy, carrying the entries the reply decoded from msgpack.
+    assert type(exc_info.value).__name__ == "RpcValidationError"
     assert exc_info.value.details == [{"msg": "err"}]
+
+    mock_reply.data = pack_msgpack({"error": "remote failure"})
+    with pytest.raises(RPCError) as server_fault:
+        await msgpack_svc.call_rpc("other_svc", "failing", x=1)
+    assert type(server_fault.value).__name__ == "RpcServerError"
+    assert "remote failure" in str(server_fault.value)
 
 
 async def test_outbound_call_async_and_no_wait_msgpack(msgpack_svc):
@@ -475,7 +509,7 @@ async def test_outbound_publish_event_msgpack(msgpack_svc):
     _, sent_bytes = mock_nc.publish.call_args[0][:2]
     headers = mock_nc.publish.call_args[1]["headers"]
     unpacked = unpack_msgpack(sent_bytes)
-    assert unpacked["order_id"] == "12345"
+    assert unpacked["data"]["order_id"] == "12345"
     assert headers["Content-Type"] == CONTENT_TYPE_MSGPACK
 
 
@@ -505,10 +539,9 @@ async def test_inbound_event_dispatch_msgpack(msgpack_svc):
 
 # 8. CliffracerClient content negotiation
 async def test_client_content_type_negotiation():
-    client = ServiceClient(service="test_svc", nats_url="nats://localhost:4222", verify=False)
+    """Verify ServiceClient extracts reply Content-Type and selects the appropriate decoder."""
+    client = ServiceClient(service="test_svc", nats_url=broker_url(), verify=False)
     client._verified = True
-
-    # Mock _connection and _request
     client._connection = AsyncMock()
 
     mock_reply = MagicMock()
@@ -517,7 +550,42 @@ async def test_client_content_type_negotiation():
 
     client._request = AsyncMock(return_value=mock_reply)
 
-    res = await client._call("echo", {"message": "hi", "count": 1}, EchoResponse)
-    assert isinstance(res, EchoResponse)
-    assert res.echoed == "hi"
-    assert res.count == 1
+    with patch(
+        "cliffracer.client.deserialize_payload", wraps=deserialize_payload
+    ) as spy_deserialize:
+        res = await client._call("echo", {"message": "hi", "count": 1}, EchoResponse)
+
+        assert isinstance(res, EchoResponse)
+        assert res.echoed == "hi"
+        assert res.count == 1
+        spy_deserialize.assert_called_once_with(
+            mock_reply.data,
+            content_type=CONTENT_TYPE_MSGPACK,
+            fallback_format="json",
+        )
+
+    # Verify case-insensitive header extraction
+    mock_reply.headers = {"content-type": CONTENT_TYPE_MSGPACK}
+    with patch(
+        "cliffracer.client.deserialize_payload", wraps=deserialize_payload
+    ) as spy_deserialize:
+        await client._call("echo", {"message": "hi", "count": 1}, EchoResponse)
+        spy_deserialize.assert_called_once_with(
+            mock_reply.data,
+            content_type=CONTENT_TYPE_MSGPACK,
+            fallback_format="json",
+        )
+
+    # Negative control: mismatched declared content-type must raise rather than
+    # silently fall back. Asserted at the decode for the same reason as above.
+    # The class is `RpcServerError` rather than the raw `JSONDecodeError` the
+    # decoder throws: a reply this client cannot read is a documented failure,
+    # not a builtin escaping past the mapping. What this control asserts is
+    # unchanged -- that the declared content type is used and no silent
+    # fallback happens.
+    mock_reply.headers = {"Content-Type": "application/json"}
+    with patch("cliffracer.client.deserialize_payload", wraps=deserialize_payload) as spy_mismatch:
+        with pytest.raises(RpcServerError):
+            await client._call("echo", {"message": "hi", "count": 1}, EchoResponse)
+    spy_mismatch.assert_called_once()
+    assert spy_mismatch.call_args.kwargs["content_type"] == "application/json"

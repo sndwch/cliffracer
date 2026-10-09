@@ -11,6 +11,7 @@ Invariants:
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Annotated, Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,7 +23,7 @@ from cliffracer_resilience.circuit_breaker import (
     CircuitState,
     RpcCircuitOpenError,
 )
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from cliffracer.core.container import Container
 from cliffracer.core.decorators import broadcast, listener
@@ -54,11 +55,6 @@ from cliffracer.core.service_config import ServiceConfig
 from cliffracer.core.typed_rpc import UntypedHandler
 
 pytestmark = pytest.mark.unit
-
-
-class UserCreated(BaseModel):
-    user_id: str
-    email: str
 
 
 # ==============================================================================
@@ -213,9 +209,24 @@ def test_reserved_and_private_names_fail_startup() -> None:
         svc_res.container.discover_handlers()
 
 
+def _routed(mock_dlq: AsyncMock) -> dict[str, Any]:
+    """What the dispatcher handed the dead-letter publisher, by parameter name."""
+    mock_dlq.handle_invalid_message.assert_awaited_once()
+    call = mock_dlq.handle_invalid_message.await_args
+    bound = inspect.signature(DeadLetterPublisher.handle_invalid_message).bind(
+        mock_dlq, *call.args, **call.kwargs
+    )
+    return dict(list(bound.arguments.items())[1:])
+
+
 @pytest.mark.asyncio
-async def test_invalid_payload_routes_to_dlq_and_calls_safe_term() -> None:
-    """Route invalid payload to DLQ, invoke safe_term(msg), and return INVALID without crash."""
+async def test_invalid_payload_routes_to_dlq_and_reports_invalid() -> None:
+    """Route invalid payload to DLQ and return INVALID without crash.
+
+    Terminating belongs to the caller: the JetStream entry point terminates on
+    an INVALID outcome, so a dispatcher that also terminated would send a second
+    terminal acknowledgement, which a real client refuses.
+    """
     invoked = False
 
     class StrictEventService(CliffracerService):
@@ -240,8 +251,15 @@ async def test_invalid_payload_routes_to_dlq_and_calls_safe_term() -> None:
     outcome_a = await dispatcher.handle_event(msg_a)
     assert outcome_a == DispatchOutcome.INVALID
     assert invoked is False
-    assert mock_dlq.handle_invalid_message.called
-    assert msg_a.term.called
+    routed = _routed(mock_dlq)
+    assert routed["subject"] == "orders.checkout"
+    assert routed["payload"] == {"order_id": "ord-1", "amount": "not_a_float", "extra_bad": 999}
+    assert {e["loc"] for e in routed["error"].errors()} == {("amount",), ("extra_bad",)}
+    assert (
+        routed["schema"]
+        is svc.container.registry.event_specs_by_subject["orders.checkout"].payload_model
+    )
+    assert msg_a.term.await_count == 0
 
     mock_dlq.reset_mock()
 
@@ -254,8 +272,11 @@ async def test_invalid_payload_routes_to_dlq_and_calls_safe_term() -> None:
     outcome_b = await dispatcher.handle_event(msg_b)
     assert outcome_b == DispatchOutcome.INVALID
     assert invoked is False
-    assert mock_dlq.handle_invalid_message.called
-    assert msg_b.term.called
+    routed = _routed(mock_dlq)
+    assert routed["subject"] == "orders.checkout"
+    assert routed["payload"] == {"amount": 19.95}
+    assert {e["loc"] for e in routed["error"].errors()} == {("order_id",)}
+    assert msg_b.term.await_count == 0
 
     # Case C: Valid payload succeeds
     msg_c = AsyncMock()
@@ -270,7 +291,12 @@ async def test_invalid_payload_routes_to_dlq_and_calls_safe_term() -> None:
 
 @pytest.mark.asyncio
 async def test_safe_term_survives_missing_or_failing_term() -> None:
-    """Verify safe_term does not crash if msg has no term method or if term raises."""
+    """Verify safe_term does not crash if msg has no term method or if term raises.
+
+    Driven against the JetStream dispatcher, which is the one that terminates.
+    The dispatch path is exercised too: an invalid payload must still reach the
+    dead-letter publisher and report INVALID whatever the message can do.
+    """
     invoked = False
 
     class StrictService(CliffracerService):
@@ -295,6 +321,7 @@ async def test_safe_term_survives_missing_or_failing_term() -> None:
     outcome_plain = await dispatcher.handle_event(plain_msg)
     assert outcome_plain == DispatchOutcome.INVALID
     assert invoked is False
+    assert await svc.container.dispatcher.jetstream.safe_term(plain_msg) is False
 
     # 2. Message whose term() raises an exception
     failing_msg = AsyncMock()
@@ -306,6 +333,7 @@ async def test_safe_term_survives_missing_or_failing_term() -> None:
     outcome_failing = await dispatcher.handle_event(failing_msg)
     assert outcome_failing == DispatchOutcome.INVALID
     assert invoked is False
+    assert await svc.container.dispatcher.jetstream.safe_term(failing_msg) is False
     assert failing_msg.term.called
 
 
@@ -316,22 +344,38 @@ async def test_safe_term_survives_missing_or_failing_term() -> None:
 
 def test_issubclass_client_error_rpc_error() -> None:
     """Verify issubclass(ClientError, RpcError) and all RPC error hierarchy relationships."""
-    assert issubclass(ClientError, RpcError)
     assert issubclass(RpcClientError, RpcError)
     assert issubclass(RpcServerError, RpcError)
-    assert issubclass(RpcRemoteError, RpcError)
     assert issubclass(RpcTimeoutError, RpcError)
     assert issubclass(RpcNoRespondersError, RpcError)
     assert issubclass(RpcValidationError, RpcError)
     assert issubclass(RpcUnknownMethodError, RpcError)
     assert issubclass(RpcRefusedError, RpcError)
     assert issubclass(ClientOutOfDateError, RpcError)
-    assert issubclass(RPCError, RpcError)
 
     # Invariant: ClientError is a CliffracerError, but deliberately not a ServiceError
     assert issubclass(ClientError, CliffracerError)
     assert not issubclass(ClientError, ServiceError)
     assert not issubclass(RpcError, ServiceError)
+
+
+def test_the_legacy_names_are_the_modern_classes() -> None:
+    """The legacy names are aliases, not subclasses: `issubclass(RPCError, RpcError)` would be
+    `issubclass(RpcError, RpcError)`, true for any class. Identity is what the alias promises,
+    and what lets one `except` clause catch a raise under either name."""
+    aliases = {
+        ClientError: RpcClientError,
+        RPCError: RpcError,
+        RpcRemoteError: RpcServerError,
+        RpcTimeout: RpcTimeoutError,
+        RpcNoResponders: RpcNoRespondersError,
+        RpcUnknownMethod: RpcUnknownMethodError,
+        RpcRefused: RpcRefusedError,
+        ClientOutOfDate: ClientOutOfDateError,
+    }
+
+    for legacy, modern in aliases.items():
+        assert legacy is modern, f"{legacy.__name__} is not {modern.__name__}"
 
 
 def test_try_except_rpc_error_catches_all_client_and_server_errors() -> None:
@@ -367,15 +411,15 @@ def test_try_except_rpc_error_catches_all_client_and_server_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resilience_circuit_breaker_trips_on_rpc_error_and_subclasses() -> None:
-    """Verify cliffracer-resilience CircuitBreaker trips on RpcError and its subclasses."""
+async def test_resilience_circuit_breaker_trips_on_the_errors_of_a_failing_dependency() -> None:
+    """Verify cliffracer-resilience CircuitBreaker trips on the RPC errors a failing dependency raises."""
     cb = CircuitBreaker("test_breaker", CircuitBreakerConfig(failure_threshold=3))
     assert cb.state == CircuitState.CLOSED
 
-    # Failures with different RpcError subclasses
+    # Failures that mean the dependency is failing or unreachable
     failures = [
-        RpcError("base rpc error"),
-        ClientError("client error alias"),
+        RpcServerError("handler raised"),
+        RpcNoRespondersError("nothing subscribed"),
         RpcTimeoutError("timed out waiting for reply"),
     ]
 
@@ -387,7 +431,7 @@ async def test_resilience_circuit_breaker_trips_on_rpc_error_and_subclasses() ->
         with pytest.raises(RpcError):
             await cb.call(failing_call)
 
-    # After 3 consecutive RpcError failures, circuit must be OPEN
+    # After 3 consecutive failures of a failing dependency, circuit must be OPEN
     assert cb.state == CircuitState.OPEN
     assert cb.is_open is True
 
@@ -421,6 +465,38 @@ async def test_resilience_circuit_breaker_ignores_non_monitored_exceptions() -> 
     # Failure count must remain 0 and circuit remains CLOSED
     assert cb.failure_count == 0
     assert cb.state == CircuitState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_the_monitored_exceptions_config_decides_what_counts() -> None:
+    """The breaker counts what `monitored_exceptions` names, and nothing else.
+
+    "Does not count a ValueError" is also what a breaker that ignored its config entirely does,
+    so the control that decides is read at a non-default value: with `(KeyError,)`, a KeyError
+    trips it and an RpcTimeoutError, which the default config would count, does not.
+    """
+    from cliffracer.core.exceptions import RpcTimeoutError
+
+    cb = CircuitBreaker(
+        "test_configured",
+        CircuitBreakerConfig(failure_threshold=2, monitored_exceptions=(KeyError,)),
+    )
+
+    async def raises(exc: BaseException) -> None:
+        raise exc
+
+    with pytest.raises(RpcTimeoutError):
+        await cb.call(lambda: raises(RpcTimeoutError("not in this config's list")))
+    assert cb.failure_count == 0
+
+    with pytest.raises(KeyError):
+        await cb.call(lambda: raises(KeyError("listed")))
+    assert cb.failure_count == 1
+    assert cb.state == CircuitState.CLOSED
+
+    with pytest.raises(KeyError):
+        await cb.call(lambda: raises(KeyError("listed again")))
+    assert cb.state == CircuitState.OPEN
 
 
 # ==============================================================================
@@ -480,6 +556,17 @@ def test_service_lifecycle_properties_reflect_container_state() -> None:
     svc._running = False
     assert svc.container.lifecycle._running is False
     assert svc._running is False
+
+    # `_starting` and `_stopped` start False on both sides, which any wiring satisfies. Each is
+    # moved in the lifecycle and read through the service, then moved back.
+    lifecycle = svc.container.lifecycle
+    for name in ("_starting", "_stopped"):
+        public = name.lstrip("_")
+        setattr(lifecycle, name, True)
+        assert getattr(svc, name) is True, name
+        assert getattr(lifecycle, f"is_{public}") is True, name
+        setattr(lifecycle, name, False)
+        assert getattr(svc, name) is False, name
 
 
 @pytest.mark.asyncio

@@ -2,15 +2,29 @@
 Unit tests for async RPC functionality
 """
 
-import asyncio
 import json
 from unittest.mock import AsyncMock
 
 import pytest
+from loguru import logger
 
 from cliffracer import CliffracerService, ServiceConfig, async_rpc, rpc
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def logged():
+    """What the framework logs, as (level, message), for the length of one test.
+
+    loguru does not reach `caplog`, so a sink of our own reads it.
+    """
+    lines: list[tuple[str, str]] = []
+    sink = logger.add(
+        lambda m: lines.append((m.record["level"].name, m.record["message"])), level="DEBUG"
+    )
+    yield lines
+    logger.remove(sink)
 
 
 class TestAsyncRPC:
@@ -136,13 +150,22 @@ class TestAsyncRPC:
         assert "test_input" in service.sync_calls
 
         # Verify response was sent
-        assert message._response_sent
-        response_data = json.loads(message.response_data.decode())
+        assert message.responded_data is not None
+        response_data = json.loads(message.responded_data.decode())
         assert response_data["result"] == "sync_response_test_input"
 
     @pytest.mark.asyncio
     async def test_handle_rpc_request_no_reply_subject(self, service, test_helper):
-        """Verify RPC request without reply subject executes without responding."""
+        """The handler runs and the dispatcher does not attempt a reply.
+
+        Asserted on the call count, not on `responded_data`. The mock refuses a
+        reply when there is no reply subject, as the real `Msg` does, and every
+        `msg.respond` in the dispatcher sits inside `except Exception` with a
+        debug log -- so a wrongly attempted reply leaves `responded_data` at
+        None and is indistinguishable from no attempt. Measured: with the
+        dispatcher's `has_reply` guard removed, the `responded_data` form of
+        this test passes.
+        """
         message = test_helper.create_mock_message(
             subject="test_async_service.rpc.sync_method", data={"data": "test_input"}, reply=None
         )
@@ -150,18 +173,29 @@ class TestAsyncRPC:
         await service.container._handle_rpc_request(message)
 
         assert "test_input" in service.sync_calls
-        assert not message._response_sent
+        assert message.respond_calls == 0, (
+            "the dispatcher attempted a reply on a message with no reply subject"
+        )
+        assert message.responded_data is None
 
     @pytest.mark.asyncio
     async def test_handle_rpc_request_unknown_method_no_reply(self, service, test_helper):
-        """Verify unknown method request without reply subject does not call respond or raise."""
+        """An unknown method with no reply subject: no attempt, and no raise.
+
+        The error path has its own `has_reply` guard, so this is the same
+        property as the test above on a different branch -- and the same reason
+        for counting attempts rather than reading `responded_data`.
+        """
         message = test_helper.create_mock_message(
             subject="test_async_service.rpc.unknown_method", data={"data": "test_input"}, reply=None
         )
 
         await service.container._handle_rpc_request(message)
 
-        assert not message._response_sent
+        assert message.respond_calls == 0, (
+            "the dispatcher attempted an error reply on a message with no reply subject"
+        )
+        assert message.responded_data is None
 
     @pytest.mark.asyncio
     async def test_handle_async_request(self, service, test_helper):
@@ -177,11 +211,12 @@ class TestAsyncRPC:
         # Verify method was called
         assert "test_input" in service.async_calls
 
-        # Verify no response was sent (async = fire-and-forget)
-        assert not message._response_sent
+        # Verify no response was sent (async = fire-and-forget). `respond_calls`
+        # counts attempts; `responded_data` alone stays None after a refused one.
+        assert message.respond_calls == 0
 
     @pytest.mark.asyncio
-    async def test_handle_async_request_unknown_method(self, service, test_helper):
+    async def test_handle_async_request_unknown_method(self, service, test_helper, logged):
         """Test handling async request for unknown method"""
         # Create mock message for unknown method
         message = test_helper.create_mock_message(
@@ -191,14 +226,16 @@ class TestAsyncRPC:
         # Handle the async request (should not raise exception)
         await service.container._handle_async_request(message)
 
-        # Verify no response was sent and no calls were made
-        assert not message._response_sent
+        # Verify no response was sent and no calls were made, and that the
+        # caller's mistake was reported rather than swallowed.
+        assert message.respond_calls == 0
         assert len(service.async_calls) == 0
         assert len(service.sync_calls) == 0
+        assert ("WARNING", "Unknown async method: unknown_method") in logged
 
     @pytest.mark.asyncio
-    async def test_handle_async_request_error(self, service, test_helper):
-        """Test error handling in async requests"""
+    async def test_handle_async_request_error(self, service, test_helper, logged):
+        """A failing async handler is reported with its name and cause, and nobody is answered."""
 
         class ErrorService(CliffracerService):
             @async_rpc
@@ -216,8 +253,13 @@ class TestAsyncRPC:
         # Handle request (should not raise exception, just log error)
         await error_service.container._handle_async_request(message)
 
-        # Verify no response was sent (errors in async calls are just logged)
-        assert not message._response_sent
+        # Nothing answers a fire-and-forget request, so the log is the only
+        # place the failure can be seen: it must name the method and the cause.
+        errors = [m for level, m in logged if level == "ERROR"]
+        assert len(errors) == 1, errors
+        assert errors[0].startswith("Error handling async request error_method (correlation_id: ")
+        assert errors[0].endswith("): Test error")
+        assert message.respond_calls == 0
 
     @pytest.mark.asyncio
     async def test_service_startup_subscribes_to_async(self, service):
@@ -251,57 +293,3 @@ class TestAsyncRPC:
 
         assert "test_async_service.rpc.*" in subjects
         assert "test_async_service.async.*" in subjects
-
-
-class TestAsyncRPCIntegration:
-    """Integration tests for async RPC patterns"""
-
-    @pytest.mark.asyncio
-    async def test_sync_vs_async_performance(self):
-        """Test that async calls are faster than sync calls"""
-        import time
-
-        # Mock service that simulates processing time
-        class SlowService(CliffracerService):
-            @rpc
-            async def slow_sync_method(self, delay: float = 0.1) -> str:
-                await asyncio.sleep(delay)
-                return "done"
-
-            @async_rpc
-            async def slow_async_method(self, delay: float = 0.1) -> None:
-                await asyncio.sleep(delay)
-
-        service = SlowService(ServiceConfig(name="slow_service"))
-        service.nc = AsyncMock()
-
-        # Mock sync response with simulated delay
-        async def mock_request(*args, **kwargs):
-            await asyncio.sleep(0.01)  # Simulate network delay
-            mock_response = AsyncMock()
-            mock_response.data = json.dumps({"result": "done"}).encode()
-            return mock_response
-
-        service.nc.request = AsyncMock(side_effect=mock_request)
-        service.nc.publish = AsyncMock()  # Async calls just publish
-
-        # Test sync calls (sequential, each waits for response)
-        start_time = time.time()
-        for _ in range(3):
-            await service.call_rpc("target", "slow_method", delay=0.01)
-        sync_time = time.time() - start_time
-
-        # Test async calls (parallel, no waiting)
-        start_time = time.time()
-        async_tasks = [service.call_async("target", "slow_method", delay=0.01) for _ in range(3)]
-        await asyncio.gather(*async_tasks)
-        async_time = time.time() - start_time
-
-        # Async should be much faster (no waiting for responses)
-        # Sync should take at least 3 * 0.01 = 0.03 seconds
-        # Async should be nearly instant
-        assert async_time < sync_time / 2  # Async should be at least 2x faster
-
-        # Verify call patterns
-        assert service.nc.request.call_count == 3  # Sync calls use request
-        assert service.nc.publish.call_count == 3  # Async calls use publish

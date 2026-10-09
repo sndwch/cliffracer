@@ -9,6 +9,7 @@ import nats
 import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, ServiceOrchestrator, ServiceRunner
+from cliffracer.runners.orchestrator import RUNNER_OK
 
 pytestmark = pytest.mark.unit
 
@@ -21,8 +22,6 @@ class TestServiceLifecycle:
             super().__init__(config)
             self.startup_called = False
             self.shutdown_called = False
-            self.connect_count = 0
-            self.disconnect_count = 0
 
         async def on_startup(self):
             """Custom startup logic"""
@@ -33,14 +32,6 @@ class TestServiceLifecycle:
             """Custom shutdown logic"""
             self.shutdown_called = True
             await super().on_shutdown()
-
-        async def on_connect(self):
-            """Track connections"""
-            self.connect_count += 1
-
-        async def on_disconnect(self):
-            """Track disconnections"""
-            self.disconnect_count += 1
 
     @pytest.fixture
     def service_config(self):
@@ -61,17 +52,24 @@ class TestServiceLifecycle:
         mock_nc = AsyncMock()
         mock_nc.is_closed = False
 
-        with patch("nats.connect", return_value=mock_nc):
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             # Start service
             await service.start()
 
             # Verify startup sequence
             assert service._running is True
             assert service.startup_called is True
-            assert service.nc is not None
+            # The connection `nats.connect` returned, not merely something
+            assert service.nc is mock_nc
 
-            # Verify subscriptions were created
-            assert mock_nc.subscribe.called
+            # Verify the framework's own subscriptions were created: the subjects, and the queue
+            # group on the two request paths (a replica pair shares one, so a request is handled
+            # once)
+            name = service.config.name
+            calls = {c.args[0]: c.kwargs for c in mock_nc.subscribe.call_args_list}
+            assert {f"{name}.rpc.*", f"{name}.async.*", f"{name}.describe"} <= set(calls), calls
+            assert calls[f"{name}.rpc.*"]["queue"] == f"{name}.rpc"
+            assert calls[f"{name}.async.*"]["queue"] == f"{name}.async"
 
             # Stop service
             await service.stop()
@@ -83,7 +81,7 @@ class TestServiceLifecycle:
         mock_nc = AsyncMock()
         mock_nc.is_closed = False
 
-        with patch("nats.connect", return_value=mock_nc):
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             # Start and stop service
             await service.start()
             await service.stop()
@@ -95,9 +93,23 @@ class TestServiceLifecycle:
             assert mock_nc.close.called
 
     @pytest.mark.asyncio
-    async def test_service_reconnection_handling(self, service):
-        """Test service handles reconnections properly"""
-        # Mock NATS connection with callbacks
+    async def test_service_reconnection_handling(self):
+        """The broker's callbacks reach the hooks the service configured, in the order they fire.
+
+        `on_connect` / `on_disconnect` / `on_error` are `ServiceConfig` hooks: the framework calls
+        them from nats-py's `connected`/`disconnected`/`reconnected`/`error` callbacks and from
+        nothing else, so each callback is fired by hand and the hook it must reach is read.
+        """
+        timeline: list[tuple[str, object]] = []
+        service = self.LifecycleSvc(
+            ServiceConfig(
+                name="test_lifecycle_reconnect",
+                health_port=0,
+                on_connect=lambda: timeline.append(("connect", None)),
+                on_disconnect=lambda: timeline.append(("disconnect", None)),
+                on_error=lambda exc: timeline.append(("error", exc)),
+            )
+        )
         mock_nc = AsyncMock()
         mock_nc.is_closed = False
 
@@ -111,17 +123,22 @@ class TestServiceLifecycle:
             callbacks["closed_cb"] = kwargs.get("closed_cb")
             return mock_nc
 
-        with patch("nats.connect", side_effect=mock_connect):
+        boom = Exception("Test error")
+        with patch("cliffracer.core.dial.connect", side_effect=mock_connect):
             await service.start()
+            assert timeline == [("connect", None)], "the initial connect fires on_connect once"
 
             # Simulate disconnection
             await callbacks["disconnected_cb"]()
+            assert timeline[1:] == [("disconnect", None)], timeline
 
-            # Simulate reconnection
+            # Simulate reconnection: the connect hook fires again
             await callbacks["reconnected_cb"]()
+            assert timeline[2:] == [("connect", None)], timeline
 
-            # Simulate error
-            await callbacks["error_cb"](Exception("Test error"))
+            # Simulate error: the hook receives the exception itself
+            await callbacks["error_cb"](boom)
+            assert len(timeline) == 4 and timeline[3] == ("error", boom), timeline
 
             # Simulate closed. A close while the service is running stops
             # the service without exiting the process.
@@ -169,7 +186,7 @@ class TestServiceLifecycle:
             # Mock supplies an inert connection without invoking callbacks directly.
             return mock_nc
 
-        with patch("nats.connect", side_effect=mock_connect):
+        with patch("cliffracer.core.dial.connect", side_effect=mock_connect):
             await service.start()
 
             # Verify connect hook was called
@@ -194,7 +211,7 @@ class TestServiceLifecycle:
         mock_nc.is_closed = False
         mock_nc.subscribe = AsyncMock(return_value=AsyncMock())
 
-        with patch("nats.connect", return_value=mock_nc):
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             await service.start()
 
             started = list(service.container._subscriptions)
@@ -212,7 +229,7 @@ class TestServiceLifecycle:
         mock_nc = AsyncMock()
         mock_nc.is_closed = False
 
-        with patch("nats.connect", return_value=mock_nc):
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             await service.start()
             initial_subs_count = len(service.container._subscriptions)
             subscribe_call_count = mock_nc.subscribe.call_count
@@ -236,7 +253,7 @@ class TestServiceLifecycle:
         mock_nc.is_reconnecting = True
         mock_nc.drain.side_effect = nats.errors.ConnectionReconnectingError
 
-        with patch("nats.connect", return_value=mock_nc):
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             await service.start()
             # Must succeed cleanly without raising
             await service.stop()
@@ -257,7 +274,7 @@ class TestServiceLifecycle:
         mock_nc = AsyncMock()
         mock_nc.is_closed = False
 
-        with patch("nats.connect", return_value=mock_nc):
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             await service.start()
 
             with pytest.raises(RuntimeError, match="user shutdown hook crashed"):
@@ -276,7 +293,7 @@ class TestServiceLifecycle:
         mock_nc = AsyncMock()
         mock_nc.is_closed = False
 
-        with patch("nats.connect", return_value=mock_nc):
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             await service.start()
             await service.stop()
 
@@ -288,34 +305,39 @@ class TestServiceLifecycle:
             assert mock_nc.close.call_count == 1
 
 
+async def _until(predicate, timeout=5.0):
+    """Poll *predicate* until it holds, failing by name at *timeout*."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() > deadline:
+            raise AssertionError(f"condition still false after {timeout}s")
+        await asyncio.sleep(0.01)
+
+
 class TestServiceRunner:
     """Test ServiceRunner functionality"""
 
     @pytest.mark.asyncio
     async def test_service_runner_basic(self):
-        """Test basic ServiceRunner functionality"""
+        """The runner starts its service, and a shutdown stops it and reports success."""
         config = ServiceConfig(name="test_runner_service")
-
-        # Create runner
         runner = ServiceRunner(CliffracerService, config)
 
-        # Mock NATS
         mock_nc = AsyncMock()
         mock_nc.is_closed = False
 
-        with patch("nats.connect", return_value=mock_nc):
-            # Start runner
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             run_task = asyncio.create_task(runner.run())
 
-            # Let it run briefly
-            await asyncio.sleep(0.1)
+            await _until(lambda: runner.service is not None and runner.service._running)
 
-            # Stop runner
             runner._running = False
             runner._shutdown_event.set()
+            result = await asyncio.wait_for(run_task, timeout=5)
 
-            # Await run task shutdown.
-            await asyncio.wait_for(run_task, timeout=5)
+        assert result == RUNNER_OK
+        assert runner.service._running is False
 
     @pytest.mark.asyncio
     async def test_service_runner_auto_restart(self):
@@ -343,7 +365,7 @@ class TestServiceRunner:
         mock_nc = AsyncMock()
         mock_nc.is_closed = False
 
-        with patch("nats.connect", return_value=mock_nc):
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             # Start runner - should retry once
             run_task = asyncio.create_task(runner.run())
 
@@ -379,37 +401,44 @@ class TestServiceOrchestrator:
         for config in configs:
             orchestrator.add_service(CliffracerService, config)
 
-        # Verify services were added
-        assert len(orchestrator.runners) == 3
-
-        # Mock NATS for all services
         mock_nc = AsyncMock()
         mock_nc.is_closed = False
 
-        with patch("nats.connect", return_value=mock_nc):
-            # Start orchestrator
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             run_task = asyncio.create_task(orchestrator.run())
 
-            # Let services start
-            await asyncio.sleep(0.1)
+            await _until(
+                lambda: all(
+                    r.service is not None and r.service._running for r in orchestrator.runners
+                )
+            )
+            assert sorted(r.service.config.name for r in orchestrator.runners) == [
+                "service1",
+                "service2",
+                "service3",
+            ]
 
-            # Stop orchestrator
             await orchestrator.stop()
-
-            # Await orchestrator run task shutdown.
             await asyncio.wait_for(run_task, timeout=5)
+
+        assert not any(r.service._running for r in orchestrator.runners)
 
     @pytest.mark.asyncio
     async def test_orchestrator_service_failure_handling(self):
         """Test orchestrator handles service failures"""
         orchestrator = ServiceOrchestrator()
 
-        # Add a service that will fail
+        # Counted on the class: the runner builds a fresh instance per attempt.
         class FailingService(CliffracerService):
+            start_calls = 0
+
             async def start(self):
+                type(self).start_calls += 1
                 raise Exception("Service failed to start")
 
-        config = ServiceConfig(name="failing_service", auto_restart=False)
+        # A short restart_delay, so a retry the runner should not make would
+        # land inside the window below.
+        config = ServiceConfig(name="failing_service", auto_restart=False, restart_delay=0.01)
         orchestrator.add_service(FailingService, config)
 
         # Add a normal service
@@ -419,33 +448,35 @@ class TestServiceOrchestrator:
         mock_nc = AsyncMock()
         mock_nc.is_closed = False
 
-        with patch("nats.connect", return_value=mock_nc):
-            # Start orchestrator
+        failing, healthy = orchestrator.runners
+
+        with patch("cliffracer.core.dial.connect", return_value=mock_nc):
             run_task = asyncio.create_task(orchestrator.run())
 
-            # Let services try to start
-            await asyncio.sleep(0.1)
+            # The failure happened and was contained: the sibling still came up.
+            await _until(lambda: FailingService.start_calls == 1)
+            await _until(lambda: healthy.service is not None and healthy.service._running)
+            await asyncio.sleep(0.2)
 
-            # Normal service should still be running
-            # Service might be running in the background
-            await asyncio.sleep(0.1)  # Give it more time to start
-
-            # Stop orchestrator
             await orchestrator.stop()
-
-            # Await orchestrator run task shutdown.
             await asyncio.wait_for(run_task, timeout=5)
 
-            assert len(orchestrator.runners) == 2
-            assert orchestrator.runners[0]._running is False
-            assert orchestrator.runners[1].service is not None
-            assert orchestrator.runners[1]._running is False
-            assert orchestrator.runners[1].service._running is False
+        # auto_restart=False: one attempt, never retried.
+        assert FailingService.start_calls == 1
+        assert failing._successful_starts == 0
+        assert healthy._successful_starts == 1
 
 
 @pytest.mark.asyncio
-async def test_concurrent_start_and_stop_eliminates_zombie_state():
-    """Verify atomic start/stop lock eliminates zombie states under concurrency."""
+async def test_overlapping_starts_run_the_startup_once():
+    """Two start() calls that overlap run the startup once, and stop() then stops it.
+
+    The count is what reads the serialization: without the lifecycle lock both
+    calls enter the startup together, and without start()'s already-running
+    check the second runs it again after the first. Either way it runs twice.
+    Both calls must have entered start() while the first was inside the startup,
+    or a count of one would only show that they ran one after the other.
+    """
     mock_nc = AsyncMock()
     mock_nc.is_closed = False
     mock_nc.is_connected = True
@@ -454,42 +485,91 @@ async def test_concurrent_start_and_stop_eliminates_zombie_state():
     mock_nc.drain = AsyncMock()
     mock_nc.close = AsyncMock()
 
-    with patch("nats.connect", return_value=mock_nc):
+    with patch("cliffracer.core.dial.connect", return_value=mock_nc):
         svc = CliffracerService(ServiceConfig(name="race_svc", health_port=0))
+        hooks = svc.container.lifecycle.hooks
+        setup_extensions = hooks.setup_extensions
+        startups = 0
+        entered = 0
+        entered_while_starting: list[int] = []
+
+        async def counted_setup_extensions():
+            nonlocal startups
+            startups += 1
+            await asyncio.sleep(0)  # a point at which the other start() can interleave
+            entered_while_starting.append(entered)
+            await setup_extensions()
+
+        hooks.setup_extensions = counted_setup_extensions
 
         async def c1():
+            nonlocal entered
+            entered += 1
             await svc.start()
 
         async def c2():
+            nonlocal entered
+            entered += 1
             await svc.start()
             await svc.stop()
 
         await asyncio.gather(c1(), c2())
+
+        assert entered_while_starting[:1] == [2], "the second start() did not overlap the first"
+        assert startups == 1, f"the startup ran {startups} times for overlapping start() calls"
         assert svc._running is False
         assert svc._stopped is True
 
 
 @pytest.mark.asyncio
-async def test_disconnect_drains_before_unsubscribing():
-    """Verify disconnect calls nc.drain while subscriptions are intact."""
+@pytest.mark.parametrize("yield_after_start", [False, True])
+async def test_stop_unsubscribes_then_drains_then_closes(yield_after_start):
+    """Intake closes before work drains, including an immediate stop after startup."""
+    events: list[str] = []
     mock_nc = AsyncMock()
     mock_nc.is_closed = False
     mock_nc.is_connected = True
     mock_nc.is_connecting = False
     mock_nc.is_reconnecting = False
+    mock_nc.is_draining = False
 
-    drain_called_before_close = False
+    async def subscribe(subject, **kwargs):
+        sub = AsyncMock()
 
-    async def mock_drain():
-        nonlocal drain_called_before_close
-        drain_called_before_close = True
+        async def unsubscribe():
+            events.append(f"unsubscribe {subject}")
 
-    mock_nc.drain = mock_drain
+        sub.unsubscribe = unsubscribe
+        return sub
 
-    with patch("nats.connect", return_value=mock_nc):
-        svc = CliffracerService(ServiceConfig(name="drain_svc", health_port=0))
+    async def drain():
+        events.append("drain")
+
+    async def close():
+        events.append("close")
+
+    mock_nc.subscribe = subscribe
+    mock_nc.drain = drain
+    mock_nc.close = close
+
+    with patch("cliffracer.core.dial.connect", return_value=mock_nc):
+        svc = CliffracerService(ServiceConfig(name="warehouse", health_port=0))
+        drain_tasks = svc.container.lifecycle.drain_active_tasks
+
+        async def finish_orders(*, timeout):
+            events.append("finish orders")
+            await drain_tasks(timeout=timeout)
+
+        svc.container.lifecycle.drain_active_tasks = finish_orders
         await svc.start()
-        assert len(svc.container._subscriptions) > 0
+        if yield_after_start:
+            await asyncio.sleep(0)
         await svc.stop()
-        assert drain_called_before_close is True
-        assert len(svc.container._subscriptions) == 0
+
+    assert events[3:] == ["finish orders", "drain", "close"], events
+    assert sorted(events[:3]) == [
+        "unsubscribe warehouse.async.*",
+        "unsubscribe warehouse.describe",
+        "unsubscribe warehouse.rpc.*",
+    ], events
+    assert len(svc.container._subscriptions) == 0

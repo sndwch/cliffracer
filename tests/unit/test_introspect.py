@@ -6,7 +6,15 @@ import json
 import pytest
 from pydantic import BaseModel
 
-from cliffracer import CliffracerService, rpc
+from cliffracer import (
+    CliffracerService,
+    ServiceConfig,
+    broadcast,
+    listener,
+    rpc,
+    validated_listener,
+)
+from cliffracer.core.jetstream import StreamSpec
 from cliffracer.introspect import Description, canonical, describe
 
 pytestmark = pytest.mark.unit
@@ -77,6 +85,61 @@ def test_round_trip_through_canonical_json_is_byte_identical():
     text = canonical(d.to_dict())
     again = Description.from_dict(json.loads(text))
     assert canonical(again.to_dict()) == text
+
+
+class Hub(CliffracerService):
+    """A service with every kind of event handler, so a round trip has listeners to lose."""
+
+    @rpc
+    async def ping(self) -> int:
+        return 1
+
+    @listener("orders.raw", durable="raw_worker")
+    async def on_raw(self, sku: str) -> None: ...
+
+    @validated_listener("orders.checked", Order, durable="checked_worker")
+    async def on_checked(self, event: Order) -> None: ...
+
+    @listener("orders.pull", durable="pull_worker", pull=True)
+    async def on_pull(self, sku: str) -> None: ...
+
+    @listener("orders.audit", fanout=True, cross_namespace=True)
+    async def on_audit(self, subject: str) -> None: ...
+
+    @broadcast("orders.notice")
+    async def on_notice(self, subject: str) -> None: ...
+
+
+def test_round_trip_of_listeners_and_streams_keeps_every_field():
+    """Byte identity cannot see a field `to_dict` leaves out on both sides, and a round trip of a
+    class with no listeners and no streams compares two empty lists. This one has both kinds of
+    each, and compares the objects."""
+    config = ServiceConfig(
+        name="hub",
+        health_port=0,
+        namespace="shop",
+        jetstream_enabled=True,
+        jetstream_streams=[
+            StreamSpec(
+                name="ORDERS",
+                subjects=["shop.orders.raw", "shop.orders.checked", "shop.orders.pull"],
+                storage="memory",
+                retention="interest",
+                max_age_seconds=60.0,
+                duplicate_window_seconds=30.0,
+            )
+        ],
+    )
+    described = describe(Hub, config=config)
+    assert len(described.listeners) == 5 and len(described.streams) == 1
+
+    text = canonical(described.to_dict())
+    again = Description.from_dict(json.loads(text))
+
+    assert canonical(again.to_dict()) == text
+    assert again.listeners == described.listeners
+    assert again.streams == described.streams
+    assert again == described
 
 
 def test_a_class_with_an_untyped_handler_refuses_like_discovery():

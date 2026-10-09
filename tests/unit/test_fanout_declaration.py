@@ -25,6 +25,10 @@ def test_a_listener_with_neither_durable_nor_fanout_is_refused():
     assert "events.thing.happened" in message, "the error must name the subject"
     assert "fanout=True" in message, "the error must name the way out"
     assert "durable" in message
+    # The branch that ran: every refusal ends with the fanout=True sentence, so the line above
+    # cannot tell this diagnosis from the inert-durable one.
+    assert "declare neither a durable nor fanout" in message, message
+    assert "inert" not in message, message
 
 
 def test_declaring_fanout_is_accepted_and_keeps_the_old_behaviour():
@@ -106,14 +110,16 @@ def test_a_validated_listener_with_neither_is_refused_too():
 
     class S(CliffracerService):
         @validated_listener("events.thing.happened", Payload)
-        async def on_thing(self, message: Payload, **kw):
+        async def on_thing(self, message: Payload) -> None:
             pass
 
     with pytest.raises(ConfigurationError) as exc:
         S(_config())._discover_handlers()
 
-    assert "on_thing" in str(exc.value)
-    assert "fanout=True" in str(exc.value)
+    message = str(exc.value)
+    assert "on_thing" in message
+    assert "fanout=True" in message
+    assert "declare neither a durable nor fanout" in message, message
 
 
 def test_a_validated_listener_may_declare_fanout():
@@ -126,7 +132,7 @@ def test_a_validated_listener_may_declare_fanout():
 
     class S(CliffracerService):
         @validated_listener("events.thing.happened", Payload, fanout=True)
-        async def on_thing(self, message: Payload, **kw):
+        async def on_thing(self, message: Payload) -> None:
             pass
 
     svc = S(_config())
@@ -145,11 +151,12 @@ def test_a_broadcast_handler_needs_no_flag():
 
     svc = S(_config())
     svc._discover_handlers()  # must not raise
-    assert "system.alerts" in svc.container.registry.event_handlers
+    assert "ns.system.alerts" in svc.container.registry.event_handlers
 
 
-def test_a_broadcast_is_exempt_on_a_service_that_has_the_broadcast_mixin_too():
-    """Verify broadcast registration correctly populates event fanout mapping."""
+def test_a_broadcast_handler_is_recorded_as_fanout():
+    """A `@broadcast` handler lands in `registry.event_fanout`, which is what the declaration
+    rule reads; the test above checks the same handler is registered as an event handler."""
     from cliffracer import CliffracerService, broadcast
 
     class S(CliffracerService):
@@ -159,7 +166,7 @@ def test_a_broadcast_is_exempt_on_a_service_that_has_the_broadcast_mixin_too():
 
     svc = S(_config())
     svc._discover_handlers()  # must not raise
-    assert "system.alerts" in svc.container.registry.event_fanout
+    assert "ns.system.alerts" in svc.container.registry.event_fanout
 
 
 def test_a_durable_without_jetstream_does_not_count_as_a_declaration():
@@ -173,7 +180,12 @@ def test_a_durable_without_jetstream_does_not_count_as_a_declaration():
     with pytest.raises(ConfigurationError) as exc:
         S(_config(jetstream_enabled=False))._discover_handlers()
 
-    assert "fanout=True" in str(exc.value)
+    message = str(exc.value)
+    assert "fanout=True" in message
+    # The branch that ran. The fanout=True sentence ends every refusal, so only the inert-durable
+    # diagnosis names the durable and says why it does not count.
+    assert "declares durable 'orders', which is inert while jetstream_enabled is False" in message
+    assert "declare neither a durable nor fanout" not in message, message
 
 
 def test_a_durable_plus_fanout_is_allowed_when_jetstream_is_off():
@@ -251,3 +263,44 @@ def test_a_mixed_service_diagnoses_each_listener_separately():
     assert "thing-worker" in message and "jetstream_enabled is False" in message, message
     assert "declares neither a durable nor fanout" in message, message
     assert "2 listener(s)" in message, message
+
+
+def test_a_compliant_listener_on_the_same_service_is_not_accused():
+    """The refusal counts and lists the OFFENDERS, not every listener the service has.
+
+    The mixed-service test above has two offenders, so a listing over every handler looks the
+    same as a listing over the offenders. Here five listeners declare fanout and one does not.
+    """
+
+    class S(CliffracerService):
+        @listener("events.fine.one", fanout=True)
+        async def on_one(self, subject: str) -> None:
+            pass
+
+        @listener("events.fine.two", fanout=True)
+        async def on_two(self, subject: str) -> None:
+            pass
+
+        @listener("events.fine.three", fanout=True)
+        async def on_three(self, subject: str) -> None:
+            pass
+
+        @listener("events.fine.four", fanout=True)
+        async def on_four(self, subject: str) -> None:
+            pass
+
+        @listener("events.fine.five", fanout=True)
+        async def on_five(self, subject: str) -> None:
+            pass
+
+        @listener("events.the.offender")
+        async def on_offender(self, subject: str) -> None:
+            pass
+
+    with pytest.raises(ConfigurationError) as exc:
+        S(_config())._discover_handlers()
+
+    message = str(exc.value)
+    assert "1 listener(s)" in message, message
+    assert "events.the.offender" in message, message
+    assert "events.fine" not in message, message

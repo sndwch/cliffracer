@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import builtins
 import inspect
-import re
 from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import Any
@@ -19,11 +18,29 @@ from loguru import logger as global_logger
 from nats.errors import Error as NatsError
 from nats.js import JetStreamContext
 
+from . import dial
+from .endpoints import redact_nats_url
+from .lifecycle import bounded_shutdown_timeout
 from .service_config import ServiceConfig
 
-_NATS_SCHEME_RE = re.compile(r"^(nats|tls|ws|wss)://", re.IGNORECASE)
-
 _CLOSED_STOP_TIMEOUT = 10.0
+
+
+async def flush_through_buffered_commands(nc: Any) -> None:
+    """Return once the broker has processed every command sent on `nc` before this call.
+
+    `nc.flush()` is meant to do this, and does not when it is called straight after `subscribe`:
+    nats-py writes the PING to the socket at once, but a SUB goes into a pending buffer that
+    another task writes out, so the PING can reach the broker AHEAD of the SUB it should
+    confirm. The PONG then proves nothing about it, and a request from another connection can
+    arrive before the broker has read the SUB. Measured with nats-py alone, on a loaded host, at
+    about 4% of subscribe-then-flush-then-request rounds.
+
+    The first flush gives the pending commands their turn to be written; the second flush's PING
+    is written after them, on the same socket, so its PONG is the broker saying it has read them.
+    """
+    await nc.flush()
+    await nc.flush()
 
 
 class BrokerConnectionState(Enum):
@@ -34,27 +51,6 @@ class BrokerConnectionState(Enum):
     CONNECTED = "connected"
     DRAINING = "draining"
     CLOSED = "closed"
-
-
-def redact_nats_url(url: str) -> str:
-    """Strip credentials from a NATS URL for diagnostic logging.
-
-    Invariants:
-    - Returns string unchanged if no "@" delimiter is present.
-    - Matches only allowed schemes: nats, tls, ws, wss.
-    - Never raises an exception; returns fallback string on parsing error.
-    """
-    try:
-        text = str(url)
-        if "@" not in text:
-            return text
-        match = _NATS_SCHEME_RE.match(text)
-        scheme = match.group(1) if match else ""
-        rest = text[match.end() :] if match else text
-        _, _, hostpart = rest.rpartition("@")
-        return f"{scheme}://***@{hostpart}" if scheme else f"***@{hostpart}"
-    except Exception:
-        return "<unparseable nats url>"
 
 
 class ConnectionManager:
@@ -74,16 +70,28 @@ class ConnectionManager:
         on_closed_handler: Callable[[], Awaitable[None]] | None = None,
         is_running_fn: Callable[[], bool] | None = None,
         logger_provider: Callable[[], Any] | None = None,
+        on_connection_lost: Callable[[], Awaitable[None]] | None = None,
+        on_connection_regained: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.config = config
         self._logger = logger
         self._logger_provider = logger_provider
         self.on_closed_handler = on_closed_handler
+        #: What the container runs, before the config slot, when the client reports the
+        #: connection lost or regained: the extensions' `on_disconnect` / `on_reconnect`.
+        self.on_connection_lost = on_connection_lost
+        self.on_connection_regained = on_connection_regained
         self.is_running_fn = is_running_fn
 
         self.nc: nats.NATS | None = None
         self.js: JetStreamContext | None = None
+        #: How `connect` opens the connection. None, the default, is `dial.connect`, looked up
+        #: when `connect` runs, which dials `config.nats_url`. `ServiceTestHarness(broker=...)`
+        #: sets the broker's own `connect`, so a service under test starts over an in-process
+        #: bus; nothing else sets it.
+        self.dial: Callable[..., Awaitable[Any]] | None = None
         self.subscriptions: set[asyncio.Task[Any]] = set()
+        self._subscription_handles: dict[int, Any] = {}
 
     @property
     def logger(self) -> Any:
@@ -131,25 +139,28 @@ class ConnectionManager:
         Applies credentials and connection bounds. On permanent failure,
         raises NatsError.
         """
-        auth_kwargs = self.config.nats_auth_kwargs()
-        connect_coro = nats.connect(
-            self.config.nats_url,
-            name=self.config.name,
-            max_reconnect_attempts=self.config.max_reconnect_attempts,
-            reconnect_time_wait=self.config.reconnect_time_wait,
-            error_cb=self._error_callback,
-            disconnected_cb=self._disconnected_callback,
-            reconnected_cb=self._reconnected_callback,
-            closed_cb=self._closed_callback,
-            **auth_kwargs,
-        )
-
+        auth_kwargs = self.config.nats_connect_kwargs()
+        # Passed only when set: unset must leave nats-py's own defaults in force.
+        ping_kwargs = {
+            name: value
+            for name in ("ping_interval", "max_outstanding_pings")
+            if (value := getattr(self.config, name)) is not None
+        }
         try:
             try:
-                if self.config.connect_timeout is None:
-                    self.nc = await connect_coro
-                else:
-                    self.nc = await asyncio.wait_for(connect_coro, self.config.connect_timeout)
+                self.nc = await (self.dial or dial.connect)(
+                    self.config.nats_url,
+                    timeout=self.config.connect_timeout,
+                    name=self.config.name,
+                    max_reconnect_attempts=self.config.max_reconnect_attempts,
+                    reconnect_time_wait=self.config.reconnect_time_wait,
+                    error_cb=self._error_callback,
+                    disconnected_cb=self._disconnected_callback,
+                    reconnected_cb=self._reconnected_callback,
+                    closed_cb=self._closed_callback,
+                    **ping_kwargs,
+                    **auth_kwargs,
+                )
             except builtins.TimeoutError as exc:
                 raise NatsError(
                     f"no answer within connect_timeout={self.config.connect_timeout}s"
@@ -180,26 +191,67 @@ class ConnectionManager:
                 is_reconnecting = getattr(self.nc, "is_reconnecting", False) is True
                 if not (is_connecting or is_reconnecting):
                     try:
-                        await self.nc.drain()
+                        # Bounded by `shutdown_timeout`: the drain flushes and waits on a PONG, and
+                        # a path to the broker that drops packets still reads as connected, so
+                        # nothing else would end the wait before nats-py's own 10 seconds.
+                        await asyncio.wait_for(
+                            self.nc.drain(),
+                            timeout=bounded_shutdown_timeout(
+                                getattr(self.config, "shutdown_timeout", None),
+                                self.logger,
+                                "Draining the broker connection",
+                            ),
+                        )
                     except (
                         nats.errors.ConnectionReconnectingError,
                         nats.errors.ConnectionClosedError,
                     ):
                         pass
+                    except builtins.TimeoutError as exc:
+                        # `FlushTimeoutError` is one, and so is the deadline above. The broker did
+                        # not answer, so what was buffered may not have been sent; the connection
+                        # is closed below all the same, and the stop is not a failed one.
+                        self.logger.warning(
+                            f"Service '{self.config.name}' could not drain its NATS connection "
+                            f"before it was closed ({type(exc).__name__}): the broker did not "
+                            f"answer, so messages still buffered may not have been sent"
+                        )
             finally:
                 try:
                     await self.nc.close()
                 except Exception:
                     pass
 
-    async def unsubscribe_all(self) -> None:
-        """Cancel and drain all tracked subscription listener tasks."""
-        if not self.subscriptions:
+    def track_subscription(self, sub: Any) -> None:
+        """Own a broker subscription before any listener task or further startup await."""
+        self._subscription_handles[id(sub)] = sub
+
+    async def unsubscribe(self, sub: Any) -> None:
+        """Release an owned subscription once, independently of its listener task."""
+        if self._subscription_handles.pop(id(sub), None) is None:
             return
-        for task in list(self.subscriptions):
-            task.cancel()
-        await asyncio.gather(*list(self.subscriptions), return_exceptions=True)
-        self.subscriptions.clear()
+        if (
+            self.nc
+            and self.broker_state != BrokerConnectionState.CLOSED
+            and not getattr(self.nc, "is_draining", False)
+        ):
+            try:
+                await sub.unsubscribe()
+            except Exception:
+                pass
+
+    async def unsubscribe_all(self) -> None:
+        """Cancel listeners and close intake even when a listener never began running."""
+        tasks = list(self.subscriptions)
+        try:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            self.subscriptions.difference_update(tasks)
+            await asyncio.gather(
+                *(self.unsubscribe(sub) for sub in list(self._subscription_handles.values()))
+            )
 
     async def _error_callback(self, e: Any) -> None:
         self.logger.error(f"NATS error: {e}")
@@ -208,11 +260,15 @@ class ConnectionManager:
 
     async def _disconnected_callback(self) -> None:
         self.logger.warning(f"Service '{self.config.name}' disconnected from NATS")
+        if self.on_connection_lost is not None:
+            await self.on_connection_lost()
         if self.config.on_disconnect is not None:
             await self._maybe_await(self.config.on_disconnect())
 
     async def _reconnected_callback(self) -> None:
         self.logger.info(f"Service '{self.config.name}' reconnected to NATS")
+        if self.on_connection_regained is not None:
+            await self.on_connection_regained()
         if self.config.on_connect is not None:
             await self._maybe_await(self.config.on_connect())
 
@@ -235,15 +291,28 @@ class ConnectionManager:
             )
             return
 
+        stopped = True
         try:
             if self.on_closed_handler is not None:
                 await asyncio.wait_for(self.on_closed_handler(), timeout=_CLOSED_STOP_TIMEOUT)
-        except Exception as exc:
+        except TimeoutError:
+            # A TimeoutError has no message, so formatting it says nothing at all.
+            stopped = False
             self.logger.warning(
-                f"Service '{self.config.name}' could not stop cleanly on connection close: {exc}"
+                f"Service '{self.config.name}' could not stop cleanly on connection close: "
+                f"the stop did not finish within {_CLOSED_STOP_TIMEOUT:g} seconds, which is "
+                f"fixed and not governed by shutdown_timeout, and was cancelled part-way, so "
+                f"steps it had not reached may not have run. on_shutdown still runs after the "
+                f"cut-off, for up to shutdown_timeout"
+            )
+        except Exception as exc:
+            stopped = False
+            self.logger.warning(
+                f"Service '{self.config.name}' could not stop cleanly on connection close: {exc!r}"
             )
 
-        self.logger.error(f"Service '{self.config.name}' stopped after NATS connection closed.")
+        if stopped:
+            self.logger.error(f"Service '{self.config.name}' stopped after NATS connection closed.")
 
     @staticmethod
     async def _maybe_await(value: Any) -> Any:

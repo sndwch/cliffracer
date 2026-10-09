@@ -9,8 +9,18 @@ import pytest
 
 from cliffracer import CliffracerService, ServiceConfig, timer
 from cliffracer.core.timer import Timer
+from cliffracer.testing import FakeClock
 
 pytestmark = pytest.mark.unit
+
+
+async def _start_on(service: CliffracerService, clock: FakeClock) -> None:
+    """Start the service's timers reading `clock`, which then waits for each to reach its wait."""
+    for t in service.container.registry.timers:
+        t.clock = clock
+    await service.container._start_timers()
+    for t in service.container.registry.timers:
+        clock.watch(t.task)
 
 
 class TimerTestService(CliffracerService):
@@ -19,14 +29,15 @@ class TimerTestService(CliffracerService):
     def __init__(self):
         config = ServiceConfig(name="timer_test_service")
         super().__init__(config)
-        self.tick_count = 0
+        self.async_ticks = 0
+        self.sync_ticks = 0
         self.eager_count = 0
-        self.health_checks = []
+        self.dependency_probes = []
 
     @timer(interval=0.1)  # 100ms for fast testing
     async def fast_tick(self):
         """Fast timer for testing"""
-        self.tick_count += 1
+        self.async_ticks += 1
 
     @timer(interval=0.2, eager=True)
     async def eager_timer(self):
@@ -36,12 +47,12 @@ class TimerTestService(CliffracerService):
     @timer(interval=0.1)
     def sync_timer(self):
         """Synchronous timer method"""
-        self.tick_count += 10
+        self.sync_ticks += 1
 
     @timer(interval=0.05)
-    async def health_check(self):
+    async def probe_dependencies(self):
         """Simulated health check"""
-        self.health_checks.append(time.time())
+        self.dependency_probes.append(time.time())
 
 
 class TestTimerDecorator:
@@ -75,8 +86,26 @@ class TestTimerDecorator:
         assert c.task is None
         assert c.service_instance is None
 
-    def test_timer_decorator_passes_headers_and_token_factory(self):
-        """Test timer decorator with headers and token_factory"""
+    def test_a_clone_does_not_share_the_headers_dict_with_the_original(self):
+        """The independence the clone's docstring claims, on the one piece of shared mutable
+        state. Every service instance gets a clone of the class-level timer, and a firing writes
+        its `authorization` header into the dict: shared, one instance's token would be visible
+        to, and overwritten by, every other instance of the class."""
+        original = Timer(interval=1.0, headers={"authorization": "Bearer foo"})
+
+        clone = original.clone()
+        clone.headers["authorization"] = "Bearer someone-else"
+        clone.headers["x-added"] = "1"
+
+        assert clone.headers is not original.headers
+        assert original.headers == {"authorization": "Bearer foo"}
+
+    def test_a_clone_of_a_timer_with_no_headers_has_none(self):
+        assert Timer(interval=1.0).clone().headers is None
+
+    def test_the_decorator_stores_headers_and_token_factory_on_the_timer(self):
+        """The decorator hands both to the Timer. What a firing sends is tested
+        in `test_a_firing_sends_the_timers_headers_and_bearer_token`."""
 
         def token_fn() -> str:
             return "tok"
@@ -179,6 +208,85 @@ class TestTimerClass:
         assert timer_instance.is_running is False
 
     @pytest.mark.asyncio
+    async def test_a_second_start_keeps_the_one_running_loop(self, timer_instance):
+        """A second `start()` must not spawn a second loop. `stop()` cancels only
+        `self.task`, so a replaced task would be a loop nothing can stop."""
+
+        class MockService:
+            def test_method(self):
+                pass
+
+        service = MockService()
+        timer_instance.method_name = "test_method"
+
+        await timer_instance.start(service)
+        first = timer_instance.task
+        await timer_instance.start(service)
+
+        loops = [
+            task
+            for task in asyncio.all_tasks()
+            if getattr(task.get_coro(), "__qualname__", "") == "Timer._timer_loop"
+        ]
+        assert timer_instance.task is first
+        assert loops == [first]
+
+        await timer_instance.stop()
+        assert first.done()
+
+    @pytest.mark.asyncio
+    async def test_stop_on_a_timer_never_started_changes_nothing(self, timer_instance):
+        await timer_instance.stop()
+
+        assert timer_instance.is_running is False
+        assert timer_instance.task is None
+        assert not timer_instance._stop_event.is_set()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("token_factory", "authorization"),
+        [
+            (lambda: "abc", "Bearer abc"),
+            (lambda: "bearer abc", "bearer abc"),
+            (lambda: "", None),
+            (None, None),
+        ],
+        ids=[
+            "bare_token_gets_the_prefix",
+            "prefixed_token_is_not_prefixed_again",
+            "empty_token",
+            "no_factory",
+        ],
+    )
+    async def test_a_firing_sends_the_timers_headers_and_bearer_token(
+        self, token_factory, authorization
+    ):
+        """What an auth extension reads: the `WorkerContext` a firing is run in."""
+        seen = []
+
+        class Service:
+            async def _run_worker(self, ctx, fn):
+                seen.append(ctx)
+                return await fn()
+
+            async def tick(self):
+                return None
+
+        t = Timer(interval=0.1, headers={"x-key": "val"}, token_factory=token_factory)
+        t.method_name = "tick"
+        t.service_instance = Service()
+
+        await t._execute_method()
+
+        expected = {"x-key": "val"}
+        if authorization is not None:
+            expected["authorization"] = authorization
+        (ctx,) = seen
+        assert ctx.kind == "timer"
+        assert ctx.headers == expected
+        assert t.headers == {"x-key": "val"}, "a firing must not write into the timer's own headers"
+
+    @pytest.mark.asyncio
     async def test_timer_fallback_to_dispatcher_run_worker(self):
         """Test timer runner fallback to dispatcher._run_worker when container has no runner"""
         from unittest.mock import AsyncMock, MagicMock
@@ -229,31 +337,26 @@ class TestTimerIntegration:
         service._discover_handlers()
 
         # Should find all timer-decorated methods
-        assert len(service._timers) == 4  # fast_tick, eager_timer, sync_timer, health_check
+        assert len(service._timers) == 4  # fast_tick, eager_timer, sync_timer, probe_dependencies
 
         timer_methods = [t.method_name for t in service._timers]
         assert "fast_tick" in timer_methods
         assert "eager_timer" in timer_methods
         assert "sync_timer" in timer_methods
-        assert "health_check" in timer_methods
+        assert "probe_dependencies" in timer_methods
 
     async def test_timer_execution(self):
-        """Test that timers execute their methods"""
+        """Each timer runs once per interval; an eager one also runs at the start."""
         service = TimerTestService()
         service._discover_handlers()
+        clock = FakeClock()
 
-        # Start timers
-        await service.container._start_timers()
-
-        # Wait for some executions
-        await asyncio.sleep(0.3)
-
-        # Stop timers
+        await _start_on(service, clock)
+        await clock.advance(0.3)
         await service.container._stop_timers()
 
-        # Check that methods were executed
-        assert service.tick_count > 0  # fast_tick should have run
-        assert service.eager_count > 0  # eager_timer should have run
+        assert service.async_ticks == 3  # fast_tick at 0.1, 0.2 and 0.3
+        assert service.eager_count == 2  # eager_timer at 0 and 0.2
 
     async def test_eager_timer_execution(self):
         """Test that eager timers execute immediately"""
@@ -274,42 +377,38 @@ class TestTimerIntegration:
         await service.container._stop_timers()
 
     async def test_timer_interval_accuracy(self):
-        """Test that timers execute at approximately correct intervals"""
+        """A 0.05 s timer runs once per interval: five times in 0.25 s, and not a sixth before
+        the sixth interval ends."""
         service = TimerTestService()
         service._discover_handlers()
+        clock = FakeClock()
 
-        await service.container._start_timers()
-
-        # Record start time
-        start_time = time.time()
-        initial_count = len(service.health_checks)
-
-        # Wait for multiple executions
-        await asyncio.sleep(0.25)  # Should allow ~5 executions at 0.05s interval
-
+        await _start_on(service, clock)
+        await clock.advance(0.25)
+        five = len(service.dependency_probes)
+        await clock.advance(0.049)
+        still_five = len(service.dependency_probes)
+        await clock.advance(0.001)
         await service.container._stop_timers()
 
-        # Check timing
-        execution_count = len(service.health_checks) - initial_count
-        elapsed_time = time.time() - start_time
-
-        # Should have executed approximately every 0.05 seconds
-        # Allow for some timing variance
-        expected_executions = elapsed_time / 0.05
-        assert abs(execution_count - expected_executions) < 2
+        assert (five, still_five, len(service.dependency_probes)) == (5, 5, 6)
 
     async def test_sync_and_async_timers(self):
-        """Test that both sync and async timer methods work"""
+        """Both a sync and an async timer method run, each counted on its own.
+
+        One shared counter let a single sync firing satisfy the assertion, so
+        async methods could stop running with this test green.
+        """
         service = TimerTestService()
         service._discover_handlers()
 
-        await service.container._start_timers()
-        await asyncio.sleep(0.15)
+        clock = FakeClock()
+        await _start_on(service, clock)
+        await clock.advance(0.15)
         await service.container._stop_timers()
 
-        # Both sync and async methods should have incremented tick_count
-        # fast_tick (async) adds 1, sync_timer adds 10
-        assert service.tick_count >= 10  # At least one sync execution
+        assert service.sync_ticks == 1
+        assert service.async_ticks == 1
 
     async def test_timer_error_handling(self):
         """Test timer error handling"""
@@ -330,12 +429,13 @@ class TestTimerIntegration:
         service = ErrorService()
         service._discover_handlers()
 
-        await service.container._start_timers()
-        await asyncio.sleep(0.2)  # Allow multiple executions
+        clock = FakeClock()
+        await _start_on(service, clock)
+        await clock.advance(0.2)  # four intervals: two failing firings, then two that succeed
         await service.container._stop_timers()
 
         # Should have continued executing despite errors
-        assert service.error_count > 2
+        assert service.error_count == 4
 
         # Check timer error statistics
         timer_instance = service._timers[0]
@@ -348,8 +448,9 @@ class TestTimerIntegration:
         service = TimerTestService()
         service._discover_handlers()
 
-        await service.container._start_timers()
-        await asyncio.sleep(0.2)
+        clock = FakeClock()
+        await _start_on(service, clock)
+        await clock.advance(0.2)
         await service.container._stop_timers()
 
         # Get service timer stats
@@ -357,12 +458,25 @@ class TestTimerIntegration:
         assert service_stats["timer_count"] == 4
         assert len(service_stats["timers"]) == 4
 
-        # Check individual timer stats
+        stats_by_name = {t["method_name"]: t for t in service_stats["timers"]}
+        assert "probe_dependencies" in stats_by_name
+        assert "fast_tick" in stats_by_name
+        assert "eager_timer" in stats_by_name
+        assert "sync_timer" in stats_by_name
+
+        # Check individual timer stats with positive counter assertions
         for timer_stats in service_stats["timers"]:
             assert "execution_count" in timer_stats
             assert "error_count" in timer_stats
             assert "interval" in timer_stats
-            assert timer_stats["execution_count"] >= 0
+            assert timer_stats["error_count"] == 0
+            assert timer_stats["execution_count"] > 0
+            assert timer_stats["average_execution_time"] >= 0.0
+
+        assert stats_by_name["probe_dependencies"]["execution_count"] == 4
+        assert stats_by_name["eager_timer"]["execution_count"] == 2
+        assert stats_by_name["fast_tick"]["execution_count"] == 2
+        assert stats_by_name["sync_timer"]["execution_count"] == 2
 
     async def test_service_info_includes_timers(self):
         """Test that service info includes timer methods"""
@@ -376,7 +490,7 @@ class TestTimerIntegration:
         assert "fast_tick" in timer_methods
         assert "eager_timer" in timer_methods
         assert "sync_timer" in timer_methods
-        assert "health_check" in timer_methods
+        assert "probe_dependencies" in timer_methods
 
     async def test_two_instances_of_same_service_class_have_independent_timers(self):
         """Verify multiple instances of same service class do not share Timer objects."""
@@ -399,21 +513,18 @@ class TestTimerIntegration:
         # Timers must not be the same instance
         assert a._timers[0] is not b._timers[0]
 
-        await a.container._start_timers()
-        await b.container._start_timers()
+        clock = FakeClock()
+        await _start_on(a, clock)
+        await _start_on(b, clock)
 
-        await asyncio.sleep(0.15)
-        assert a.hits > 0
-        assert b.hits > 0
+        await clock.advance(0.15)
+        assert (a.hits, b.hits) == (3, 3)
 
         # Stop b; a should keep running
         await b.container._stop_timers()
-        b_hits = b.hits
-        a_hits_1 = a.hits
 
-        await asyncio.sleep(0.15)
-        assert b.hits == b_hits
-        assert a.hits > a_hits_1
+        await clock.advance(0.15)
+        assert (a.hits, b.hits) == (6, 3)
 
         await a.container._stop_timers()
 
@@ -421,31 +532,6 @@ class TestTimerIntegration:
 @pytest.mark.asyncio
 class TestTimerPerformance:
     """Test timer performance characteristics"""
-
-    async def test_timer_drift_handling(self):
-        """Test that timer handles drift appropriately"""
-
-        class SlowService(CliffracerService):
-            def __init__(self):
-                config = ServiceConfig(name="slow_service")
-                super().__init__(config)
-                self.execution_times = []
-
-            @timer(interval=0.1, max_drift=0.05)
-            async def slow_method(self):
-                start_time = time.time()
-                await asyncio.sleep(0.15)  # Longer than interval
-                self.execution_times.append(start_time)
-
-        service = SlowService()
-        service._discover_handlers()
-
-        await service.container._start_timers()
-        await asyncio.sleep(0.5)
-        await service.container._stop_timers()
-
-        # Should still execute despite slow method
-        assert len(service.execution_times) > 0
 
     async def test_multiple_timers_concurrency(self):
         """Test that multiple timers run concurrently"""
@@ -473,15 +559,223 @@ class TestTimerPerformance:
         service = MultiTimerService()
         service._discover_handlers()
 
-        await service.container._start_timers()
-        await asyncio.sleep(0.25)
+        clock = FakeClock()
+        await _start_on(service, clock)
+        await clock.advance(0.25)
         await service.container._stop_timers()
 
-        # All timers should have executed
-        assert service.timer1_count > 0
-        assert service.timer2_count > 0
-        assert service.timer3_count > 0
+        # Each ran once per interval of its own in the same 0.25 s.
+        counts = (service.timer1_count, service.timer2_count, service.timer3_count)
+        assert counts == (5, 3, 2)
 
-        # Faster timer should have executed more times
-        assert service.timer1_count >= service.timer2_count
-        assert service.timer2_count >= service.timer3_count
+
+# --- what the timer loop decides, on a clock it cannot outrun -----------------
+#
+# `_timer_loop` reads time and waits through its clock. The real clock reads
+# `time.monotonic()` and waits with `asyncio.wait_for` and `asyncio.sleep`, all
+# through names in the `cliffracer.core.clock` module.
+# These tests replace those two names in that module only: waits and sleeps are
+# recorded and advance a fake clock instead of passing, so each test reads the
+# loop's decision -- how long it chose to wait -- exactly, whatever the host
+# load. Nothing outside the module is patched; a session fixture tearing down
+# at the same time still has the real asyncio.
+#
+# Each test asserts the exact waits (and sleeps) it recorded. A loop that
+# stopped routing through the module's names would record none and red them:
+# with `wait_for` reached as `__import__("asyncio").wait_for` instead, all three
+# exact-waits tests below go red.
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+class _LoopAsyncio:
+    """Stands in for `asyncio` inside `cliffracer.core.clock`, which a timer's real clock waits
+    through."""
+
+    def __init__(self, clock: _FakeClock, real_asyncio) -> None:
+        self._clock = clock
+        self._real = real_asyncio
+        self.waits: list[float] = []
+        self.sleeps: list[float] = []
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    async def wait_for(self, awaitable, timeout):
+        awaitable.close()
+        self.waits.append(timeout)
+        self._clock.now += timeout
+        raise TimeoutError
+
+    async def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self._clock.now += seconds
+
+
+def _install_clock(monkeypatch):
+    import cliffracer.core.clock as clock_module
+
+    clock = _FakeClock()
+    loop_asyncio = _LoopAsyncio(clock, clock_module.asyncio)
+    monkeypatch.setattr(clock_module, "time", clock)
+    monkeypatch.setattr(clock_module, "asyncio", loop_asyncio)
+    return clock, loop_asyncio
+
+
+def _loop_timer(firings, *, interval=1.0, **kwargs) -> Timer:
+    """A Timer whose loop runs exactly `len(firings)` firings, each a callable
+    taking the clock, then stops."""
+    t = Timer(interval=interval, **kwargs)
+    t.method_name = "tick"
+    t.is_running = True
+    remaining = list(firings)
+
+    async def execute():
+        step = remaining.pop(0)
+        if not remaining:
+            t.is_running = False
+        step()
+
+    t._execute_method = execute  # type: ignore[method-assign]
+    return t
+
+
+class TestTheTimerLoopsDecisions:
+    async def test_the_loop_waits_its_interval_before_the_first_firing(self):
+        """A 30 second interval has not fired 1 µs before 30 s on its clock, and has fired once
+        at 30 s: the loop does not fire before its first interval, nor after it."""
+        clock = FakeClock()
+        fired: list[float] = []
+        t = _loop_timer([lambda: fired.append(clock.monotonic())], interval=30.0, clock=clock)
+        task = asyncio.create_task(t._timer_loop())
+        clock.watch(task)
+
+        await clock.advance(30.0 - 1e-6)
+        assert fired == [] and not task.done()
+        await clock.advance(1e-6)
+        assert fired == [30.0]
+        await task
+
+    async def test_an_overrun_past_max_drift_rebases_the_schedule(self, monkeypatch):
+        """A firing that overruns by more than `max_drift` puts the next firing a
+        full interval after now, instead of firing again at once to catch up."""
+        clock, loop = _install_clock(monkeypatch)
+
+        def overrun():
+            clock.now += 3.0
+
+        t = _loop_timer([overrun, lambda: None], interval=1.0, max_drift=0.5)
+
+        await t._timer_loop()
+
+        assert loop.waits == [pytest.approx(1.0), pytest.approx(1.0)]
+
+    async def test_CONTROL_an_overrun_within_max_drift_keeps_the_schedule(self, monkeypatch):
+        clock, loop = _install_clock(monkeypatch)
+
+        def short_overrun():
+            clock.now += 0.2
+
+        t = _loop_timer([short_overrun, lambda: None], interval=1.0, max_drift=0.5)
+
+        await t._timer_loop()
+
+        assert loop.waits == [pytest.approx(1.0), pytest.approx(0.8)]
+
+    async def test_an_overrun_past_the_next_firing_within_max_drift_catches_up(self, monkeypatch):
+        """1.3 s of work on a 1 s interval with `max_drift` 0.5: the next firing is 0.3 s late,
+        within the drift, so the loop fires it at once instead of waiting a full interval."""
+        clock, loop = _install_clock(monkeypatch)
+
+        def overrun_within_drift():
+            clock.now += 1.3
+
+        t = _loop_timer([overrun_within_drift, lambda: None], interval=1.0, max_drift=0.5)
+
+        await t._timer_loop()
+
+        assert loop.waits == [pytest.approx(1.0)]
+
+    async def test_a_loop_error_backs_off_and_rebases_the_schedule(self, monkeypatch):
+        """An exception that escapes `_execute_method` -- its method lookup and the
+        context clear run outside its own try -- is counted, backed off for
+        `error_backoff`, and the next firing is scheduled an interval later."""
+        _, loop = _install_clock(monkeypatch)
+
+        def lookup_fails():
+            raise RuntimeError("raised before _execute_method's own try")
+
+        t = _loop_timer([lookup_fails, lambda: None], interval=1.0, error_backoff=0.25)
+
+        await t._timer_loop()
+
+        assert t.error_count == 1
+        # The backoff waits on the stop event, so it is a wait: the first interval, the backoff,
+        # then the next interval.
+        assert loop.sleeps == []
+        assert loop.waits == [pytest.approx(1.0), 0.25, pytest.approx(1.0)]
+
+
+# --- an eager firing that raises is handled like any firing ------------------
+
+
+class _LookupRaises:
+    """A service whose timer method cannot be read: `_execute_method` reads it
+    with getattr before its own try, so the exception reaches the loop."""
+
+    @property
+    def tick(self):
+        raise RuntimeError("lookup raised")
+
+
+class TestAnEagerFiringThatRaises:
+    async def test_it_is_counted_backed_off_and_the_schedule_rebased(self, monkeypatch):
+        """As a scheduled firing's error is. Rebased: the first scheduled firing is
+        an interval after the backoff, not an interval after the start."""
+        _, loop = _install_clock(monkeypatch)
+
+        def lookup_fails():
+            raise RuntimeError("raised before _execute_method's own try")
+
+        t = _loop_timer([lookup_fails, lambda: None], interval=1.0, eager=True, error_backoff=0.25)
+
+        await t._timer_loop()
+
+        assert t.error_count == 1
+        assert loop.sleeps == []
+        assert loop.waits == [0.25, pytest.approx(1.0)]
+
+    async def test_a_started_timer_survives_it(self):
+        """The real task: it used to end with the exception while `is_running`
+        stayed True and nothing was logged or counted."""
+        clock = FakeClock()
+        t = Timer(interval=0.05, eager=True, error_backoff=0.01, clock=clock)
+        t.method_name = "tick"
+        await t.start(_LookupRaises())
+        clock.watch(t.task)
+        try:
+            # The eager error, its 0.01 s backoff, then the first scheduled firing 0.05 s later.
+            await clock.advance(0.06)
+            assert not t.task.done(), t.task
+            assert t.error_count == 2, "the eager error and the first scheduled one"
+        finally:
+            await t.stop()
+
+    async def test_CONTROL_a_started_timer_that_is_not_eager_survives_the_same_service(self):
+        clock = FakeClock()
+        t = Timer(interval=0.05, eager=False, error_backoff=0.01, clock=clock)
+        t.method_name = "tick"
+        await t.start(_LookupRaises())
+        clock.watch(t.task)
+        try:
+            await clock.advance(0.05)
+            assert not t.task.done(), t.task
+            assert t.error_count == 1
+        finally:
+            await t.stop()

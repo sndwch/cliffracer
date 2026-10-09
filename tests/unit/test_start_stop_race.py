@@ -71,8 +71,13 @@ async def test_stop_during_start_cancels_start_task():
         assert svc.shutdown_called_count == 0
 
 
-async def test_stop_idempotent_after_cancel():
-    """Consecutive stop() calls after a cancelled start() are safe and idempotent."""
+async def test_a_second_stop_after_a_started_service_stopped_tears_nothing_down_again():
+    """stop() on a stopped service returns without repeating the teardown.
+
+    The disconnect is counted rather than `on_shutdown`: a stop clears the
+    started flag `on_shutdown` depends on, so that count stays at one whether or
+    not the second stop returns early. The disconnect runs on every teardown.
+    """
     cfg = ServiceConfig(name="race_idempotent_svc", health_port=0)
     svc = SlowStartupService(cfg)
 
@@ -83,24 +88,26 @@ async def test_stop_idempotent_after_cancel():
 
     with (
         patch.object(svc, "connect", new_callable=AsyncMock),
-        patch.object(svc, "disconnect", new_callable=AsyncMock),
+        patch.object(svc, "disconnect", new_callable=AsyncMock) as disconnect,
     ):
-        _ = asyncio.create_task(svc.start())
+        start = asyncio.create_task(svc.start())
         await svc.startup_started.wait()
+        svc.allow_startup_to_finish.set()
+        await start
 
-        # First stop
         await svc.stop()
-        assert svc.shutdown_called_count == 0
+        assert svc.shutdown_called_count == 1
+        assert disconnect.await_count == 1
         assert svc._stopped is True
         assert svc._running is False
 
-        # Second stop
         await svc.stop()
-        assert svc.shutdown_called_count == 0  # Not incremented again
+        assert disconnect.await_count == 1, "the second stop tore the service down again"
+        assert svc.shutdown_called_count == 1
 
 
 async def test_stop_called_from_within_on_startup():
-    """A service that invokes stop() inside its own on_startup hook exits cleanly."""
+    """A service that invokes stop() inside its own on_startup hook ends stopped, and start() says so."""
 
     class SelfStoppingService(CliffracerService):
         def __init__(self, config: ServiceConfig) -> None:
@@ -124,7 +131,10 @@ async def test_stop_called_from_within_on_startup():
         patch.object(svc, "disconnect", new_callable=AsyncMock),
         patch.object(svc.container, "setup_subscriptions", new_callable=AsyncMock) as mock_subs,
     ):
-        await svc.start()
+        # start() does not return normally for a service that stopped itself while starting: a
+        # caller that does not check is_stopped would take it for up.
+        with pytest.raises(ServiceLifecycleError, match="stopped while it was starting"):
+            await svc.start()
 
         assert svc.stop_invoked is True
         assert svc._running is False
@@ -165,7 +175,12 @@ async def test_on_shutdown_not_called_if_on_startup_never_ran():
 
 
 async def test_abortive_startup_cleanup_and_idempotent_stop():
-    """Defensive stop() call after an abortive start() is clean and idempotent."""
+    """A defensive stop() after an abortive start() tears nothing down again.
+
+    The start's own cleanup has already disconnected, so the disconnect count is
+    what a repeated teardown would move. `on_shutdown` never ran for a startup
+    that failed, so its flag cannot show a repeat.
+    """
 
     class FailingStartupService(CliffracerService):
         def __init__(self, config: ServiceConfig) -> None:
@@ -183,7 +198,7 @@ async def test_abortive_startup_cleanup_and_idempotent_stop():
 
     with (
         patch.object(svc, "connect", new_callable=AsyncMock),
-        patch.object(svc, "disconnect", new_callable=AsyncMock),
+        patch.object(svc, "disconnect", new_callable=AsyncMock) as disconnect,
     ):
         with pytest.raises(RuntimeError, match="startup hook crashed"):
             await svc.start()
@@ -192,9 +207,10 @@ async def test_abortive_startup_cleanup_and_idempotent_stop():
         assert svc.shutdown_called is False
         assert svc._running is False
         assert svc._stopped is True
+        assert disconnect.await_count == 1
 
-        # Defensive stop in finally block must be safe and idempotent
         await svc.stop()
+        assert disconnect.await_count == 1, "the defensive stop tore the service down again"
         assert svc.shutdown_called is False
         assert svc._stopped is True
 
@@ -243,7 +259,7 @@ async def test_queued_start_rejected_when_stop_cancels_inflight_start():
     mock_nc.is_closed = False
 
     with (
-        patch("nats.connect", return_value=mock_nc),
+        patch("cliffracer.core.dial.connect", return_value=mock_nc),
         patch.object(svc, "disconnect", new_callable=AsyncMock),
     ):
         # Task 1 starts the service and pauses in on_startup

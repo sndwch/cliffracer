@@ -28,7 +28,24 @@ def _ctx(kind: str, subject: str) -> WorkerContext:
 # Extension hook chain tests.
 
 
-async def test_a_dispatch_is_timed_and_counted():
+async def test_a_dispatch_is_timed_and_counted(monkeypatch):
+    """The recorded latency is the clock's delta, asserted exactly.
+
+    Sleeping and asserting a floor makes the result depend on how loaded the
+    runner is, and a floor low enough to be safe there is one that a broken
+    timer can clear anyway. Driving perf_counter instead makes the expected
+    number exact and the test independent of wall-clock time.
+    """
+    import cliffracer_metrics.extension as extension_module
+
+    handed_out: list[float] = []
+
+    def fake_perf_counter() -> float:
+        handed_out.append(100.0 + 0.25 * len(handed_out))
+        return handed_out[-1]
+
+    monkeypatch.setattr(extension_module.time, "perf_counter", fake_perf_counter)
+
     svc = Svc(ServiceConfig(name="m"))
     await svc.container._setup_extensions()
 
@@ -36,10 +53,17 @@ async def test_a_dispatch_is_timed_and_counted():
         return 1
 
     await svc.container._run_worker(_ctx("rpc", "m.rpc.x"), ok)
+
     summary = svc.metrics.health_details()
+    assert summary is not None
     assert summary["rpc"]["count"] == 1
     assert summary["rpc"]["errors"] == 0
-    assert summary["rpc"]["latency_ms"]["max"] >= 0
+    assert len(svc.metrics._latency["rpc"]) == 1
+
+    expected_ms = (handed_out[-1] - handed_out[0]) * 1000.0
+    assert expected_ms > 0, "the clock has to advance, or this asserts nothing"
+    assert summary["rpc"]["latency_ms"]["max"] == pytest.approx(expected_ms)
+    assert summary["rpc"]["latency_ms"]["avg"] == pytest.approx(expected_ms)
 
 
 async def test_an_error_is_counted_and_reraised():
@@ -174,7 +198,7 @@ class TestPoolUsesCredentials:
             max_connections=3,
             auth_kwargs={"user": "u", "password": "p"},
         )
-        with patch("nats.connect", new=AsyncMock()) as m:
+        with patch("cliffracer.core.dial.connect", new=AsyncMock()) as m:
             await pool.connect()
         assert m.call_count == 3, "every pooled connection must authenticate"
         for call in m.call_args_list:
@@ -186,7 +210,7 @@ class TestPoolUsesCredentials:
         """Backward compatibility: an unauthenticated pool must produce the
         same call it did before auth existed."""
         pool = OptimizedNATSConnection(nats_url="nats://h:4222", max_connections=1)
-        with patch("nats.connect", new=AsyncMock()) as m:
+        with patch("cliffracer.core.dial.connect", new=AsyncMock()) as m:
             await pool.connect()
         kwargs = m.call_args.kwargs
         for key in ("user", "password", "token", "user_credentials"):
@@ -195,16 +219,23 @@ class TestPoolUsesCredentials:
     @pytest.mark.asyncio
     async def test_pool_and_service_agree_on_credentials(self):
         """Verify pool uses identical authentication credentials as the service."""
-        cfg = ServiceConfig(
-            name="s", nats_user="u", nats_password="p", nats_credentials_file="/c.creds"
-        )
-        pool = OptimizedNATSConnection(
-            nats_url=cfg.nats_url, max_connections=1, auth_kwargs=cfg.nats_auth_kwargs()
-        )
-        with patch("nats.connect", new=AsyncMock()) as m:
-            await pool.connect()
-        sent = {k: v for k, v in m.call_args.kwargs.items() if k in cfg.nats_auth_kwargs()}
-        assert sent == cfg.nats_auth_kwargs()
+        # Literal expectations, and no filter by the config's own answer: a config that returned
+        # no credentials would filter to nothing and expect nothing, and a pool would dial the
+        # broker anonymously with this test green. One way in per config, so each is its own case.
+        for given, expected in (
+            ({"nats_user": "u", "nats_password": "p"}, {"user": "u", "password": "p"}),
+            ({"nats_token": "t"}, {"token": "t"}),
+            ({"nats_credentials_file": "/c.creds"}, {"user_credentials": "/c.creds"}),
+        ):
+            cfg = ServiceConfig(name="s", **given)
+            pool = OptimizedNATSConnection(
+                nats_url=cfg.nats_url, max_connections=1, auth_kwargs=cfg.nats_auth_kwargs()
+            )
+            with patch("cliffracer.core.dial.connect", new=AsyncMock()) as m:
+                await pool.connect()
+            sent = m.call_args.kwargs
+            for key, value in expected.items():
+                assert sent[key] == value, (given, key, sent)
 
 
 # ---- Health port binding tests --------------------------------------------

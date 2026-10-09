@@ -1,4 +1,11 @@
-"""AST-based invariant tests for class complexity ceilings and empty logging functions."""
+"""AST-based invariant tests for class complexity ceilings and empty logging functions.
+
+The complexity ceiling is a ratchet rather than a catastrophe tripwire: it sits
+just above the largest class in the tree, so ordinary growth is what reddens the
+scan, and `test_the_ceiling_stays_within_reach_of_the_largest_class` keeps it
+there. A class that has to be bigger moves the ceiling in a reviewed diff;
+there is no per-class exemption decorator.
+"""
 
 from __future__ import annotations
 
@@ -8,8 +15,6 @@ from typing import NamedTuple
 
 import pytest
 
-from cliffracer.invariants import override_length_check
-
 pytestmark = pytest.mark.repo
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -17,6 +22,15 @@ SRC_DIRS = [
     REPO_ROOT / "src",
     *(REPO_ROOT / "packages").glob("*/src"),
 ]
+
+# Just above the largest class in src/ and packages/*/src, so growth in the
+# biggest classes is what reddens the scan.
+CLASS_STATEMENT_CEILING = 360
+
+# How far the ceiling may sit above the largest class actually measured. Wide
+# enough that decomposing a class is not a build break, narrow enough that a
+# ceiling raised out of the way of the code it measures is.
+CEILING_HEADROOM = 100
 
 
 class ClassComplexityViolation(NamedTuple):
@@ -38,42 +52,28 @@ def count_ast_statements(node: ast.AST) -> int:
     return sum(1 for child in ast.walk(node) if isinstance(child, ast.stmt) and child is not node)
 
 
-def extract_override_reason(class_node: ast.ClassDef) -> str | None:
-    """Extract non-empty exemption reason if decorated with @override_length_check."""
-    for decorator in class_node.decorator_list:
-        # Decorator could be @override_length_check(reason="...") or @invariants.override_length_check(...)
-        call_node: ast.Call | None = None
-        if isinstance(decorator, ast.Call):
-            call_node = decorator
+#: Methods that return a logger bound to extra context: `logger.bind(k=v).info(...)` logs through
+#: the same logger, so the receiver of the final call is read through them.
+_LOGGER_REBINDERS = {"bind", "opt"}
+_LOGGER_NAMES = {"logger", "log", "logging", "_logger", "_log"}
+_LOG_METHODS = {"debug", "info", "warning", "warn", "error", "critical", "exception", "log"}
 
-        if call_node is None:
-            continue
 
-        func = call_node.func
-        name = ""
-        if isinstance(func, ast.Name):
-            name = func.id
-        elif isinstance(func, ast.Attribute):
-            name = func.attr
-
-        if name == "override_length_check":
-            # Check keyword argument reason="string"
-            for kw in call_node.keywords:
-                if kw.arg == "reason":
-                    if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-                        reason = kw.value.value.strip()
-                        if reason:
-                            return reason
-
-            # Check positional argument override_length_check("string")
-            if call_node.args:
-                first_arg = call_node.args[0]
-                if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
-                    reason = first_arg.value.strip()
-                    if reason:
-                        return reason
-
-    return None
+def _is_a_logger(recv: ast.expr) -> bool:
+    """Whether an expression is a logger: a known name, an attribute of one, or either re-bound."""
+    while (
+        isinstance(recv, ast.Call)
+        and isinstance(recv.func, ast.Attribute)
+        and recv.func.attr in _LOGGER_REBINDERS
+    ):
+        recv = recv.func.value
+    if isinstance(recv, ast.Name):
+        return recv.id in _LOGGER_NAMES
+    if isinstance(recv, ast.Attribute):
+        if recv.attr in _LOGGER_NAMES - {"logging"}:
+            return True
+        return isinstance(recv.value, ast.Name) and recv.value.id == "logging"
+    return False
 
 
 def is_logging_call(stmt: ast.stmt) -> bool:
@@ -82,80 +82,82 @@ def is_logging_call(stmt: ast.stmt) -> bool:
         return False
     if not isinstance(stmt.value, ast.Call):
         return False
-    call = stmt.value
-    func = call.func
-    if isinstance(func, ast.Attribute):
-        log_methods = {"debug", "info", "warning", "warn", "error", "critical", "exception", "log"}
-        if func.attr in log_methods:
-            # Check logger receiver: logger.xxx, self.logger.xxx, logging.xxx
-            recv = func.value
-            if isinstance(recv, ast.Name) and recv.id in {"logger", "log", "logging", "_logger"}:
-                return True
-            if isinstance(recv, ast.Attribute) and recv.attr in {"logger", "log", "_logger"}:
-                return True
-            if (
-                isinstance(recv, ast.Attribute)
-                and isinstance(recv.value, ast.Name)
-                and recv.value.id == "logging"
-            ):
-                return True
-    return False
+    func = stmt.value.func
+    return (
+        isinstance(func, ast.Attribute) and func.attr in _LOG_METHODS and _is_a_logger(func.value)
+    )
+
+
+def has_no_effect(stmt: ast.stmt) -> bool:
+    """Check whether a statement is one of the recognised do-nothing endings.
+
+    A stub that logs and then falls off the end is the same stub whether it
+    spells the ending `pass`, `return`, `return None`, `...`, or a constant
+    return, so none of those count as business logic. Docstrings land here too.
+
+    This is a shape rule, not dead-code analysis: a statement that merely looks
+    like work, such as an assignment to an unused name, is not recognised.
+    """
+    if isinstance(stmt, ast.Pass):
+        return True
+    if isinstance(stmt, ast.Return):
+        return stmt.value is None or isinstance(stmt.value, ast.Constant)
+    return isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
 
 
 def is_empty_logging_function(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Check if a function's body consists solely of logging calls without business logic.
 
-    Excludes docstrings and doc-comments. Returns True if all non-docstring
-    statements are logger calls and at least one logger call exists.
+    The do-nothing endings `has_no_effect` recognises are ignored alongside the
+    docstring, so a stub cannot hide behind one of them. Returns True if
+    everything that remains is a logger call and at least one is present.
     """
-    non_docstring_stmts: list[ast.stmt] = []
-    for stmt in func_node.body:
-        # Ignore docstrings
-        if (
-            isinstance(stmt, ast.Expr)
-            and isinstance(stmt.value, ast.Constant)
-            and isinstance(stmt.value.value, str)
-        ):
-            continue
-        non_docstring_stmts.append(stmt)
+    effective_stmts = [s for s in func_node.body if not has_no_effect(s)]
 
-    if not non_docstring_stmts:
+    if not effective_stmts:
         return False
 
-    return all(is_logging_call(s) for s in non_docstring_stmts)
+    return all(is_logging_call(s) for s in effective_stmts)
+
+
+#: The files that legitimately wrap a logger, by repository-relative path. A whole package is not
+#: exempt: a stub added to another module of it would be invisible. Each entry has to exist and
+#: to suppress a real finding (`test_control_every_logging_exemption_is_live`), so a rename or a
+#: rewrite that makes one unnecessary is a failure and not a stale line.
+EXEMPT_LOGGING_MODULES = ("packages/cliffracer-logging/src/cliffracer_logging/config.py",)
 
 
 def is_exempt_logging_module(file_path: Path) -> bool:
-    """Check whether a file is a dedicated logging utility module that legitimately wraps loggers."""
-    path_str = str(file_path).replace("\\", "/")
-    exempt_markers = [
-        "cliffracer-logging/",
-        "cliffracer_logging/",
-        "correlation_logging.py",
-    ]
-    return any(marker in path_str for marker in exempt_markers)
+    """Check whether a file is one of the logging utility modules that wrap a logger on purpose."""
+    try:
+        relative = file_path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return False
+    return relative in EXEMPT_LOGGING_MODULES
 
 
 def check_source_complexity(
-    source_code: str, file_path: str = "<source>", ceiling: int = 500
+    source_code: str, file_path: str = "<source>", ceiling: int = CLASS_STATEMENT_CEILING
 ) -> list[ClassComplexityViolation]:
-    """Parse source and return all classes violating the statement ceiling."""
+    """Parse source and return all classes violating the statement ceiling.
+
+    There is no per-class exemption. A class that has to be bigger than the
+    ceiling is a reason to move the ceiling, in a diff a reviewer reads.
+    """
     tree = ast.parse(source_code, filename=file_path)
     violations: list[ClassComplexityViolation] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             stmt_count = count_ast_statements(node)
             if stmt_count > ceiling:
-                reason = extract_override_reason(node)
-                if not reason:
-                    violations.append(
-                        ClassComplexityViolation(
-                            class_name=node.name,
-                            file_path=file_path,
-                            line_number=node.lineno,
-                            statement_count=stmt_count,
-                        )
+                violations.append(
+                    ClassComplexityViolation(
+                        class_name=node.name,
+                        file_path=file_path,
+                        line_number=node.lineno,
+                        statement_count=stmt_count,
                     )
+                )
     return violations
 
 
@@ -184,11 +186,26 @@ def check_empty_logging_functions(
 # ==============================================================================
 
 
-def test_no_classes_exceed_500_ast_statements_without_override():
-    """Invariant: No class in src/ or packages/*/src/ exceeds 500 AST statement nodes.
+def largest_class_measured() -> tuple[int, str]:
+    """Return the biggest class in src/ and packages/*/src as (statements, where)."""
+    biggest = (0, "<none>")
+    for src_dir in SRC_DIRS:
+        for py_file in src_dir.rglob("*.py"):
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    count = count_ast_statements(node)
+                    if count > biggest[0]:
+                        where = f"{node.name} in {py_file.relative_to(REPO_ROOT)}:{node.lineno}"
+                        biggest = (count, where)
+    return biggest
 
-    Classes exceeding the ceiling must be decomposed or explicitly decorated
-    with @override_length_check(reason="...").
+
+def test_no_class_exceeds_the_statement_ceiling():
+    """Invariant: no class in src/ or packages/*/src/ exceeds the statement ceiling.
+
+    A class over the ceiling is decomposed, or the ceiling is raised in this
+    file with the reason in the diff. There is no per-class escape hatch.
     """
     all_violations: list[ClassComplexityViolation] = []
     scanned_classes = 0
@@ -205,39 +222,59 @@ def test_no_classes_exceed_500_ast_statements_without_override():
             for node in ast.walk(tree):
                 if isinstance(node, ast.ClassDef):
                     scanned_classes += 1
-                    stmt_count = count_ast_statements(node)
-                    if stmt_count > 500:
-                        reason = extract_override_reason(node)
-                        if not reason:
-                            all_violations.append(
-                                ClassComplexityViolation(
-                                    class_name=node.name,
-                                    file_path=str(py_file.relative_to(REPO_ROOT)),
-                                    line_number=node.lineno,
-                                    statement_count=stmt_count,
-                                )
-                            )
+
+            file_violations = check_source_complexity(
+                content, file_path=str(py_file.relative_to(REPO_ROOT))
+            )
+            all_violations.extend(file_violations)
 
     assert scanned_classes > 20, f"Expected to scan dozens of classes, found {scanned_classes}"
     if all_violations:
+        biggest, where = largest_class_measured()
         msg_lines = [
-            f"Found {len(all_violations)} class(es) exceeding the 500 AST statement ceiling without @override_length_check:"
+            f"Found {len(all_violations)} class(es) exceeding the "
+            f"{CLASS_STATEMENT_CEILING} AST statement ceiling "
+            f"(largest measured: {biggest} statements, {where}):"
         ]
         for v in all_violations:
             msg_lines.append(
                 f"  - {v.class_name} in {v.file_path}:{v.line_number} (statements: {v.statement_count})"
             )
         msg_lines.append(
-            "\nResolution: Decompose the class or explicitly add @override_length_check(reason='...')"
+            f"\nResolution: decompose the class, or raise CLASS_STATEMENT_CEILING "
+            f"above {biggest} in {Path(__file__).name} and say why in the diff."
         )
         pytest.fail("\n".join(msg_lines))
+
+
+def test_the_ceiling_stays_within_reach_of_the_largest_class():
+    """The ceiling tracks the code, so it cannot be raised out of the way of it.
+
+    A ceiling far above everything it measures is green no matter how the tree
+    grows, which is the state this ratchet exists to leave.
+    """
+    biggest, where = largest_class_measured()
+    assert biggest > 0, "no classes were measured at all"
+    assert CLASS_STATEMENT_CEILING >= biggest, (
+        f"the ceiling is {CLASS_STATEMENT_CEILING} but {where} already measures "
+        f"{biggest} statements"
+    )
+    assert CLASS_STATEMENT_CEILING - biggest <= CEILING_HEADROOM, (
+        f"the ceiling is {CLASS_STATEMENT_CEILING}, {CLASS_STATEMENT_CEILING - biggest} "
+        f"above the largest class measured ({biggest} statements, {where}). "
+        f"At most {CEILING_HEADROOM} of headroom keeps this a ratchet; lower the "
+        f"ceiling or say in the diff why it moved."
+    )
 
 
 def test_no_empty_logging_functions_in_production_code():
     """Invariant: Catch fake stubs that merely log without executing logic.
 
-    Detects functions whose non-docstring body consists solely of logger.<level>() calls.
-    Exempts dedicated logging utility modules (e.g. in cliffracer_logging/).
+    Detects functions whose body is logger.<level>() calls plus do-nothing
+    endings, so closing the stub with `pass`, `return`, `return None`, `...` or
+    a constant return does not hide it. A stub padded with a statement that
+    looks like work is still out of reach. Exempts dedicated logging utility
+    modules (e.g. in cliffracer_logging/).
     """
     all_violations: list[EmptyLoggingViolation] = []
     scanned_functions = 0
@@ -256,15 +293,11 @@ def test_no_empty_logging_functions_in_production_code():
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                     scanned_functions += 1
-                    if is_empty_logging_function(node):
-                        all_violations.append(
-                            EmptyLoggingViolation(
-                                function_name=node.name,
-                                file_path=str(py_file.relative_to(REPO_ROOT)),
-                                line_number=node.lineno,
-                                statement_count=len(node.body),
-                            )
-                        )
+
+            file_violations = check_empty_logging_functions(
+                content, file_path=str(py_file.relative_to(REPO_ROOT))
+            )
+            all_violations.extend(file_violations)
 
     assert scanned_functions > 100, f"Expected to scan >100 functions, found {scanned_functions}"
     if all_violations:
@@ -293,35 +326,6 @@ def test_control_complexity_linter_catches_oversized_class():
     assert violations[0].statement_count > 500
 
 
-def test_control_complexity_linter_exempts_with_valid_override_decorator():
-    """Negative control: Verify @override_length_check(reason=...) exempts oversized class."""
-    methods = "\n".join(
-        f"    def method_{i}(self):\n        x = {i}\n        return x" for i in range(260)
-    )
-    exempted_code = (
-        "from cliffracer.invariants import override_length_check\n\n"
-        "@override_length_check(reason='Approved monolithic protocol state machine')\n"
-        f"class GiantService:\n{methods}\n"
-    )
-
-    violations = check_source_complexity(exempted_code, ceiling=500)
-    assert len(violations) == 0, "Expected @override_length_check to exempt the class"
-
-
-def test_control_complexity_linter_rejects_empty_or_missing_reason_override():
-    """Ensure @override_length_check without a reason or with an empty reason is rejected."""
-    methods = "\n".join(
-        f"    def method_{i}(self):\n        x = {i}\n        return x" for i in range(260)
-    )
-    empty_reason_code = f"@override_length_check(reason='   ')\nclass GiantService:\n{methods}\n"
-    violations = check_source_complexity(empty_reason_code, ceiling=500)
-    assert len(violations) == 1
-
-    no_args_code = f"@override_length_check()\nclass GiantService:\n{methods}\n"
-    violations_no_args = check_source_complexity(no_args_code, ceiling=500)
-    assert len(violations_no_args) == 1
-
-
 def test_control_empty_logging_linter_catches_fake_functions():
     """Positive control: Verify empty logging function detector catches fake stubs."""
     fake_code = '''
@@ -335,7 +339,7 @@ def revoke_token(self, token: str) -> None:
 
 
 def test_control_empty_logging_linter_allows_genuine_functions():
-    """Negative control: Verify functions with business logic or return statements pass."""
+    """Negative control: Verify functions that do real work pass."""
     genuine_code = '''
 def revoke_token(self, token: str) -> None:
     """Revoke a JWT token by adding its identifier to the in-memory revoked set."""
@@ -345,7 +349,7 @@ def revoke_token(self, token: str) -> None:
 def get_status(self) -> str:
     """Return status."""
     logger.debug("Checking status")
-    return "ok"
+    return self._status
 
 async def async_dispatch(self, msg: dict) -> None:
     """Dispatch message."""
@@ -356,39 +360,118 @@ async def async_dispatch(self, msg: dict) -> None:
     assert len(violations) == 0, f"Expected no violations, found {violations}"
 
 
-def test_control_logging_utility_module_exemption():
-    """Verify dedicated logging modules are exempted from empty logging checks."""
-    assert is_exempt_logging_module(
-        Path("/path/to/packages/cliffracer-logging/src/cliffracer_logging/correlation_logging.py")
+@pytest.mark.parametrize(
+    "ending",
+    ["    return None", "    return", "    pass", "    ...", '    return "ok"'],
+)
+def test_control_empty_logging_linter_catches_a_stub_however_it_ends(ending: str):
+    """Positive control: a trailing statement with no effect does not hide a stub."""
+    fake_code = (
+        "def revoke_all_tokens(token: str) -> None:\n"
+        '    """Revoke every issued token by clearing the in-memory revoked set."""\n'
+        '    logger.info("all tokens revoked")\n'
+        f"{ending}\n"
     )
-    assert is_exempt_logging_module(
-        Path("/path/to/packages/cliffracer-logging/src/cliffracer_logging/config.py")
-    )
+    violations = check_empty_logging_functions(fake_code)
+    assert len(violations) == 1, f"{ending!r} hid the stub: {violations}"
+    assert violations[0].function_name == "revoke_all_tokens"
+
+
+def test_control_a_function_that_only_does_nothing_is_not_a_logging_stub():
+    """Negative control: no logging call means this detector has nothing to say."""
+    quiet_code = '''
+def not_implemented_yet(self) -> None:
+    """Deliberately does nothing."""
+    pass
+
+def also_nothing(self) -> None:
+    ...
+'''
+    violations = check_empty_logging_functions(quiet_code)
+    assert len(violations) == 0, f"Expected no violations, found {violations}"
+
+
+def _real_source_files() -> list[Path]:
+    return [path for src_dir in SRC_DIRS for path in src_dir.rglob("*.py")]
+
+
+def _findings_in(path: Path) -> list[EmptyLoggingViolation]:
+    return check_empty_logging_functions(path.read_text(encoding="utf-8"), file_path=str(path))
+
+
+def test_control_every_logging_exemption_is_live():
+    """Each exempt file exists and, unexempted, has a finding: a rename or a rewrite that leaves
+    the exemption suppressing nothing is a failure, not a stale line that exempts the next stub."""
+    for relative in EXEMPT_LOGGING_MODULES:
+        path = REPO_ROOT / relative
+        assert path.is_file(), f"{relative} is exempt and does not exist"
+        assert path in _real_source_files(), f"{relative} is exempt but is not scanned"
+        assert _findings_in(path), f"{relative} is exempt and has nothing to be exempt from"
+
+
+def test_control_the_exemption_is_one_file_and_not_its_package():
+    """Read from the real tree: the exempt file is exempt, its neighbours in the same package and
+    a module of another package are not."""
+    exempt = REPO_ROOT / EXEMPT_LOGGING_MODULES[0]
+    neighbours = [p for p in exempt.parent.rglob("*.py") if p != exempt]
+    assert neighbours, "the exempt file has no neighbour in its package"
+    assert is_exempt_logging_module(exempt)
+    assert not any(is_exempt_logging_module(p) for p in neighbours)
     assert not is_exempt_logging_module(
-        Path("/path/to/packages/cliffracer-auth/src/cliffracer_auth/simple_auth.py")
+        REPO_ROOT / "packages/cliffracer-auth/src/cliffracer_auth/simple_auth.py"
     )
-    assert not is_exempt_logging_module(Path("/path/to/src/cliffracer/core/service.py"))
+    assert not is_exempt_logging_module(REPO_ROOT / "src/cliffracer/core/service.py")
 
 
-def test_override_length_check_decorator_runtime_behavior():
-    """Verify runtime validation and attribute assignment of @override_length_check."""
+def test_control_a_path_that_only_looks_like_the_exempt_one_is_not_exempt(tmp_path: Path):
+    lookalike = tmp_path / EXEMPT_LOGGING_MODULES[0]
+    lookalike.parent.mkdir(parents=True)
+    lookalike.write_text("")
 
-    # Test valid decorator usage
-    @override_length_check(reason="Architectural exception documented in ADR-042")
-    class SampleClass:
-        pass
+    assert not is_exempt_logging_module(lookalike)
 
-    assert (
-        SampleClass.__override_length_check_reason__  # type: ignore[attr-defined]
-        == "Architectural exception documented in ADR-042"
-    )
 
-    # Test rejection of empty or non-string reasons
-    with pytest.raises(ValueError, match="requires a non-empty reason string"):
-        override_length_check(reason="")
+def test_control_repo_invariant_detection_flags_violations():
+    """Load-bearing control: Ensure check_source_complexity directly gates the repository scan."""
+    oversized = "class Oversized:\n" + "\n".join(f"    def m_{i}(self): pass" for i in range(260))
+    violations = check_source_complexity(oversized, file_path="synthetic.py", ceiling=500)
+    assert len(violations) == 1
+    assert violations[0].class_name == "Oversized"
 
-    with pytest.raises(ValueError, match="requires a non-empty reason string"):
-        override_length_check(reason="   ")
+    empty_log = "def empty_stub():\n    logger.info('nothing else here')"
+    violations = check_empty_logging_functions(empty_log, file_path="synthetic.py")
+    assert len(violations) == 1
+    assert violations[0].function_name == "empty_stub"
 
-    with pytest.raises(ValueError, match="requires a non-empty reason string"):
-        override_length_check(reason=None)  # type: ignore[arg-type]
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    self._log.info('x')",
+        "    self.logger.bind(k=1).info('x')",
+        "    logger.bind(k=1).opt(depth=1).warning('x')",
+        "    logging.info('x')",
+        "    self._logger.bind(**kwargs).debug(message)",
+    ],
+)
+def test_control_the_detector_recognises_a_stub_logging_through_these_receivers(body: str):
+    source = f"def stub(self):\n{body}\n"
+
+    assert [v.function_name for v in check_empty_logging_functions(source)] == ["stub"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    self.registry.info('x')",
+        "    self.client.bind(k=1).info('x')",
+        "    notes.bind(k=1).info('x')",
+        "    make_logger().info('x')",
+        "    loggers[0].info('x')",
+        "    self._log.info('x')\n    self.count += 1",
+    ],
+)
+def test_control_the_detector_leaves_alone_a_call_that_is_not_a_logger_or_has_other_work(body: str):
+    source = f"def real(self):\n{body}\n"
+
+    assert check_empty_logging_functions(source) == []

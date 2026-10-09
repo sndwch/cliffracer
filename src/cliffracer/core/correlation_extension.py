@@ -7,20 +7,20 @@ from .extension import Extension, WorkerContext
 class CorrelationExtension(Extension):
     """Sets the correlation id for one dispatch and resets it afterwards.
 
-    PER MESSAGE, never from the ambient context: the subscription callback is
-    long-lived and its context outlives any one message, so reading an existing
-    id here would make every later message inherit the first one's permanently.
-    ``worker_teardown`` always runs, so a handler that raises cannot
-    leave its id stamped on the next message.
+    PER MESSAGE, never from the ambient context: the id comes from the message
+    (the context's own, then its headers, then its payload) or is a new one. The
+    dispatchers run each message in a task of its own, and a task takes a copy of the
+    context, so what is set here cannot reach the subscription callback or the next
+    message through the context. Reading the ambient id would still let a dispatch
+    driven inline, from inside another task, inherit that task's id.
+    ``worker_teardown`` always runs and resets the variable, so a handler that raises
+    leaves nothing stamped for the work that follows it in the same task.
     """
 
     async def worker_setup(self, ctx: WorkerContext) -> None:
-        cid = (
-            ctx.correlation_id
-            or CorrelationContext.extract_from_headers(ctx.headers)
-            or (ctx.payload.get("correlation_id") if isinstance(ctx.payload, dict) else None)
+        ctx.correlation_id = CorrelationContext.for_message(
+            ctx.headers, ctx.payload, ctx.correlation_id
         )
-        ctx.correlation_id = CorrelationContext.new_id_unless_given(cid)
         ctx.data["_correlation_token"] = correlation_id_var.set(ctx.correlation_id)
 
     async def worker_teardown(self, ctx: WorkerContext) -> None:

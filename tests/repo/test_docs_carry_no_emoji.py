@@ -11,22 +11,25 @@ pytestmark = pytest.mark.repo
 REPO = Path(__file__).resolve().parents[2]
 
 
-@pytest.fixture(autouse=True)
-def _require_git():
-    if not (REPO / ".git").is_dir():
-        pytest.skip("Not running inside a git repository (release tarball)")
-
-
-# Pictographs. Arrows are deliberately absent -- see the module docstring.
+# Complete Unicode emoji and pictograph ranges. Arrows are excluded as valid typography.
 EMOJI = re.compile(
     "["
-    "\U0001f300-\U0001faff"
-    "\U0001f000-\U0001f0ff"
-    "\U0001f100-\U0001f1ff"
-    "☀-⛿"
-    "✀-➿"
-    # U+2B00-U+2BFF is half arrows and half pictographs, and has no occurrence
-    # here either way, so only the pictographs are named rather than the block.
+    "\U0001f300-\U0001faff"  # Miscellaneous Symbols and Pictographs, Emoticons, Transport
+    "\U0001f000-\U0001f0ff"  # Mahjong, Dominoes, Playing Cards
+    "\U0001f100-\U0001f1ff"  # Enclosed Alphanumeric Supplement
+    "\U0001f200-\U0001f2ff"  # Enclosed Ideographic Supplement
+    "\u2600-\u26ff"  # Miscellaneous Symbols
+    "\u2700-\u27bf"  # Dingbats
+    "\u2300-\u23ff"  # Miscellaneous Technical (clock, watch, hourglass, media controls)
+    "\u25a0-\u25ff"  # Geometric Shapes (play, stop, squares)
+    "\u20e3"  # Combining Enclosing Keycap
+    "\u2139"  # Information source
+    "\u203c"  # Double exclamation
+    "\u2049"  # Exclamation question mark
+    "\u2122"  # Trade mark
+    "\u3030"  # Wavy dash
+    "\u303d"  # Part alternation mark
+    "\u3297\u3299"  # Circled ideographs
     "⬛⬜⭐⭕"
     "]"
 )
@@ -77,6 +80,14 @@ def test_no_document_carries_emoji():
         "❌ Do not do this",
         "Status: ⚠ deprecated",
         "🤦‍♂️ a ZWJ sequence",
+        "Duration: ⏰ 10ms",
+        "Watch: ⌚",
+        "Loading ⏳ please wait",
+        "Play ▶ sample",
+        "Square ◼ icon",
+        "Keycap: 1️⃣ step",
+        "Note ℹ info",
+        "Warning ‼ critical",
     ],
 )
 def test_CONTROL_the_detector_catches_an_emoji(tmp_path: Path, line: str):

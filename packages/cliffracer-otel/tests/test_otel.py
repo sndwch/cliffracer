@@ -11,6 +11,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanKind, StatusCode
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from cliffracer import CliffracerService, ServiceConfig
 from cliffracer.core.correlation import CorrelationContext
@@ -57,14 +58,14 @@ async def test_default_tracer_configuration_and_lifecycle():
     svc = Svc(ServiceConfig(name="test-service"))
     await svc.container._setup_extensions()
 
-    assert svc.otel.tracer is not None
     info = svc.otel.info_details()
-    assert info is not None
     assert info["tracer_name"] == "test-service"
+    # The name reported is for the propagator the extension holds and injects with, which the
+    # wire tests below read: this ties the report to the object and not only to a constant.
+    assert isinstance(svc.otel._propagator, TraceContextTextMapPropagator)
     assert info["propagator"] == "tracecontext"
 
     health = svc.otel.health_details()
-    assert health is not None
     assert health["spans_total"] == 0
     assert health["errors_total"] == 0
     assert health["active_spans"] == 0
@@ -72,19 +73,22 @@ async def test_default_tracer_configuration_and_lifecycle():
 
 
 async def test_two_services_do_not_share_state():
-    """Verify bound copy isolation between two service instances."""
+    """Two instances of ONE service class each get their own bound extension.
+
+    Two different classes declare two different extension objects, so they cannot share state
+    whatever `bind` does. The sharing this guards against is a declared extension reused by every
+    instance of its class: `bind` must hand each service a copy.
+    """
     provider, exporter = _create_test_tracer()
 
-    class SvcA(CliffracerService):
+    class Svc(CliffracerService):
         otel = OtelExtension(tracer_provider=SharedDependency(provider))
 
-    class SvcB(CliffracerService):
-        otel = OtelExtension(tracer_provider=SharedDependency(provider))
-
-    svcA = SvcA(ServiceConfig(name="svc-a"))
-    svcB = SvcB(ServiceConfig(name="svc-b"))
+    svcA = Svc(ServiceConfig(name="svc-a"))
+    svcB = Svc(ServiceConfig(name="svc-b"))
     await svcA.container._setup_extensions()
     await svcB.container._setup_extensions()
+    assert svcA.otel is not svcB.otel
 
     async def noop():
         return "ok"
@@ -95,6 +99,8 @@ async def test_two_services_do_not_share_state():
     health_b = svcB.otel.health_details()
     assert health_a["spans_total"] == 1
     assert health_b["spans_total"] == 0
+    assert health_a["tracer_name"] == "svc-a"
+    assert health_b["tracer_name"] == "svc-b"
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +178,7 @@ async def test_inbound_span_extraction_with_missing_header():
     assert len(spans) == 1
     span = spans[0]
 
-    assert span.kind == SpanKind.SERVER
+    assert span.kind == SpanKind.CONSUMER
     assert span.context.trace_id != 0
     assert span.parent is None
     assert span.attributes["cliffracer.kind"] == "event"
@@ -498,9 +504,16 @@ async def test_end_to_end_trace_propagation_across_mock_caller_and_receiver():
     # Expect 3 spans: ServiceB server span, ServiceA client span, ServiceA root server span
     assert len(spans) == 3
 
-    span_b_server = next(s for s in spans if s.name == "rpc service_b.process")
+    def server_for(subject: str):
+        return next(
+            s
+            for s in spans
+            if s.kind == SpanKind.SERVER and s.attributes["cliffracer.subject"] == subject
+        )
+
+    span_b_server = server_for("service_b.process")
     span_a_client = next(s for s in spans if s.name == "call_rpc service_b.process")
-    span_a_server = next(s for s in spans if s.name == "rpc service_a.start")
+    span_a_server = server_for("service_a.start")
 
     # All 3 spans must share the exact same trace ID
     root_trace_id = span_a_server.context.trace_id
@@ -570,9 +583,78 @@ async def test_concurrent_dispatch_context_isolation():
     trace_ids = {s.context.trace_id for s in spans}
     assert len(trace_ids) == 10
 
-    # Ensure no token leaked into ambient task context after completion
-    assert not trace.get_current_span().is_recording()
+    # The ten dispatches run in child tasks, so the parent's ambient span is
+    # INVALID_SPAN whether or not a token leaked. This pins that the parent was
+    # never entered; detach is covered by the same-task tests.
+    assert trace.get_current_span() is trace.INVALID_SPAN
     health = svc.otel.health_details()
     assert health["active_spans"] == 0
     assert health["spans_total"] == 10
     assert health["errors_total"] == 0
+
+
+async def test_inbound_dispatch_context_detach_in_same_task():
+    """Verify inbound dispatch detaches context token in caller task context."""
+    provider, exporter = _create_test_tracer()
+
+    class Svc(CliffracerService):
+        otel = OtelExtension(tracer_provider=SharedDependency(provider))
+
+    svc = Svc(ServiceConfig(name="test-inbound-detach"))
+    await svc.container._setup_extensions()
+
+    before = trace.get_current_span()
+
+    ctx1 = _make_worker_ctx(kind="rpc", subject="inbound.first", correlation_id="c1")
+    await svc.container._run_worker(ctx1, lambda: asyncio.sleep(0))
+    after1 = trace.get_current_span()
+    assert after1 is before, "First inbound dispatch leaked span into ambient context"
+
+    ctx2 = _make_worker_ctx(kind="rpc", subject="inbound.second", correlation_id="c2")
+    await svc.container._run_worker(ctx2, lambda: asyncio.sleep(0))
+    after2 = trace.get_current_span()
+    assert after2 is before, "Second inbound dispatch leaked span into ambient context"
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].parent is None
+    assert spans[1].parent is None
+
+
+async def test_outbound_call_context_detach_in_same_task():
+    """Verify outbound call hooks detach context token and prevent span nesting."""
+    provider, exporter = _create_test_tracer()
+
+    class Svc(CliffracerService):
+        otel = OtelExtension(tracer_provider=SharedDependency(provider))
+
+    svc = Svc(ServiceConfig(name="test-outbound-detach"))
+    await svc.container._setup_extensions()
+
+    before = trace.get_current_span()
+    inside: list = []
+
+    async def _send():
+        # Sampled rather than asserted here: an AssertionError raised inside
+        # the send would travel back out through the hook pipeline's error
+        # path, which is a different thing from the test failing.
+        inside.append(trace.get_current_span())
+        return None
+
+    # Through _run_send_hooks, the path `call_rpc` and `publish_event` take.
+    # Calling before_call/after_call by hand reaches the detach code but would
+    # stay green if the pipeline ever stopped invoking after_call.
+    ctx1 = _make_worker_ctx(kind="publish_event", subject="events.alpha")
+    await svc.container._run_send_hooks(ctx1, _send)
+    assert inside[0] is not before, "the span is active for the duration of the send"
+    assert trace.get_current_span() is before, "First outbound call leaked span token"
+
+    ctx2 = _make_worker_ctx(kind="publish_event", subject="events.beta")
+    await svc.container._run_send_hooks(ctx2, _send)
+    assert inside[1] is not before
+    assert trace.get_current_span() is before, "Second outbound call leaked span token"
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].parent is None
+    assert spans[1].parent is None

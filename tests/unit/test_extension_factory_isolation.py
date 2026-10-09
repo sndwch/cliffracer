@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from cliffracer import CliffracerService, ServiceConfig
-from cliffracer.core.extension import Extension, entrypoint
+from cliffracer.core.extension import Extension
 
 pytestmark = pytest.mark.unit
 
@@ -221,31 +221,19 @@ def test_multiple_sequential_binds_produce_independent_instances() -> None:
     assert spec.items == []
 
 
-class EntrypointExtension(Extension):
-    """Extension tracking entrypoint binding."""
+class TrackedExtension(Extension):
+    """Extension carrying per-instance state."""
 
     def __init__(self) -> None:
         self.registered_handlers: list[str] = []
 
-    def entrypoint_kinds(self) -> dict[str, Any]:
-        def _binder(
-            service: Any, method_name: str, bound_method: Any, spec: dict[str, Any]
-        ) -> None:
-            self.registered_handlers.append(method_name)
 
-        return {"custom_gate": _binder}
-
-
-def test_entrypoint_resolution_preserves_spec_owner_identity() -> None:
-    """Verify @entrypoint resolves class attribute owner to runtime bound extension."""
-    gate_spec = EntrypointExtension()
+def test_a_class_declared_extension_is_bound_per_service_with_the_spec_as_its_origin() -> None:
+    """Verify a class attribute extension is a specification, and each service binds its own copy."""
+    gate_spec = TrackedExtension()
 
     class Svc(CliffracerService):
         gate = gate_spec
-
-        @entrypoint("custom_gate", owner=gate_spec)
-        async def gated_handler(self) -> str:
-            return "ok"
 
     svc1 = Svc(ServiceConfig(name="svc_1"))
     svc2 = Svc(ServiceConfig(name="svc_2"))
@@ -257,12 +245,10 @@ def test_entrypoint_resolution_preserves_spec_owner_identity() -> None:
     assert svc1.gate._origin is gate_spec
     assert svc2.gate._origin is gate_spec
 
-    svc1._discover_handlers()
-    svc2._discover_handlers()
+    assert isinstance(svc1.gate, TrackedExtension)
+    assert isinstance(svc2.gate, TrackedExtension)
 
-    assert isinstance(svc1.gate, EntrypointExtension)
-    assert isinstance(svc2.gate, EntrypointExtension)
-
-    assert "gated_handler" in svc1.gate.registered_handlers
-    assert "gated_handler" in svc2.gate.registered_handlers
-    assert svc1.gate.registered_handlers is not svc2.gate.registered_handlers
+    svc1.gate.registered_handlers.append("one")
+    assert svc1.gate.registered_handlers == ["one"]
+    assert svc2.gate.registered_handlers == []
+    assert gate_spec.registered_handlers == []

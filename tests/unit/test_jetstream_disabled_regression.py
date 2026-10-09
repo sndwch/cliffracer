@@ -39,9 +39,38 @@ def _service(**overrides):
 
 @pytest.mark.asyncio
 async def test_js_is_none_when_disabled():
-    svc = _service()
+    """Through the real connect: `jetstream_enabled` False means no JetStream context is made.
+
+    The helper above sets `svc.js = None` itself, so reading it back proves nothing; the code that
+    decides is `ConnectionManager.connect`. It runs here against a stubbed `nats.connect`, with a
+    mirror case so the assertion is shown able to give the other answer.
+    """
+    from unittest.mock import MagicMock, patch
+
+    context = object()
+
+    def connected(**overrides):
+        nc = MagicMock(is_closed=False, is_connected=True)
+        nc.jetstream.return_value = context
+        svc = _Svc(ServiceConfig(name="order_svc", **overrides))
+
+        async def fake_connect(*args, **kwargs):
+            return nc
+
+        return svc, nc, fake_connect
+
+    svc, nc, fake_connect = connected()
+    with patch("cliffracer.core.dial.connect", fake_connect):
+        await svc.container.connection.connect()
     assert svc.config.jetstream_enabled is False
-    assert svc.js is None
+    assert svc.container.connection.js is None
+    assert nc.jetstream.call_count == 0
+
+    svc, nc, fake_connect = connected(jetstream_enabled=True)
+    with patch("cliffracer.core.dial.connect", fake_connect):
+        await svc.container.connection.connect()
+    assert svc.container.connection.js is context
+    assert nc.jetstream.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -90,7 +119,7 @@ async def test_declared_streams_are_not_provisioned_when_disabled():
     mock_nc.is_closed = False
     svc.js = AsyncMock()  # if anything provisions or subscribes via JetStream, it shows up here
 
-    with patch("nats.connect", return_value=mock_nc):
+    with patch("cliffracer.core.dial.connect", return_value=mock_nc):
         await svc.start()
 
     assert svc.js.add_stream.await_count == 0
